@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import cameras, health
+from app.api.routes import cameras, health, config_routes
 from app.config.settings import settings
 from app.ws import metadata as ws_metadata
 from app.services.kafka_consumer import MetadataConsumer
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router, prefix="/api")
     app.include_router(cameras.router, prefix="/api")
+    app.include_router(config_routes.router, prefix="/api")
     app.include_router(ws_metadata.router, prefix="/ws")
     return app
 
