@@ -26,6 +26,8 @@ import { WebRTCPlayer, WebRTCPlayerHandle } from './WebRTCPlayer';
 import { CameraPlaceholder } from './CameraPlaceholder';
 import { useMediaMTXConfig } from '@/hooks/useMediaMTXConfig';
 import { useFrameAnalysis } from '@/hooks/useFrameAnalysis';
+import { useDetectionMetadata } from '@/hooks/useDetectionMetadata';
+import { MetadataOverlay } from './MetadataOverlay';
 
 interface CameraFeedProps {
   camera: Camera;
@@ -41,6 +43,20 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isStreamActive, setIsStreamActive] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
+  const { metadata } = useDetectionMetadata({ cameraId: camera.id, enabled: camera.status === 'online' });
+  const videoContainerRef = useRef<HTMLDivElement>(null);
+  const [containerDimensions, setContainerDimensions] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!videoContainerRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerDimensions({ width: entry.contentRect.width, height: entry.contentRect.height });
+      }
+    });
+    observer.observe(videoContainerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -97,22 +113,32 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
       onMouseLeave={() => setIsHovered(false)}
     >
       {/* Camera View */}
-      <div className={cn(
-        'relative flex-1 bg-gradient-to-br from-muted/50 to-muted overflow-hidden',
-        isFullscreen ? 'min-h-[400px]' : 'aspect-video'
-      )}>
+      <div
+        ref={videoContainerRef}
+        className={cn(
+          'relative flex-1 bg-gradient-to-br from-muted/50 to-muted overflow-hidden',
+          isFullscreen ? 'min-h-[400px]' : 'aspect-video'
+        )}
+      >
         {/* WebRTC Stream or Placeholder */}
         {hasStreamUrl && streamPath && camera.status !== 'offline' ? (
-          <WebRTCPlayer
-            ref={playerRef}
-            streamPath={streamPath}
-            serverUrl={serverUrl}
-            className="absolute inset-0"
-            onStreamReady={() => setIsStreamActive(true)}
-            onStreamError={() => setIsStreamActive(false)}
-            autoReconnect={autoReconnect}
-            muted={isMuted}
-          />
+          <>
+            <WebRTCPlayer
+              ref={playerRef}
+              streamPath={streamPath}
+              serverUrl={serverUrl}
+              className="absolute inset-0"
+              onStreamReady={() => setIsStreamActive(true)}
+              onStreamError={() => setIsStreamActive(false)}
+              autoReconnect={autoReconnect}
+              muted={isMuted}
+            />
+            <MetadataOverlay
+              metadata={metadata}
+              width={containerDimensions.width}
+              height={containerDimensions.height}
+            />
+          </>
         ) : (
           <CameraPlaceholder status={camera.status} cameraName={camera.name} />
         )}
