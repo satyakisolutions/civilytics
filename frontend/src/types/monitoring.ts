@@ -84,3 +84,21 @@ export interface SystemStatus {
   storageUsed: number;
   storageTotal: number;
 }
+
+// --- Phase 1: Real-time detection metadata from backend WebSocket ---
+
+export interface BBoxDetection {
+  class_id: number;
+  class_name: string;
+  confidence: number;
+  bbox: [number, number, number, number]; // [x1, y1, x2, y2] normalized 0-1
+  track_id: number | null;
+}
+
+export interface FrameMetadata {
+  camera_id: string;
+  frame_number: number;
+  timestamp: number;
+  detections: BBoxDetection[];
+  fps?: number;
+}
