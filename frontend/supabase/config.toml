@@ -1,0 +1,13 @@
+project_id = "fpqajyyjxnidupsaimmw"
+
+[functions.analyze-frame]
+verify_jwt = false
+
+[functions.dropbox-auth]
+verify_jwt = false
+
+[functions.dropbox-sync]
+verify_jwt = false
+
+[functions.camera-stream]
+verify_jwt = false

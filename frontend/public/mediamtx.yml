@@ -1,0 +1,141 @@
+# MediaMTX Configuration for WasteWatch RTSP-to-WebRTC Relay
+# Deploy this alongside MediaMTX (https://github.com/bluenviron/mediamtx)
+# Run: ./mediamtx mediamtx.yml
+
+###############################################
+# General settings
+###############################################
+
+# Verbosity of the program; available values are "error", "warn", "info", "debug".
+logLevel: info
+# Destinations of log messages; available values are "stdout", "file" and "syslog".
+logDestinations: [stdout]
+
+# Timeout of read operations.
+readTimeout: 10s
+# Timeout of write operations.
+writeTimeout: 10s
+# Size of the queue of outgoing packets.
+writeQueueSize: 512
+# Maximum size of outgoing UDP packets.
+udpMaxPayloadSize: 1472
+
+###############################################
+# RTSP server
+###############################################
+
+rtsp: yes
+# List of enabled RTSP transport protocols.
+protocols: [udp, multicast, tcp]
+# Encrypt handshakes and packets with TLS.
+encryption: "no"
+# Address of the RTSP listener.
+rtspAddress: :8554
+
+###############################################
+# WebRTC server
+###############################################
+
+webrtc: yes
+# Address of the WebRTC HTTP listener.
+webrtcAddress: :8889
+# Enable TLS/HTTPS on the WebRTC server.
+webrtcEncryption: no
+# Path to server key for WebRTC HTTPS.
+webrtcServerKey: server.key
+# Path to server certificate for WebRTC HTTPS.
+webrtcServerCert: server.crt
+# Value of the Access-Control-Allow-Origin header.
+webrtcAllowOrigin: '*'
+# List of ICE servers for WebRTC.
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+
+###############################################
+# HLS server (optional fallback)
+###############################################
+
+hls: yes
+# Address of the HLS listener.
+hlsAddress: :8888
+# Enable TLS/HTTPS on the HLS server.
+hlsEncryption: no
+# Value of the Access-Control-Allow-Origin header.
+hlsAllowOrigin: '*'
+# Variant of the HLS protocol to use.
+hlsVariant: lowLatency
+
+###############################################
+# API server
+###############################################
+
+api: yes
+# Address of the API listener.
+apiAddress: :9997
+
+###############################################
+# Camera Paths - WasteWatch Zones
+###############################################
+
+paths:
+  # Zone A Cameras
+  cam-zone-a-north:
+    source: rtsp://admin:password@192.168.1.101:554/stream1
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+
+  cam-zone-a-south:
+    source: rtsp://admin:password@192.168.1.102:554/stream1
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+
+  cam-zone-a-east:
+    source: rtsp://admin:password@192.168.1.103:554/stream1
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+
+  # Zone B Cameras
+  cam-zone-b-main:
+    source: rtsp://admin:password@192.168.1.111:554/stream1
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+
+  cam-zone-b-entrance:
+    source: rtsp://admin:password@192.168.1.112:554/stream1
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+
+  cam-zone-b-exit:
+    source: rtsp://admin:password@192.168.1.113:554/stream1
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+
+  # Zone C Cameras
+  cam-zone-c-overview:
+    source: rtsp://admin:password@192.168.1.121:554/stream1
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+
+  cam-zone-c-detail:
+    source: rtsp://admin:password@192.168.1.122:554/stream1
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+
+  cam-zone-c-perimeter:
+    source: rtsp://admin:password@192.168.1.123:554/stream1
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+
+  # Wildcard path for dynamic camera additions
+  # Access via: rtsp://localhost:8554/dynamic/{camera-id}
+  dynamic~.+:
+    sourceOnDemand: yes
