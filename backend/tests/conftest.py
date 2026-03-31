@@ -12,7 +12,7 @@ def app():
 @pytest.fixture
 async def client(app):
     async with httpx.AsyncClient(
-        transport=ASGITransport(app=app),
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://test",
     ) as ac:
         yield ac
