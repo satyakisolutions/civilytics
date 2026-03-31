@@ -1,0 +1,21 @@
+[sensor]
+enable=1
+type=Camera
+id=Default-Camera
+location=Default
+coordinate=0;0;0
+description=WasteWatch Camera
+
+[place]
+enable=1
+id=Default-Place
+type=monitored-zone
+name=Default Zone
+location=Default
+coordinate=0;0;0
+
+[analytics]
+enable=1
+id=Default-Analytics
+source=Default-Camera
+description=WasteWatch Detection Analytics
