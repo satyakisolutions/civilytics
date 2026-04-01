@@ -146,6 +146,13 @@ def extract_metadata(
 
                     if fsm_event:
                         kafka_producer.send_event(fsm_event)
+                        if fsm_event.state.value == "violation":
+                            kafka_producer.send_vlm_request(
+                                camera_id=camera_id, track_id=track_id,
+                                zone_name=camera_id, dwell_time_s=track_info.dwell_time_s,
+                                class_name=class_name,
+                                path_summary="stationary" if track_info.dwell_time_s > 10 else "moving",
+                            )
 
                     # Enrich detection with tracking data
                     detection_dict["dwell_time_s"] = round(track_info.dwell_time_s, 1)
