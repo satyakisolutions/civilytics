@@ -87,12 +87,17 @@ export interface SystemStatus {
 
 // --- Phase 1: Real-time detection metadata from backend WebSocket ---
 
+export type EventFSMState = 'idle' | 'enter' | 'observe' | 'violation' | 'alerting' | 'escalated' | 'exited';
+
 export interface BBoxDetection {
   class_id: number;
   class_name: string;
   confidence: number;
   bbox: [number, number, number, number]; // [x1, y1, x2, y2] normalized 0-1
   track_id: number | null;
+  dwell_time_s?: number;
+  in_roi?: boolean;
+  fsm_state?: EventFSMState;
 }
 
 export interface FrameMetadata {
@@ -101,4 +106,26 @@ export interface FrameMetadata {
   timestamp: number;
   detections: BBoxDetection[];
   fps?: number;
+}
+
+// --- Phase 2: Tracking + ROI types ---
+
+export interface ROIPoint {
+  x: number;
+  y: number;
+}
+
+export interface ROIPolygon {
+  name: string;
+  points: ROIPoint[];
+}
+
+export interface TrackSession {
+  id: string;
+  camera_id: string;
+  track_id: number;
+  fsm_state: EventFSMState;
+  entered_at: string;
+  exited_at: string | null;
+  dwell_time_s: number | null;
 }

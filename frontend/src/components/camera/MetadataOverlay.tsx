@@ -15,18 +15,33 @@ const CLASS_COLORS: Record<string, string> = {
   truck: "#ef4444",     // red
 };
 
+function getDwellColor(dwellTime: number | undefined): string {
+  if (!dwellTime || dwellTime <= 5) return "#22c55e"; // green
+  if (dwellTime <= 15) return "#eab308"; // yellow
+  return "#ef4444"; // red
+}
+
 function DetectionBox({ detection, width, height }: { detection: BBoxDetection; width: number; height: number }) {
   const [x1, y1, x2, y2] = detection.bbox;
-  const color = CLASS_COLORS[detection.class_name] ?? "#ffffff";
+
+  const classColor = CLASS_COLORS[detection.class_name] ?? "#ffffff";
+  const borderColor = detection.dwell_time_s != null
+    ? getDwellColor(detection.dwell_time_s)
+    : classColor;
 
   const left = x1 * width;
   const top = y1 * height;
   const boxWidth = (x2 - x1) * width;
   const boxHeight = (y2 - y1) * height;
 
-  const label = detection.track_id != null
-    ? `${detection.class_name} #${detection.track_id} ${(detection.confidence * 100).toFixed(0)}%`
-    : `${detection.class_name} ${(detection.confidence * 100).toFixed(0)}%`;
+  const isViolation = detection.fsm_state === "violation";
+
+  const label = [
+    detection.class_name,
+    detection.track_id != null ? `#${detection.track_id}` : null,
+    `${(detection.confidence * 100).toFixed(0)}%`,
+    detection.dwell_time_s != null ? `${detection.dwell_time_s.toFixed(1)}s` : null,
+  ].filter(Boolean).join(' | ');
 
   return (
     <>
@@ -37,8 +52,9 @@ function DetectionBox({ detection, width, height }: { detection: BBoxDetection; 
           top: `${top}px`,
           width: `${boxWidth}px`,
           height: `${boxHeight}px`,
-          border: `2px solid ${color}`,
+          border: `2px solid ${borderColor}`,
           pointerEvents: "none",
+          animation: isViolation ? "violationPulse 0.8s ease-in-out infinite alternate" : undefined,
         }}
       />
       <div
@@ -46,7 +62,7 @@ function DetectionBox({ detection, width, height }: { detection: BBoxDetection; 
           position: "absolute",
           left: `${left}px`,
           top: `${top - 20}px`,
-          backgroundColor: color,
+          backgroundColor: borderColor,
           color: "#000",
           fontSize: "11px",
           fontWeight: 600,
@@ -54,9 +70,27 @@ function DetectionBox({ detection, width, height }: { detection: BBoxDetection; 
           whiteSpace: "nowrap",
           pointerEvents: "none",
           lineHeight: "16px",
+          display: "flex",
+          alignItems: "center",
+          gap: "4px",
         }}
       >
         {label}
+        {detection.in_roi && (
+          <span
+            style={{
+              backgroundColor: "#3b82f6",
+              color: "#fff",
+              fontSize: "9px",
+              fontWeight: 700,
+              padding: "0 3px",
+              borderRadius: "2px",
+              letterSpacing: "0.03em",
+            }}
+          >
+            IN ROI
+          </span>
+        )}
       </div>
     </>
   );
@@ -76,6 +110,12 @@ export function MetadataOverlay({ metadata, width, height }: MetadataOverlayProp
         pointerEvents: "none",
       }}
     >
+      <style>{`
+        @keyframes violationPulse {
+          from { opacity: 1; }
+          to   { opacity: 0.35; }
+        }
+      `}</style>
       {metadata.detections.map((det, i) => (
         <DetectionBox key={`${det.class_id}-${det.track_id ?? i}`} detection={det} width={width} height={height} />
       ))}
