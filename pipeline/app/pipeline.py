@@ -116,7 +116,7 @@ def extract_metadata(
                             "w": round(rect.width / frame_width, 6),
                             "h": round(rect.height / frame_height, 6),
                         },
-                        "track_id": int(obj_meta.object_id),
+                        "track_id": None if int(obj_meta.object_id) == 0xFFFFFFFFFFFFFFFF else int(obj_meta.object_id),
                     }
                 )
 
@@ -149,12 +149,13 @@ def extract_metadata(
 # ---------------------------------------------------------------------------
 
 
-def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element]:
+def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Element]:
     """Construct and return the DeepStream GStreamer pipeline.
 
     Returns:
-        (pipeline, streammux, fakesink)  — the caller needs streammux to hand to
-        SourceManager and fakesink to attach the metadata pad probe.
+        (pipeline, streammux, fakesink, nvdsanalytics)  — the caller needs
+        streammux to hand to SourceManager, fakesink to attach the metadata pad
+        probe, and nvdsanalytics for ROI/dwell queries.
     """
     cfg = pipeline_settings
 
@@ -172,6 +173,21 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element]:
     nvinfer = make_element("nvinfer", "primary_infer")
     nvinfer.set_property("config-file-path", "configs/nvinfer_rfdetr.txt")
     pipeline.add(nvinfer)
+
+    # --- Object tracker (ByteTrack via nvtracker) ---------------------------
+    nvtracker = make_element("nvtracker", "tracker")
+    nvtracker.set_property("tracker-width", 640)
+    nvtracker.set_property("tracker-height", 384)
+    nvtracker.set_property("ll-lib-file", cfg.tracker_ll_lib)
+    nvtracker.set_property("ll-config-file", cfg.tracker_config_path)
+    nvtracker.set_property("gpu-id", 0)
+    nvtracker.set_property("enable-batch-process", 1)
+    pipeline.add(nvtracker)
+
+    # --- Analytics (ROI / line-crossing via nvdsanalytics) ------------------
+    nvdsanalytics = make_element("nvdsanalytics", "analytics")
+    nvdsanalytics.set_property("config-file", cfg.analytics_config_path)
+    pipeline.add(nvdsanalytics)
 
     # --- On-screen display --------------------------------------------------
     nvosd = make_element("nvdsosd", "on_screen_display")
@@ -209,12 +225,18 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element]:
     for elem in (queue_meta, fakesink):
         pipeline.add(elem)
 
-    # --- Link main chain: streammux → nvinfer → nvosd → tee ----------------
+    # --- Link main chain: streammux → nvinfer → nvtracker → nvdsanalytics → nvosd → tee
     if not streammux.link(nvinfer):
         logger.critical("Failed to link streammux → nvinfer")
         sys.exit(1)
-    if not nvinfer.link(nvosd):
-        logger.critical("Failed to link nvinfer → nvosd")
+    if not nvinfer.link(nvtracker):
+        logger.critical("Failed to link nvinfer → nvtracker")
+        sys.exit(1)
+    if not nvtracker.link(nvdsanalytics):
+        logger.critical("Failed to link nvtracker → nvdsanalytics")
+        sys.exit(1)
+    if not nvdsanalytics.link(nvosd):
+        logger.critical("Failed to link nvdsanalytics → nvosd")
         sys.exit(1)
     if not nvosd.link(tee):
         logger.critical("Failed to link nvosd → tee")
@@ -249,7 +271,7 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element]:
         logger.critical("Failed to link queue_meta → fakesink")
         sys.exit(1)
 
-    return pipeline, streammux, fakesink
+    return pipeline, streammux, fakesink, nvdsanalytics
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +282,7 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element]:
 def main() -> None:
     Gst.init(None)
 
-    pipeline, streammux, fakesink = build_pipeline()
+    pipeline, streammux, fakesink, nvdsanalytics = build_pipeline()  # noqa: F841
 
     kafka_producer = PipelineKafkaProducer()
     health = CameraHealth(timeout_s=30.0, max_retries=5)

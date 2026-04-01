@@ -14,6 +14,17 @@ class PipelineSettings(BaseSettings):
     muxer_output_width: int = 1920
     muxer_output_height: int = 1080
 
+    # Tracking
+    tracker_config_path: str = "configs/nvtracker_bytetrack.yml"
+    tracker_ll_lib: str = "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
+
+    # ROI
+    analytics_config_path: str = "configs/nvdsanalytics_config.txt"
+
+    # Dwell thresholds
+    dwell_enter_threshold_s: float = 5.0
+    dwell_observe_threshold_s: float = 15.0
+
     model_config = {"env_prefix": "WW_"}
 
 
