@@ -2,23 +2,36 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import cameras, health, config_routes
+from app.api.routes import cameras, health, config_routes, events, roi
 from app.config.settings import settings
 from app.ws import metadata as ws_metadata
+from app.ws import events as ws_events
 from app.services.kafka_consumer import MetadataConsumer
+from app.services.event_consumer import EventConsumer
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    consumer = MetadataConsumer(settings.kafka_bootstrap_servers)
+    metadata_consumer = MetadataConsumer(settings.kafka_bootstrap_servers)
     try:
-        await consumer.start()
+        await metadata_consumer.start()
     except Exception as e:
-        logging.getLogger(__name__).warning("Kafka consumer failed to start: %s", e)
-        consumer = None
+        logging.getLogger(__name__).warning("MetadataConsumer failed to start: %s", e)
+        metadata_consumer = None
+
+    event_consumer = EventConsumer(settings.kafka_bootstrap_servers)
+    try:
+        await event_consumer.start()
+    except Exception as e:
+        logging.getLogger(__name__).warning("EventConsumer failed to start: %s", e)
+        event_consumer = None
+
     yield
-    if consumer:
-        await consumer.stop()
+
+    if metadata_consumer:
+        await metadata_consumer.stop()
+    if event_consumer:
+        await event_consumer.stop()
 
 
 def create_app() -> FastAPI:
@@ -33,7 +46,10 @@ def create_app() -> FastAPI:
     app.include_router(health.router, prefix="/api")
     app.include_router(cameras.router, prefix="/api")
     app.include_router(config_routes.router, prefix="/api")
+    app.include_router(events.router, prefix="/api")
+    app.include_router(roi.router, prefix="/api")
     app.include_router(ws_metadata.router, prefix="/ws")
+    app.include_router(ws_events.router, prefix="/ws")
     return app
 
 
