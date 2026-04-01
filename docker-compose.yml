@@ -59,6 +59,7 @@ services:
       WW_REDIS_URL: redis://redis:6379/0
       WW_MEDIAMTX_API_URL: http://mediamtx:9997
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
+      WW_VLM_BASE_URL: http://vlm:8000/v1
     depends_on:
       kafka:
         condition: service_healthy
@@ -86,6 +87,25 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  vlm:
+    image: vllm/vllm-openai:latest
+    command: >
+      --model Qwen/Qwen2.5-VL-7B-Instruct-AWQ
+      --quantization awq
+      --max-model-len 4096
+      --gpu-memory-utilization 0.6
+      --port 8000
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
 
 volumes:
   kafka_data:
