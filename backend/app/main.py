@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import cameras, health, config_routes, events, roi, alerts, evidence, lpr, analytics, system
+from app.api.routes import logs as log_routes
 from app.config.settings import settings
 from app.ws import metadata as ws_metadata
 from app.ws import events as ws_events
@@ -14,6 +15,7 @@ from app.alerts.dispatcher import AlertDispatcher
 from app.tts.worker import TTSWorker
 from app.evidence.worker import EvidenceWorker
 from app.lpr.worker import LPRWorker
+from app.logs.worker import LogWorker
 
 
 @asynccontextmanager
@@ -67,6 +69,13 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).warning("LPRWorker failed to start: %s", e)
         lpr_worker = None
 
+    log_worker = LogWorker(settings.kafka_bootstrap_servers)
+    try:
+        await log_worker.start()
+    except Exception as e:
+        logging.getLogger(__name__).warning("LogWorker failed to start: %s", e)
+        log_worker = None
+
     yield
 
     if metadata_consumer:
@@ -83,6 +92,8 @@ async def lifespan(app: FastAPI):
         await evidence_worker.stop()
     if lpr_worker:
         await lpr_worker.stop()
+    if log_worker:
+        await log_worker.stop()
 
 
 def create_app() -> FastAPI:
@@ -104,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(lpr.router, prefix="/api")
     app.include_router(analytics.router, prefix="/api")
     app.include_router(system.router, prefix="/api")
+    app.include_router(log_routes.router, prefix="/api")
     app.include_router(ws_metadata.router, prefix="/ws")
     app.include_router(ws_events.router, prefix="/ws")
     app.include_router(ws_alerts.router, prefix="/ws")

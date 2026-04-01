@@ -240,6 +240,6 @@ class LogEntry(Base):
     service: Mapped[str] = mapped_column(String(100))
     level: Mapped[str] = mapped_column(String(20))
     message: Mapped[str] = mapped_column(Text)
-    metadata: Mapped[dict | None] = mapped_column(JSONB)
+    meta: Mapped[dict | None] = mapped_column("metadata", JSONB)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
