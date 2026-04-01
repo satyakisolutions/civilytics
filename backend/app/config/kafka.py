@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# Kafka topic names
+# ---------------------------------------------------------------------------
+TOPIC_METADATA = "wastewatch.metadata"
+TOPIC_EVENTS = "wastewatch.events"
+TOPIC_VLM_REQUESTS = "wastewatch.vlm.requests"
+TOPIC_VLM_RESULTS = "wastewatch.vlm.results"
+TOPIC_ALERTS = "wastewatch.alerts"
+TOPIC_LPR = "wastewatch.lpr"
+TOPIC_TTS = "wastewatch.tts"
+TOPIC_EVIDENCE = "wastewatch.evidence"
+TOPIC_LOGS = "wastewatch.logs"
+TOPIC_CONFIG_UPDATES = "wastewatch.config.updates"
+
+# ---------------------------------------------------------------------------
+# Kafka consumer group IDs
+# ---------------------------------------------------------------------------
+GROUP_API_METADATA = "wastewatch.group.api-metadata"
+GROUP_EVENT_FSM = "wastewatch.group.event-fsm"
+GROUP_VLM_WORKER = "wastewatch.group.vlm-worker"
+GROUP_ALERT_DISPATCHER = "wastewatch.group.alert-dispatcher"
+GROUP_LOG_INGESTION = "wastewatch.group.log-ingestion"

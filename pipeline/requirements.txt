@@ -1,0 +1,5 @@
+pyds==1.1.11
+confluent-kafka==2.6.1
+orjson==3.10.12
+pydantic-settings==2.7.1
+httpx==0.28.1

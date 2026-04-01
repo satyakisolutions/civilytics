@@ -1,0 +1,14 @@
+logLevel: info
+logDestinations: [stdout]
+api: yes
+apiAddress: :9997
+rtsp: yes
+rtspAddress: :8554
+webrtc: yes
+webrtcAddress: :8889
+pathDefaults:
+  source: publisher
+  sourceOnDemand: no
+  record: no
+paths:
+  all_others:

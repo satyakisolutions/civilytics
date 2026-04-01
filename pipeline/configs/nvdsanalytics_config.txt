@@ -1,0 +1,4 @@
+[property]
+enable=1
+config-width=1920
+config-height=1080

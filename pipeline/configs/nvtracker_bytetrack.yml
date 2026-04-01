@@ -1,0 +1,24 @@
+%YAML:1.0
+BaseConfig:
+  minDetectorConfidence: 0.3
+  minTrackerConfidence: 0.5
+  trackerMaxShadowTrailingAge: 30
+  probationAge: 3
+  maxTargetsPerStream: 150
+  enableBatchProcess: 1
+
+TargetManagement:
+  enableTargetManagement: 1
+  maxTargetsPerStream: 150
+  minIouDiff4NewTarget: 0.7
+  preserveStreamUpdateOrder: 0
+  maxShadowTrackingAge: 30
+  probationAge: 3
+  earlyTerminationAge: 1
+
+TrackingAlgo:
+  tracking_algo: 1
+  track_thresh: 0.5
+  high_thresh: 0.6
+  match_thresh: 0.8
+  track_buffer: 30
