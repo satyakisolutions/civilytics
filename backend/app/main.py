@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import cameras, health, config_routes, events, roi, alerts
+from app.api.routes import cameras, health, config_routes, events, roi, alerts, evidence, lpr
 from app.config.settings import settings
 from app.ws import metadata as ws_metadata
 from app.ws import events as ws_events
@@ -11,6 +11,9 @@ from app.services.kafka_consumer import MetadataConsumer
 from app.services.event_consumer import EventConsumer
 from app.vlm.worker import VLMWorker
 from app.alerts.dispatcher import AlertDispatcher
+from app.tts.worker import TTSWorker
+from app.evidence.worker import EvidenceWorker
+from app.lpr.worker import LPRWorker
 
 
 @asynccontextmanager
@@ -43,6 +46,27 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).warning("AlertDispatcher failed to start: %s", e)
         alert_dispatcher = None
 
+    tts_worker = TTSWorker(settings.kafka_bootstrap_servers)
+    try:
+        await tts_worker.start()
+    except Exception as e:
+        logging.getLogger(__name__).warning("TTSWorker failed to start: %s", e)
+        tts_worker = None
+
+    evidence_worker = EvidenceWorker(settings.kafka_bootstrap_servers)
+    try:
+        await evidence_worker.start()
+    except Exception as e:
+        logging.getLogger(__name__).warning("EvidenceWorker failed to start: %s", e)
+        evidence_worker = None
+
+    lpr_worker = LPRWorker(settings.kafka_bootstrap_servers)
+    try:
+        await lpr_worker.start()
+    except Exception as e:
+        logging.getLogger(__name__).warning("LPRWorker failed to start: %s", e)
+        lpr_worker = None
+
     yield
 
     if metadata_consumer:
@@ -53,6 +77,12 @@ async def lifespan(app: FastAPI):
         await vlm_worker.stop()
     if alert_dispatcher:
         await alert_dispatcher.stop()
+    if tts_worker:
+        await tts_worker.stop()
+    if evidence_worker:
+        await evidence_worker.stop()
+    if lpr_worker:
+        await lpr_worker.stop()
 
 
 def create_app() -> FastAPI:
@@ -70,6 +100,8 @@ def create_app() -> FastAPI:
     app.include_router(events.router, prefix="/api")
     app.include_router(roi.router, prefix="/api")
     app.include_router(alerts.router, prefix="/api")
+    app.include_router(evidence.router, prefix="/api")
+    app.include_router(lpr.router, prefix="/api")
     app.include_router(ws_metadata.router, prefix="/ws")
     app.include_router(ws_events.router, prefix="/ws")
     app.include_router(ws_alerts.router, prefix="/ws")
