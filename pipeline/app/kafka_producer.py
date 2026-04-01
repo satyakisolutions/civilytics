@@ -63,6 +63,23 @@ class PipelineKafkaProducer:
         except Exception:
             logger.exception("Failed to send VLM request")
 
+    def send_lpr_request(self, camera_id: str, track_id: int, vehicle_bbox: dict, class_name: str):
+        """Request plate recognition for a vehicle in ROI."""
+        try:
+            self._producer.produce(
+                topic="wastewatch.lpr",
+                key=camera_id.encode("utf-8"),
+                value=orjson.dumps({
+                    "camera_id": camera_id,
+                    "track_id": track_id,
+                    "vehicle_bbox": vehicle_bbox,
+                    "class_name": class_name,
+                    "image_path": "",
+                }),
+            )
+        except Exception:
+            logger.exception("Failed to send LPR request")
+
     def flush(self) -> None:
         self._producer.flush(timeout=5)
 

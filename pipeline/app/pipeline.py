@@ -154,6 +154,15 @@ def extract_metadata(
                                 path_summary="stationary" if track_info.dwell_time_s > 10 else "moving",
                             )
 
+                            # Trigger LPR for vehicles
+                            if class_name in ("car", "motorcycle", "bus", "truck"):
+                                kafka_producer.send_lpr_request(
+                                    camera_id=camera_id,
+                                    track_id=track_id,
+                                    vehicle_bbox=bbox_dict,
+                                    class_name=class_name,
+                                )
+
                     # Enrich detection with tracking data
                     detection_dict["dwell_time_s"] = round(track_info.dwell_time_s, 1)
                     detection_dict["in_roi"] = in_roi

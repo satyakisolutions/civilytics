@@ -107,6 +107,17 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
 
+  tts:
+    image: python:3.11-slim
+    command: >
+      bash -c "pip install piper-tts && python -m http.server 8100"
+    ports:
+      - "8100:8100"
+    volumes:
+      - tts_data:/data/tts
+    restart: unless-stopped
+
 volumes:
   kafka_data:
   redis_data:
+  tts_data:
