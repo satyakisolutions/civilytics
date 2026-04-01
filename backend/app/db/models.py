@@ -197,3 +197,38 @@ class AlertDelivery(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PlateRead(Base):
+    __tablename__ = "plate_reads"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id"))
+    track_session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("track_sessions.id"))
+    plate_number: Mapped[str] = mapped_column(String(20))
+    confidence: Mapped[float] = mapped_column(Float)
+    plate_image_url: Mapped[str | None] = mapped_column(Text)
+    vehicle_bbox: Mapped[dict | None] = mapped_column(JSONB)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TTSCacheEntry(Base):
+    __tablename__ = "tts_cache"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    text_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    text: Mapped[str] = mapped_column(Text)
+    audio_url: Mapped[str | None] = mapped_column(Text)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvidenceFile(Base):
+    __tablename__ = "evidence_files"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("violation_events.id"))
+    file_type: Mapped[str] = mapped_column(String(50))  # snapshot, video_clip, annotated_snapshot, metadata_json
+    local_path: Mapped[str | None] = mapped_column(Text)
+    dropbox_path: Mapped[str | None] = mapped_column(Text)
+    sync_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, uploading, synced, failed
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
