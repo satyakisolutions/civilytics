@@ -55,7 +55,10 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).warning("TTSWorker failed to start: %s", e)
         tts_worker = None
 
-    evidence_worker = EvidenceWorker(settings.kafka_bootstrap_servers)
+    evidence_worker = EvidenceWorker(
+        settings.kafka_bootstrap_servers,
+        mediamtx_rtsp_url=settings.mediamtx_rtsp_url,
+    )
     try:
         await evidence_worker.start()
     except Exception as e:

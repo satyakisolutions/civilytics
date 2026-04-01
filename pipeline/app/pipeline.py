@@ -31,8 +31,10 @@ from app.config import pipeline_settings
 from app.event_fsm import EventFSMManager
 from app.health import CameraHealth
 from app.kafka_producer import PipelineKafkaProducer
+from app.preprocessor import ROIPreprocessor
 from app.roi import ROIManager
 from app.source_manager import SourceManager
+from app.stream_watcher import StreamWatcher
 from app.tracking import TrackStateManager
 
 logging.basicConfig(
@@ -344,6 +346,11 @@ def main() -> None:
         enter_threshold_s=pipeline_settings.dwell_enter_threshold_s,
         observe_threshold_s=pipeline_settings.dwell_observe_threshold_s,
     )
+    roi_preprocessor = ROIPreprocessor(
+        roi_manager,
+        frame_width=cfg.input_width,
+        frame_height=cfg.input_height,
+    )
 
     # Attach metadata probe to fakesink's sink pad
     fakesink_sink_pad = fakesink.get_static_pad("sink")
@@ -357,11 +364,20 @@ def main() -> None:
         "track_manager": track_manager,
         "roi_manager": roi_manager,
         "fsm_manager": fsm_manager,
+        "roi_preprocessor": roi_preprocessor,
     }
     fakesink_sink_pad.add_probe(
         Gst.PadProbeType.BUFFER,
         extract_metadata,
         probe_ctx,
+    )
+
+    # Stream watcher — dynamic source addition with polling and auto-reconnect
+    stream_watcher = StreamWatcher(
+        source_manager=source_manager,
+        health=health,
+        poll_interval_s=10.0,
+        probe_timeout_s=5.0,
     )
 
     # Load initial sources from WW_SOURCES env var
@@ -377,14 +393,20 @@ def main() -> None:
             cam_id = cam_id.strip()
             uri = uri.strip()
             if cam_id and uri:
-                try:
-                    source_manager.add_source(cam_id, uri)
-                except Exception:
-                    logger.exception("Failed to add source %s", cam_id)
+                stream_watcher.register_source(cam_id, uri)
     else:
         logger.warning(
             "No WW_SOURCES configured — pipeline will run with no input sources."
         )
+
+    # Initial ROI preprocessor update after sources are registered
+    active_cams = list(source_manager.active_sources.keys())
+    if active_cams:
+        crops = roi_preprocessor.update_crops(active_cams)
+        if crops:
+            savings = roi_preprocessor.get_gpu_savings_estimate()
+            for cam_id, pct in savings.items():
+                logger.info("Camera %s: ROI crop saves ~%.0f%% GPU inference", cam_id, pct)
 
     # GLib main loop
     loop = GLib.MainLoop()
@@ -411,20 +433,18 @@ def main() -> None:
 
     # Periodic health check — runs every 10 seconds
     def health_check_cb() -> bool:
-        timed_out = health.check_health()
-        for cam_id in timed_out:
-            uri = source_manager.active_sources.get(cam_id)
-            if uri:
-                logger.warning("Camera %s timed out — reconnecting", cam_id)
-                try:
-                    source_manager.remove_source(cam_id)
-                    source_manager.add_source(cam_id, uri)
-                except Exception:
-                    logger.exception("Failed to reconnect camera %s", cam_id)
+        # Stream watcher handles reconnection with exponential backoff
+        stream_watcher.poll()
+
         stale_events = fsm_manager.prune_stale()
         for evt in stale_events:
             kafka_producer.send_event(evt)
         track_manager.prune_lost()
+
+        # Update ROI preprocessor crops if sources changed
+        current_cams = list(source_manager.active_sources.keys())
+        roi_preprocessor.update_crops(current_cams)
+
         return True  # Keep the timeout alive
 
     GLib.timeout_add_seconds(10, health_check_cb)
