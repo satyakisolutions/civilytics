@@ -14,6 +14,7 @@ async def get_container_stats() -> list[dict]:
             capture_output=True, text=True, timeout=10,
         )
         if result.returncode != 0:
+            logger.error("docker stats failed: %s", result.stderr)
             return [{"error": "docker stats failed"}]
 
         import json

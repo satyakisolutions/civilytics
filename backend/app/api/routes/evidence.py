@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
+from app.auth.middleware import require_viewer
 from app.db.models import EvidenceFile
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
@@ -13,6 +14,7 @@ async def list_evidence(
     event_id: uuid.UUID | None = None,
     limit: int = Query(default=50, le=200),
     db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_viewer),
 ):
     query = select(EvidenceFile).order_by(desc(EvidenceFile.created_at)).limit(limit)
     if event_id:

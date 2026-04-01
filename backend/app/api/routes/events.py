@@ -1,8 +1,9 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
+from app.auth.middleware import require_viewer, require_admin
 from app.db.models import ViolationEvent, TrackSession, EventFSMState
 from app.schemas.event import ViolationEventResponse, ViolationEventUpdate, TrackSessionResponse
 
@@ -12,8 +13,9 @@ router = APIRouter(prefix="/events", tags=["events"])
 @router.get("", response_model=list[ViolationEventResponse])
 async def list_events(
     camera_id: uuid.UUID | None = None,
-    limit: int = 50,
+    limit: int = Query(default=50, le=200),
     db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_viewer),
 ):
     stmt = select(ViolationEvent).order_by(ViolationEvent.timestamp.desc()).limit(limit)
     if camera_id is not None:
@@ -23,7 +25,7 @@ async def list_events(
 
 
 @router.get("/tracks/active", response_model=list[TrackSessionResponse])
-async def list_active_tracks(db: AsyncSession = Depends(get_db)):
+async def list_active_tracks(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
     result = await db.execute(
         select(TrackSession).where(TrackSession.exited_at.is_(None)).order_by(TrackSession.entered_at.desc())
     )
@@ -31,7 +33,7 @@ async def list_active_tracks(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{event_id}", response_model=ViolationEventResponse)
-async def get_event(event_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_event(event_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
     result = await db.execute(select(ViolationEvent).where(ViolationEvent.id == event_id))
     event = result.scalar_one_or_none()
     if not event:
@@ -44,6 +46,7 @@ async def update_event(
     event_id: uuid.UUID,
     body: ViolationEventUpdate,
     db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_admin),
 ):
     result = await db.execute(select(ViolationEvent).where(ViolationEvent.id == event_id))
     event = result.scalar_one_or_none()

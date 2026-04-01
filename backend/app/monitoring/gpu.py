@@ -15,7 +15,8 @@ async def get_gpu_stats() -> list[dict]:
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
-            return [{"error": "nvidia-smi failed", "stderr": result.stderr}]
+            logger.error("nvidia-smi failed: %s", result.stderr)
+            return [{"error": "nvidia-smi failed"}]
 
         gpus = []
         for line in result.stdout.strip().split("\n"):

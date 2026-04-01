@@ -1,24 +1,40 @@
 # backend/app/auth/middleware.py
 """FastAPI auth dependencies for role-based access control."""
 import logging
+import os
+
 from fastapi import Depends, HTTPException, Request
 
 from app.auth.keycloak import validate_token, extract_roles, has_role
 
 logger = logging.getLogger(__name__)
 
+def _is_dev_mode() -> bool:
+    """SECURITY: Dev mode ONLY when explicitly enabled. Never grant access by default."""
+    return os.environ.get("WW_AUTH_DEV_MODE", "").lower() in ("1", "true", "yes")
+
 
 async def get_current_user(request: Request) -> dict:
     """Extract and validate JWT from Authorization header. Returns claims dict.
 
-    In development (no Keycloak), returns a mock admin user.
+    In development mode (WW_AUTH_DEV_MODE=true), returns a mock admin user
+    when no Authorization header is present. In production, always requires
+    a valid Bearer token.
     """
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        # Dev mode: return mock user if no auth header
-        return {"sub": "dev-user", "preferred_username": "dev", "realm_access": {"roles": ["owner", "admin", "viewer"]}}
+        if _is_dev_mode():
+            logger.debug("Dev mode: returning mock user (no auth header)")
+            return {
+                "sub": "dev-user",
+                "preferred_username": "dev",
+                "realm_access": {"roles": ["owner", "admin", "viewer"]},
+            }
+        raise HTTPException(status_code=401, detail="Authorization header required")
 
     token = auth_header[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Empty Bearer token")
     claims = await validate_token(token)
     if not claims:
         raise HTTPException(status_code=401, detail="Invalid or expired token")

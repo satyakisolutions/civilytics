@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
+from app.auth.middleware import require_viewer
 from app.db.models import PlateRead
 
 router = APIRouter(prefix="/lpr", tags=["lpr"])
@@ -14,6 +15,7 @@ async def list_plates(
     plate_number: str | None = None,
     limit: int = Query(default=50, le=200),
     db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_viewer),
 ):
     query = select(PlateRead).order_by(desc(PlateRead.timestamp)).limit(limit)
     if camera_id:

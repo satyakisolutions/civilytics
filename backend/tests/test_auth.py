@@ -79,9 +79,28 @@ async def test_get_current_user_dev_mode():
     from app.auth.middleware import get_current_user
     req = MagicMock()
     req.headers.get.return_value = ""
+    # WW_AUTH_DEV_MODE is set in conftest.py
     user = await get_current_user(req)
     assert user["sub"] == "dev-user"
     assert "admin" in user["realm_access"]["roles"]
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_prod_mode_no_header():
+    """In production (no dev mode), missing auth header should return 401."""
+    import os
+    from fastapi import HTTPException
+    from app.auth.middleware import get_current_user
+    req = MagicMock()
+    req.headers.get.return_value = ""
+    old = os.environ.pop("WW_AUTH_DEV_MODE", None)
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(req)
+        assert exc_info.value.status_code == 401
+    finally:
+        if old:
+            os.environ["WW_AUTH_DEV_MODE"] = old
 
 
 @pytest.mark.asyncio

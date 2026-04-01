@@ -11,6 +11,7 @@ by the DeepStream pipeline.
 """
 import asyncio
 import logging
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 RECORDING_DIR = Path("/tmp/wastewatch/recordings")
 RECORDING_DIR.mkdir(parents=True, exist_ok=True)
+
+# SECURITY: Only allow safe camera IDs in paths and URLs
+_SAFE_CAM_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-]{0,63}$")
 
 
 @dataclass
@@ -84,6 +88,11 @@ class StreamRecorder:
                     self._max_concurrent, camera_id, track_id,
                 )
                 return None
+
+        # SECURITY: Validate camera_id to prevent RTSP URL manipulation / path traversal
+        if not _SAFE_CAM_ID.match(camera_id):
+            logger.error("Invalid camera_id for recording: %r", camera_id)
+            return None
 
         # Build RTSP URL for the inference output stream
         # Pipeline publishes annotated video to MediaMTX as cam-XX-out

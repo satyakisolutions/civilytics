@@ -1,6 +1,10 @@
+import os
 import pytest
 import httpx
 from httpx import ASGITransport
+
+# SECURITY: Enable dev mode for tests only — allows unauthenticated access
+os.environ["WW_AUTH_DEV_MODE"] = "true"
 
 
 @pytest.fixture

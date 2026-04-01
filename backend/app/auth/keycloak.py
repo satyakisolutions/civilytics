@@ -1,7 +1,7 @@
 # backend/app/auth/keycloak.py
 """Keycloak JWT token validation and role extraction."""
 import logging
-from functools import lru_cache
+import time
 
 import httpx
 from jose import jwt, JWTError
@@ -11,17 +11,22 @@ from app.config.settings import settings
 logger = logging.getLogger(__name__)
 
 _jwks_cache: dict | None = None
+_jwks_fetched_at: float = 0.0
+_JWKS_TTL_S = 600  # Refresh JWKS every 10 minutes
 
 
 async def get_jwks() -> dict:
-    global _jwks_cache
-    if _jwks_cache:
+    global _jwks_cache, _jwks_fetched_at
+    now = time.monotonic()
+    if _jwks_cache and (now - _jwks_fetched_at) < _JWKS_TTL_S:
         return _jwks_cache
     url = f"{settings.keycloak_url}/realms/{settings.keycloak_realm}/protocol/openid-connect/certs"
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(url)
         resp.raise_for_status()
         _jwks_cache = resp.json()
+        _jwks_fetched_at = now
+        logger.info("JWKS refreshed from Keycloak")
         return _jwks_cache
 
 

@@ -1,9 +1,14 @@
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
+from app.auth.middleware import require_viewer, require_owner
 from app.db.models import SystemConfig
+
+# Allowlist for config keys — reject unknown keys
+_ALLOWED_CONFIG_KEYS = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -17,7 +22,7 @@ class ConfigResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 @router.get("/{key}", response_model=ConfigResponse)
-async def get_config(key: str, db: AsyncSession = Depends(get_db)):
+async def get_config(key: str, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
     result = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
     config = result.scalar_one_or_none()
     if not config:
@@ -29,7 +34,7 @@ async def get_config(key: str, db: AsyncSession = Depends(get_db)):
     )
 
 @router.get("", response_model=list[ConfigResponse])
-async def list_config(db: AsyncSession = Depends(get_db)):
+async def list_config(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
     result = await db.execute(select(SystemConfig).order_by(SystemConfig.key))
     configs = result.scalars().all()
     return [
@@ -42,7 +47,9 @@ async def list_config(db: AsyncSession = Depends(get_db)):
     ]
 
 @router.put("/{key}", response_model=ConfigResponse)
-async def set_config(key: str, body: ConfigValue, db: AsyncSession = Depends(get_db)):
+async def set_config(key: str, body: ConfigValue, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_owner)):
+    if not _ALLOWED_CONFIG_KEYS.match(key):
+        raise HTTPException(status_code=400, detail="Invalid config key format")
     result = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
     config = result.scalar_one_or_none()
     if config:

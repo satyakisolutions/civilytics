@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.db.models import Camera
+from app.auth.middleware import require_viewer, require_admin
 from app.schemas.roi import ROIPolygonCreate, CameraROIResponse, ROIPolygonResponse, ROIPoint, compute_bounding_rect
 
 router = APIRouter(prefix="/cameras", tags=["roi"])
@@ -28,7 +29,7 @@ def _build_roi_response(camera_id: str, raw_polygons: list[dict]) -> CameraROIRe
 
 
 @router.get("/{camera_id}/roi", response_model=CameraROIResponse)
-async def get_roi(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_roi(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     camera = result.scalar_one_or_none()
     if not camera:
@@ -42,6 +43,7 @@ async def replace_roi(
     camera_id: uuid.UUID,
     polygons: list[ROIPolygonCreate],
     db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_admin),
 ):
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     camera = result.scalar_one_or_none()
@@ -54,7 +56,7 @@ async def replace_roi(
 
 
 @router.delete("/{camera_id}/roi", status_code=204)
-async def clear_roi(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def clear_roi(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_admin)):
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     camera = result.scalar_one_or_none()
     if not camera:

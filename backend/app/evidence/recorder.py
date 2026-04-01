@@ -2,12 +2,23 @@
 """Evidence recording manager — manages pre/post event clip extraction."""
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 EVIDENCE_DIR = Path("/tmp/wastewatch/evidence")
+
+# SECURITY: Validate camera_id to prevent path traversal
+_SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-]{0,63}$")
+
+
+def _validate_camera_id(camera_id: str) -> str:
+    """Validate camera_id is safe for use in file paths."""
+    if not _SAFE_ID.match(camera_id):
+        raise ValueError(f"Invalid camera_id: {camera_id!r}")
+    return camera_id
 
 
 class EvidenceRecorder:
@@ -18,6 +29,7 @@ class EvidenceRecorder:
 
     def save_snapshot(self, camera_id: str, frame_data: bytes, timestamp: datetime | None = None) -> str:
         """Save a snapshot frame to disk. Returns the file path."""
+        _validate_camera_id(camera_id)
         ts = timestamp or datetime.now()
         date_dir = EVIDENCE_DIR / "snapshots" / camera_id / ts.strftime("%Y-%m-%d")
         date_dir.mkdir(parents=True, exist_ok=True)
@@ -28,6 +40,7 @@ class EvidenceRecorder:
         return str(filepath)
 
     def save_annotated_snapshot(self, camera_id: str, frame_data: bytes, timestamp: datetime | None = None) -> str:
+        _validate_camera_id(camera_id)
         ts = timestamp or datetime.now()
         date_dir = EVIDENCE_DIR / "snapshots" / camera_id / ts.strftime("%Y-%m-%d")
         date_dir.mkdir(parents=True, exist_ok=True)
@@ -38,6 +51,7 @@ class EvidenceRecorder:
 
     def save_metadata(self, camera_id: str, metadata: dict, timestamp: datetime | None = None) -> str:
         import json
+        _validate_camera_id(camera_id)
         ts = timestamp or datetime.now()
         date_dir = EVIDENCE_DIR / "metadata" / camera_id / ts.strftime("%Y-%m-%d")
         date_dir.mkdir(parents=True, exist_ok=True)
