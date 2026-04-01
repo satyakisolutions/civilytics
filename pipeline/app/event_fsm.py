@@ -125,6 +125,11 @@ class EventFSMManager:
     def _cleanup(self, key: tuple[str, int]):
         self._fsms.pop(key, None)
 
+    def get_fsm_state(self, camera_id: str, track_id: int) -> str | None:
+        """Get the current FSM state for a camera/track pair, or None if not tracked."""
+        fsm = self._fsms.get((camera_id, track_id))
+        return fsm.state.value if fsm else None
+
     def get_active_fsms(self, camera_id: str | None = None) -> list[TrackFSM]:
         if camera_id:
             return [f for f in self._fsms.values() if f.camera_id == camera_id]

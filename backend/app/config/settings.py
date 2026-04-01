@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/wastewatch"
+    database_url: str = ""  # SECURITY: Must be set via WW_DATABASE_URL — no default credentials
     kafka_bootstrap_servers: str = "localhost:9092"
     redis_url: str = "redis://localhost:6379/0"
     mediamtx_api_url: str = "http://localhost:9997"

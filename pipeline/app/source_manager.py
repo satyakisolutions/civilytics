@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlparse
 
 import gi
 
@@ -6,6 +7,22 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gst  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# SECURITY: Only allow RTSP scheme for camera sources
+_ALLOWED_SCHEMES = {"rtsp", "rtsps"}
+
+
+def _validate_rtsp_uri(uri: str) -> None:
+    """Validate that a URI is a safe RTSP source. Rejects file://, http://, etc."""
+    parsed = urlparse(uri)
+    if parsed.scheme.lower() not in _ALLOWED_SCHEMES:
+        raise ValueError(f"Unsupported URI scheme: {parsed.scheme!r} (only rtsp:// allowed)")
+    if not parsed.hostname:
+        raise ValueError(f"Missing hostname in URI: {uri!r}")
+    # Block metadata endpoints and loopback abuse
+    hostname = parsed.hostname.lower()
+    if hostname in ("169.254.169.254", "metadata.google.internal", "localhost", "127.0.0.1", "::1"):
+        raise ValueError(f"Blocked hostname: {hostname}")
 
 
 class SourceManager:
@@ -29,6 +46,7 @@ class SourceManager:
         decoded video pads are linked to the stream-muxer, adds and syncs the
         element state with the pipeline, then returns the assigned pad id.
         """
+        _validate_rtsp_uri(uri)
         pad_id = self._next_pad_id
         self._next_pad_id += 1
 

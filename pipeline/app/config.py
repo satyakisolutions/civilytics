@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 class PipelineSettings(BaseSettings):
     kafka_bootstrap_servers: str = "kafka:9092"
     mediamtx_rtsp_url: str = "rtsp://mediamtx:8554"
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/wastewatch"
+    database_url: str = ""  # Must be set via WW_DATABASE_URL
     batch_size: int = 4
     frame_skip: int = 2
     input_width: int = 1920

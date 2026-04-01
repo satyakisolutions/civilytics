@@ -168,8 +168,7 @@ def extract_metadata(
                     # Enrich detection with tracking data
                     detection_dict["dwell_time_s"] = round(track_info.dwell_time_s, 1)
                     detection_dict["in_roi"] = in_roi
-                    active_fsm = fsm_manager._fsms.get((camera_id, track_id))
-                    detection_dict["fsm_state"] = active_fsm.state.value if active_fsm else None
+                    detection_dict["fsm_state"] = fsm_manager.get_fsm_state(camera_id, track_id)
 
                 detections.append(detection_dict)
 
@@ -348,8 +347,8 @@ def main() -> None:
     )
     roi_preprocessor = ROIPreprocessor(
         roi_manager,
-        frame_width=cfg.input_width,
-        frame_height=cfg.input_height,
+        frame_width=pipeline_settings.input_width,
+        frame_height=pipeline_settings.input_height,
     )
 
     # Attach metadata probe to fakesink's sink pad
