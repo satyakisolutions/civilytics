@@ -27,7 +27,9 @@ import { CameraPlaceholder } from './CameraPlaceholder';
 import { useMediaMTXConfig } from '@/hooks/useMediaMTXConfig';
 import { useFrameAnalysis } from '@/hooks/useFrameAnalysis';
 import { useDetectionMetadata } from '@/hooks/useDetectionMetadata';
+import { useROIEditor } from '@/hooks/useROIEditor';
 import { MetadataOverlay } from './MetadataOverlay';
+import { ROIOverlay } from './ROIOverlay';
 
 interface CameraFeedProps {
   camera: Camera;
@@ -44,6 +46,7 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
   const [isStreamActive, setIsStreamActive] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const { metadata } = useDetectionMetadata({ cameraId: camera.id, enabled: camera.status === 'online' });
+  const roi = useROIEditor({ cameraId: camera.id });
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const [containerDimensions, setContainerDimensions] = useState({ width: 0, height: 0 });
 
@@ -57,6 +60,8 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
     observer.observe(videoContainerRef.current);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => { roi.fetchPolygons(); }, [roi.fetchPolygons]);
 
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -137,6 +142,14 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
               metadata={metadata}
               width={containerDimensions.width}
               height={containerDimensions.height}
+            />
+            <ROIOverlay
+              polygons={roi.polygons}
+              width={containerDimensions.width}
+              height={containerDimensions.height}
+              isEditing={roi.isEditing}
+              currentPoints={roi.currentPoints}
+              onCanvasClick={roi.addPoint}
             />
           </>
         ) : (
@@ -284,6 +297,9 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
                 {isAnalyzing ? 'Analyzing...' : 'AI Analyze'}
               </DropdownMenuItem>
             )}
+            <DropdownMenuItem onClick={() => roi.setIsEditing(!roi.isEditing)}>
+              {roi.isEditing ? 'Cancel ROI' : 'Draw ROI'}
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
