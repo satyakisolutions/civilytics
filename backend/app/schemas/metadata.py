@@ -7,6 +7,9 @@ class Detection(BaseModel):
     confidence: float
     bbox: list[float]  # [x1, y1, x2, y2] normalized 0-1
     track_id: int | None = None
+    dwell_time_s: float | None = None
+    in_roi: bool | None = None
+    fsm_state: str | None = None
 
 
 class FrameMetadata(BaseModel):
