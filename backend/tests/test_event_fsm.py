@@ -1,9 +1,13 @@
-import sys
+import importlib.util
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "pipeline"))
-
-from app.event_fsm import EventFSMManager, FSMState
+# Import from pipeline/app/event_fsm.py directly to avoid conflict with backend's 'app' package
+_fsm_path = os.path.join(os.path.dirname(__file__), "..", "..", "pipeline", "app", "event_fsm.py")
+_spec = importlib.util.spec_from_file_location("pipeline_event_fsm", _fsm_path)
+_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+EventFSMManager = _mod.EventFSMManager
+FSMState = _mod.FSMState
 
 
 def test_idle_to_enter_on_roi_entry():
