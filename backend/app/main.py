@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import cameras, health, config_routes, events, roi, alerts, evidence, lpr, analytics
+from app.api.routes import cameras, health, config_routes, events, roi, alerts, evidence, lpr, analytics, system
 from app.config.settings import settings
 from app.ws import metadata as ws_metadata
 from app.ws import events as ws_events
@@ -103,6 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(evidence.router, prefix="/api")
     app.include_router(lpr.router, prefix="/api")
     app.include_router(analytics.router, prefix="/api")
+    app.include_router(system.router, prefix="/api")
     app.include_router(ws_metadata.router, prefix="/ws")
     app.include_router(ws_events.router, prefix="/ws")
     app.include_router(ws_alerts.router, prefix="/ws")
