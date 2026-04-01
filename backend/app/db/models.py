@@ -232,3 +232,14 @@ class EvidenceFile(Base):
     sync_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, uploading, synced, failed
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LogEntry(Base):
+    __tablename__ = "log_entries"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    service: Mapped[str] = mapped_column(String(100))
+    level: Mapped[str] = mapped_column(String(20))
+    message: Mapped[str] = mapped_column(Text)
+    metadata: Mapped[dict | None] = mapped_column(JSONB)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
