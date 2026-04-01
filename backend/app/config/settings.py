@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_ids: list[str] = []
 
+    # Keycloak
+    keycloak_url: str = "http://localhost:8180"
+    keycloak_realm: str = "wastewatch"
+    keycloak_client_id: str = "wastewatch-api"
+    keycloak_client_secret: str = ""
+
     model_config = SettingsConfigDict(env_prefix="WW_", env_file=".env")
 
 
