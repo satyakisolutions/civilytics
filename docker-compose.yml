@@ -47,6 +47,28 @@ services:
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://host.docker.internal:5432/keycloak
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: postgres
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8180:8080"
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.9
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
   api:
     build:
       context: ./backend
@@ -60,6 +82,7 @@ services:
       WW_MEDIAMTX_API_URL: http://mediamtx:9997
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
       WW_VLM_BASE_URL: http://vlm:8000/v1
+      WW_KEYCLOAK_URL: http://keycloak:8080
     depends_on:
       kafka:
         condition: service_healthy
@@ -121,3 +144,4 @@ volumes:
   kafka_data:
   redis_data:
   tts_data:
+  qdrant_data:
