@@ -143,3 +143,31 @@ class SystemConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class TrackState(str, enum.Enum):
+    active = "active"
+    lost = "lost"
+    exited = "exited"
+
+
+class EventFSMState(str, enum.Enum):
+    enter = "enter"
+    observe = "observe"
+    violation = "violation"
+    alerting = "alerting"
+    escalated = "escalated"
+    exited = "exited"
+
+
+class TrackSession(Base):
+    __tablename__ = "track_sessions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id"))
+    track_id: Mapped[int] = mapped_column(Integer)
+    fsm_state: Mapped[EventFSMState] = mapped_column(Enum(EventFSMState, name="event_fsm_state", create_type=False), default=EventFSMState.enter)
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    exited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dwell_time_s: Mapped[float | None] = mapped_column(Float)
+    bbox_history: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
