@@ -171,3 +171,29 @@ class TrackSession(Base):
     dwell_time_s: Mapped[float | None] = mapped_column(Float)
     bbox_history: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class VLMAnalysis(Base):
+    __tablename__ = "vlm_analyses"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    track_session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("track_sessions.id"))
+    camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id"))
+    frames_analyzed: Mapped[int] = mapped_column(Integer)
+    prompt_used: Mapped[str | None] = mapped_column(Text)
+    response: Mapped[dict] = mapped_column(JSONB)
+    inference_time_ms: Mapped[int] = mapped_column(Integer)
+    model_version: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AlertDelivery(Base):
+    __tablename__ = "alert_deliveries"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    alert_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("alerts.id"))
+    channel: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    payload: Mapped[dict | None] = mapped_column(JSONB)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
