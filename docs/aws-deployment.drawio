@@ -1,0 +1,346 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-04-07" agent="WasteWatch" version="24.0">
+  <diagram id="aws-deployment" name="WasteWatch — AWS Cloud Deployment">
+    <mxGraphModel dx="3200" dy="2200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="3200" pageHeight="2200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ==================== TITLE ==================== -->
+        <mxCell id="title" value="WasteWatch — AWS Cloud Deployment" style="text;html=1;fontSize=26;fontStyle=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontColor=#101010;" vertex="1" parent="1">
+          <mxGeometry x="800" y="10" width="800" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="Satyaki Solutions Pvt Ltd  |  ap-south-1 (Mumbai)  |  15 Microservices  |  4-Camera Baseline" style="text;html=1;fontSize=13;align=center;fontColor=#666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="800" y="50" width="800" height="25" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== COLUMN 1: EXTERNAL / EDGE ==================== -->
+        <mxCell id="col1" value="External / Edge (On-Premise)" style="swimlane;startSize=28;fillColor=#f5f5f5;strokeColor=#999;fontStyle=1;fontSize=12;fontColor=#666;rounded=1;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="20" y="100" width="280" height="600" as="geometry" />
+        </mxCell>
+
+        <!-- IP Cameras -->
+        <mxCell id="cam1" value="&lt;b&gt;IP Camera 1&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;RTSP H.264&lt;/font&gt;" style="shape=mxgraph.cisco.misc.camera;html=1;fillColor=#d5d5d5;strokeColor=#666;fontSize=10;whiteSpace=wrap;rounded=1;" vertex="1" parent="col1">
+          <mxGeometry x="20" y="45" width="55" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="cam2" value="&lt;b&gt;IP Camera 2&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;RTSP H.264&lt;/font&gt;" style="shape=mxgraph.cisco.misc.camera;html=1;fillColor=#d5d5d5;strokeColor=#666;fontSize=10;whiteSpace=wrap;rounded=1;" vertex="1" parent="col1">
+          <mxGeometry x="90" y="45" width="55" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="cam3" value="&lt;b&gt;IP Camera 3&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;RTSP H.264&lt;/font&gt;" style="shape=mxgraph.cisco.misc.camera;html=1;fillColor=#d5d5d5;strokeColor=#666;fontSize=10;whiteSpace=wrap;rounded=1;" vertex="1" parent="col1">
+          <mxGeometry x="160" y="45" width="55" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="cam4" value="&lt;b&gt;IP Camera 4&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;RTSP H.264&lt;/font&gt;" style="shape=mxgraph.cisco.misc.camera;html=1;fillColor=#d5d5d5;strokeColor=#666;fontSize=10;whiteSpace=wrap;rounded=1;" vertex="1" parent="col1">
+          <mxGeometry x="230" y="45" width="55" height="45" as="geometry" />
+        </mxCell>
+
+        <!-- IP Speakers -->
+        <mxCell id="speakers" value="&lt;b&gt;IP Speakers&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;On-Premise&lt;br&gt;VPN Connected&lt;br&gt;TTS Audio Playback&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#999;fontSize=10;" vertex="1" parent="col1">
+          <mxGeometry x="20" y="130" width="120" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Operator Devices -->
+        <mxCell id="phone" value="&lt;b&gt;Operator Phone&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;Telegram App&lt;br&gt;SIP Softphone&lt;/font&gt;" style="shape=mxgraph.ios7.misc.smartphone;html=1;fillColor=#e6e6e6;strokeColor=#999;fontSize=10;whiteSpace=wrap;rounded=1;" vertex="1" parent="col1">
+          <mxGeometry x="20" y="240" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="laptop" value="&lt;b&gt;Operator Laptop&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;Web Dashboard&lt;br&gt;WebRTC Live View&lt;/font&gt;" style="shape=mxgraph.cisco.computers_and_peripherals.laptop;html=1;fillColor=#e6e6e6;strokeColor=#999;fontSize=10;whiteSpace=wrap;rounded=1;" vertex="1" parent="col1">
+          <mxGeometry x="150" y="240" width="120" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Cameras group label -->
+        <mxCell id="cam_label" value="&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;4x RTSP Streams @ 1080p 15fps&lt;/font&gt;" style="text;html=1;align=center;" vertex="1" parent="col1">
+          <mxGeometry x="20" y="95" width="250" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== COLUMN 2: AWS INGRESS ==================== -->
+        <mxCell id="col2" value="AWS Ingress" style="swimlane;startSize=28;fillColor=#FFF8E6;strokeColor=#FCA719;fontStyle=1;fontSize=12;fontColor=#FCA719;rounded=1;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="330" y="100" width="240" height="600" as="geometry" />
+        </mxCell>
+
+        <!-- CloudFront -->
+        <mxCell id="cloudfront" value="&lt;b&gt;Amazon CloudFront&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;CDN — Static Assets&lt;br&gt;React Dashboard&lt;br&gt;Edge Caching&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=10;" vertex="1" parent="col2">
+          <mxGeometry x="30" y="40" width="180" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- ALB -->
+        <mxCell id="alb" value="&lt;b&gt;Application Load Balancer&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;HTTPS :443 → api (Fargate)&lt;br&gt;WSS :443/ws → api (Fargate)&lt;br&gt;WebRTC :8889 → mediamtx (Fargate)&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#458DFF&quot; style=&quot;font-size:8px&quot;&gt;$25/mo&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=10;strokeWidth=2;" vertex="1" parent="col2">
+          <mxGeometry x="30" y="130" width="180" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- VPN Gateway -->
+        <mxCell id="vpn" value="&lt;b&gt;AWS VPN Gateway&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;Site-to-Site VPN&lt;br&gt;On-premise cameras&lt;br&gt;On-premise speakers&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=10;" vertex="1" parent="col2">
+          <mxGeometry x="30" y="250" width="180" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== COLUMN 3: VPC ==================== -->
+        <mxCell id="vpc" value="VPC  10.0.0.0/16" style="swimlane;startSize=28;fillColor=#E8F0FE;strokeColor=#458DFF;fontStyle=1;fontSize=14;fontColor=#458DFF;rounded=1;arcSize=6;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="600" y="100" width="720" height="900" as="geometry" />
+        </mxCell>
+
+        <!-- Public Subnet -->
+        <mxCell id="pub_subnet" value="Public Subnet (10.0.1.0/24)" style="swimlane;startSize=24;fillColor=#FFFDE7;strokeColor=#FCA719;fontStyle=1;fontSize=11;fontColor=#FCA719;rounded=1;arcSize=6;" vertex="1" parent="vpc">
+          <mxGeometry x="20" y="40" width="680" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="pub_alb" value="ALB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=9;fontStyle=1;" vertex="1" parent="pub_subnet">
+          <mxGeometry x="20" y="30" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="nat_gw" value="NAT Gateway&lt;br&gt;&lt;font color=&quot;#458DFF&quot; style=&quot;font-size:8px&quot;&gt;$35/mo&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=9;fontStyle=1;" vertex="1" parent="pub_subnet">
+          <mxGeometry x="120" y="30" width="110" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Private Subnet A: GPU -->
+        <mxCell id="priv_a" value="Private Subnet A — GPU (10.0.10.0/24)" style="swimlane;startSize=24;fillColor=#E8F5E9;strokeColor=#2E7D32;fontStyle=1;fontSize=11;fontColor=#2E7D32;rounded=1;arcSize=6;strokeWidth=2;" vertex="1" parent="vpc">
+          <mxGeometry x="20" y="130" width="680" height="200" as="geometry" />
+        </mxCell>
+
+        <!-- EC2 GPU Instance -->
+        <mxCell id="ec2_gpu" value="&lt;b&gt;EC2 g5.2xlarge&lt;/b&gt;&lt;br&gt;8 vCPU  |  32 GB RAM  |  NVIDIA A10G 24GB&lt;br&gt;&lt;font color=&quot;#2E7D32&quot; style=&quot;font-size:8px&quot;&gt;$607/mo (Reserved 1yr)&lt;/font&gt;" style="swimlane;startSize=45;fillColor=#C8E6C9;strokeColor=#2E7D32;fontStyle=1;fontSize=10;fontColor=#101010;rounded=1;arcSize=6;strokeWidth=2;" vertex="1" parent="priv_a">
+          <mxGeometry x="20" y="35" width="640" height="150" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pipeline" value="&lt;b&gt;pipeline&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;DeepStream 7.0&lt;br&gt;Object Detection&lt;br&gt;Tracking + ROI&lt;br&gt;~6 GB VRAM&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#A5D6A7;strokeColor=#2E7D32;fontSize=10;" vertex="1" parent="ec2_gpu">
+          <mxGeometry x="20" y="55" width="280" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="vlm_gpu" value="&lt;b&gt;vlm&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;vLLM Server&lt;br&gt;Qwen2.5-VL-7B-AWQ&lt;br&gt;Scene Analysis&lt;br&gt;~8 GB VRAM&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#A5D6A7;strokeColor=#2E7D32;fontSize=10;" vertex="1" parent="ec2_gpu">
+          <mxGeometry x="330" y="55" width="280" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="gpu_label" value="NVIDIA A10G 24GB  |  6GB + 8GB = 14GB VRAM used  |  10GB headroom" style="text;html=1;fontSize=9;fontColor=#2E7D32;fontStyle=2;align=center;" vertex="1" parent="ec2_gpu">
+          <mxGeometry x="20" y="10" width="600" height="15" as="geometry" />
+        </mxCell>
+
+        <!-- Private Subnet B: Fargate -->
+        <mxCell id="priv_b" value="Private Subnet B — Fargate CPU Microservices (10.0.20.0/24)" style="swimlane;startSize=24;fillColor=#E3F2FD;strokeColor=#458DFF;fontStyle=1;fontSize=11;fontColor=#458DFF;rounded=1;arcSize=6;strokeWidth=2;" vertex="1" parent="vpc">
+          <mxGeometry x="20" y="350" width="680" height="530" as="geometry" />
+        </mxCell>
+
+        <!-- ECS Fargate Cluster -->
+        <mxCell id="fargate_cluster" value="&lt;b&gt;ECS Fargate Cluster&lt;/b&gt;  —  11 Tasks  |  ~5.75 vCPU  |  ~11 GB RAM&lt;br&gt;&lt;font color=&quot;#458DFF&quot; style=&quot;font-size:8px&quot;&gt;$165/mo total&lt;/font&gt;" style="swimlane;startSize=30;fillColor=#BBDEFB;strokeColor=#458DFF;fontStyle=1;fontSize=10;fontColor=#101010;rounded=1;arcSize=6;strokeWidth=2;" vertex="1" parent="priv_b">
+          <mxGeometry x="20" y="35" width="640" height="480" as="geometry" />
+        </mxCell>
+
+        <!-- Row 1: Core API services -->
+        <mxCell id="api_svc" value="&lt;b&gt;api&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;FastAPI&lt;br&gt;0.5 vCPU | 1GB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="20" y="40" width="135" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="keycloak_svc" value="&lt;b&gt;keycloak&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;IAM / SSO&lt;br&gt;1 vCPU | 2GB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="170" y="40" width="135" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="mediamtx_svc" value="&lt;b&gt;mediamtx&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;WebRTC Gateway&lt;br&gt;0.5 vCPU | 512MB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="320" y="40" width="135" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="qdrant_svc" value="&lt;b&gt;qdrant&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;Vector DB&lt;br&gt;0.5 vCPU | 1GB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="470" y="40" width="135" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- Row 2: Workers -->
+        <mxCell id="vlm_worker" value="&lt;b&gt;vlm-worker&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;VLM Orchestrator&lt;br&gt;0.5 vCPU | 1GB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="20" y="110" width="135" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="tts_worker" value="&lt;b&gt;tts-worker&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;Text-to-Speech&lt;br&gt;0.5 vCPU | 1GB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="170" y="110" width="135" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="lpr_worker" value="&lt;b&gt;lpr-worker&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;License Plate OCR&lt;br&gt;1 vCPU | 2GB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="320" y="110" width="135" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="log_worker" value="&lt;b&gt;log-worker&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;Log Aggregation&lt;br&gt;0.25 vCPU | 512MB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="470" y="110" width="135" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- Row 3: Alert/Comms services -->
+        <mxCell id="alert_svc" value="&lt;b&gt;alert-svc&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;Alert Dispatch&lt;br&gt;0.25 vCPU | 512MB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="20" y="180" width="135" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="sip_svc" value="&lt;b&gt;sip-svc&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;SIP / Voice&lt;br&gt;0.25 vCPU | 512MB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="170" y="180" width="135" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="evidence_svc" value="&lt;b&gt;evidence-svc&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot; color=&quot;#888&quot;&gt;Evidence Manager&lt;br&gt;0.5 vCPU | 1GB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="320" y="180" width="135" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- Scaling annotations inside Fargate -->
+        <mxCell id="scale_fargate" value="&lt;font color=&quot;#458DFF&quot; style=&quot;font-size:9px&quot;&gt;⟳ Auto-scales: lpr-worker ×2-3, vlm-worker ×2&lt;/font&gt;" style="text;html=1;align=left;fontStyle=2;" vertex="1" parent="fargate_cluster">
+          <mxGeometry x="20" y="250" width="350" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- Scaling annotation for GPU -->
+        <mxCell id="scale_gpu" value="&lt;font color=&quot;#2E7D32&quot; style=&quot;font-size:9px&quot;&gt;↑ Scale to g5.4xlarge for 8 cameras&lt;/font&gt;" style="text;html=1;align=left;fontStyle=2;" vertex="1" parent="priv_a">
+          <mxGeometry x="20" y="175" width="300" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== COLUMN 4: MANAGED SERVICES ==================== -->
+        <mxCell id="col4" value="AWS Managed Services" style="swimlane;startSize=28;fillColor=#FFF3E0;strokeColor=#FF9800;fontStyle=1;fontSize=12;fontColor=#FF9800;rounded=1;arcSize=8;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="100" width="340" height="900" as="geometry" />
+        </mxCell>
+
+        <!-- MSK / Kafka -->
+        <mxCell id="msk" value="&lt;b&gt;Amazon MSK (Kafka)&lt;/b&gt;&lt;br&gt;2× kafka.m5.large brokers&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:8px&quot;&gt;Topics: detection, tracking, vlm-request,&lt;br&gt;vlm-result, lpr-request, lpr-result,&lt;br&gt;tts-request, tts-result, alert, evidence,&lt;br&gt;command, log&lt;br&gt;7-day retention&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#FF9800&quot; style=&quot;font-size:9px&quot;&gt;&lt;b&gt;$380/mo&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=10;strokeWidth=2;" vertex="1" parent="col4">
+          <mxGeometry x="20" y="40" width="300" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="scale_msk" value="&lt;font color=&quot;#FF9800&quot; style=&quot;font-size:9px&quot;&gt;↑ Add broker for 16+ cameras&lt;/font&gt;" style="text;html=1;align=left;fontStyle=2;" vertex="1" parent="col4">
+          <mxGeometry x="20" y="195" width="280" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- ElastiCache / Redis -->
+        <mxCell id="redis" value="&lt;b&gt;Amazon ElastiCache (Redis)&lt;/b&gt;&lt;br&gt;cache.t3.medium&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:8px&quot;&gt;Command channel (pub/sub)&lt;br&gt;Rate-limit throttling&lt;br&gt;Session caching&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#FF9800&quot; style=&quot;font-size:9px&quot;&gt;&lt;b&gt;$47/mo&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=10;strokeWidth=2;" vertex="1" parent="col4">
+          <mxGeometry x="20" y="225" width="300" height="110" as="geometry" />
+        </mxCell>
+
+        <!-- RDS / PostgreSQL -->
+        <mxCell id="rds" value="&lt;b&gt;Amazon RDS (PostgreSQL)&lt;/b&gt;&lt;br&gt;db.t3.medium  |  Multi-AZ&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:8px&quot;&gt;Tables: cameras, events, alerts,&lt;br&gt;tracks, vlm_results, plates,&lt;br&gt;evidence, logs&lt;br&gt;100GB gp3 | Automated backups&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#FF9800&quot; style=&quot;font-size:9px&quot;&gt;&lt;b&gt;$98/mo&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=10;strokeWidth=2;" vertex="1" parent="col4">
+          <mxGeometry x="20" y="350" width="300" height="140" as="geometry" />
+        </mxCell>
+
+        <!-- S3 -->
+        <mxCell id="s3" value="&lt;b&gt;Amazon S3&lt;/b&gt;&lt;br&gt;Evidence Storage&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:8px&quot;&gt;Recordings (MP4)&lt;br&gt;Snapshots (JPEG)&lt;br&gt;Metadata (JSON)&lt;br&gt;Lifecycle: Standard → IA 30d → Glacier 90d&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#FF9800&quot; style=&quot;font-size:9px&quot;&gt;&lt;b&gt;$3/mo&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=10;strokeWidth=2;" vertex="1" parent="col4">
+          <mxGeometry x="20" y="510" width="300" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- ECR -->
+        <mxCell id="ecr" value="&lt;b&gt;Amazon ECR&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:8px&quot;&gt;Docker Image Registry&lt;br&gt;~5GB images&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#FF9800&quot; style=&quot;font-size:9px&quot;&gt;&lt;b&gt;$1/mo&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=10;" vertex="1" parent="col4">
+          <mxGeometry x="20" y="650" width="140" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Secrets Manager -->
+        <mxCell id="secrets" value="&lt;b&gt;Secrets Manager&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:8px&quot;&gt;~10 secrets&lt;br&gt;Keycloak, Telegram, Twilio&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#FF9800&quot; style=&quot;font-size:9px&quot;&gt;&lt;b&gt;$4/mo&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=10;" vertex="1" parent="col4">
+          <mxGeometry x="180" y="650" width="140" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- CloudWatch -->
+        <mxCell id="cloudwatch" value="&lt;b&gt;CloudWatch&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:8px&quot;&gt;Metrics + Logs&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#FF9800&quot; style=&quot;font-size:9px&quot;&gt;&lt;b&gt;$10/mo&lt;/b&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=10;" vertex="1" parent="col4">
+          <mxGeometry x="20" y="740" width="140" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== COLUMN 5: EXTERNAL SERVICES ==================== -->
+        <mxCell id="col5" value="External Services" style="swimlane;startSize=28;fillColor=#f5f5f5;strokeColor=#999;fontStyle=1;fontSize=12;fontColor=#666;rounded=1;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="1740" y="100" width="220" height="300" as="geometry" />
+        </mxCell>
+
+        <mxCell id="telegram" value="&lt;b&gt;Telegram Bot API&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;Alert Notifications&lt;br&gt;Photo + Text + Location&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#999;fontSize=10;" vertex="1" parent="col5">
+          <mxGeometry x="25" y="45" width="170" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="twilio" value="&lt;b&gt;Twilio / SIP PBX&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:9px&quot;&gt;Voice Calls&lt;br&gt;SIP Trunking&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#999;fontSize=10;" vertex="1" parent="col5">
+          <mxGeometry x="25" y="140" width="170" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== DATA FLOW ARROWS ==================== -->
+
+        <!-- Cameras → VPN → EC2 pipeline (RTSP) -->
+        <mxCell id="e_cam_vpn" value="RTSP" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666;strokeWidth=2;fontColor=#666;fontSize=9;fontStyle=2;" edge="1" source="cam1" target="vpn" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_vpn_pipeline" value="RTSP via VPN" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#2E7D32;strokeWidth=2;dashed=1;fontColor=#2E7D32;fontSize=9;fontStyle=2;" edge="1" source="vpn" target="pipeline" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Pipeline → MSK (Kafka topics) -->
+        <mxCell id="e_pipe_msk" value="detections, tracks" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#FF9800;strokeWidth=2;fontColor=#FF9800;fontSize=8;fontStyle=2;" edge="1" source="pipeline" target="msk" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- MSK → Fargate workers (consume) -->
+        <mxCell id="e_msk_vlmw" value="vlm-request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#458DFF;strokeWidth=1;fontColor=#458DFF;fontSize=8;fontStyle=2;" edge="1" source="msk" target="vlm_worker" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_msk_lprw" value="lpr-request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#458DFF;strokeWidth=1;fontColor=#458DFF;fontSize=8;fontStyle=2;" edge="1" source="msk" target="lpr_worker" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_msk_ttsw" value="tts-request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#458DFF;strokeWidth=1;fontColor=#458DFF;fontSize=8;fontStyle=2;" edge="1" source="msk" target="tts_worker" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_msk_alert" value="alert" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#458DFF;strokeWidth=1;fontColor=#458DFF;fontSize=8;fontStyle=2;" edge="1" source="msk" target="alert_svc" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_msk_evidence" value="evidence" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#458DFF;strokeWidth=1;fontColor=#458DFF;fontSize=8;fontStyle=2;" edge="1" source="msk" target="evidence_svc" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_msk_log" value="log" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#458DFF;strokeWidth=1;fontColor=#458DFF;fontSize=8;fontStyle=2;" edge="1" source="msk" target="log_worker" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- alert-svc → Telegram Bot API -->
+        <mxCell id="e_alert_telegram" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#999;strokeWidth=2;fontColor=#666;fontSize=8;fontStyle=2;" edge="1" source="alert_svc" target="telegram" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- sip-svc → Twilio/SIP -->
+        <mxCell id="e_sip_twilio" value="SIP/TLS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#999;strokeWidth=2;fontColor=#666;fontSize=8;fontStyle=2;" edge="1" source="sip_svc" target="twilio" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- evidence-svc → S3 -->
+        <mxCell id="e_evidence_s3" value="PUT objects" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#FF9800;strokeWidth=2;fontColor=#FF9800;fontSize=8;fontStyle=2;" edge="1" source="evidence_svc" target="s3" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Pipeline → ElastiCache (Redis pub/sub) -->
+        <mxCell id="e_pipe_redis" value="pub/sub commands" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#FF9800;strokeWidth=1;fontColor=#FF9800;fontSize=8;fontStyle=2;" edge="1" source="pipeline" target="redis" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- All services → RDS -->
+        <mxCell id="e_api_rds" value="SQL" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#FF9800;strokeWidth=1;fontColor=#FF9800;fontSize=8;fontStyle=2;" edge="1" source="api_svc" target="rds" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- api → ALB → CloudFront → User browser -->
+        <mxCell id="e_cf_laptop" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#FCA719;strokeWidth=2;fontColor=#FCA719;fontSize=8;fontStyle=2;" edge="1" source="cloudfront" target="laptop" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_alb_api" value="HTTPS/WSS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#458DFF;strokeWidth=2;fontColor=#458DFF;fontSize=8;fontStyle=2;" edge="1" source="alb" target="api_svc" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Pipeline → mediamtx → ALB → User browser (WebRTC) -->
+        <mxCell id="e_pipe_media" value="RTSP" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#2E7D32;strokeWidth=1;fontColor=#2E7D32;fontSize=8;fontStyle=2;" edge="1" source="pipeline" target="mediamtx_svc" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_media_alb" value="WebRTC" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#458DFF;strokeWidth=1;fontColor=#458DFF;fontSize=8;fontStyle=2;" edge="1" source="mediamtx_svc" target="alb" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Speakers connection -->
+        <mxCell id="e_tts_speakers" value="Audio (VPN)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666;strokeWidth=1;dashed=1;fontColor=#666;fontSize=8;fontStyle=2;" edge="1" source="tts_worker" target="speakers" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- VLM worker → VLM GPU -->
+        <mxCell id="e_vlmw_vlm" value="HTTP inference" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#2E7D32;strokeWidth=1;fontColor=#2E7D32;fontSize=8;fontStyle=2;" edge="1" source="vlm_worker" target="vlm_gpu" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== TOTAL COST BOX ==================== -->
+        <mxCell id="total_cost" value="&lt;b style=&quot;font-size:14px;color:#101010&quot;&gt;Total: $1,375/mo&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#888&quot; style=&quot;font-size:10px&quot;&gt;4-Camera Reserved (1yr) | ap-south-1&lt;br&gt;On-Demand: $1,726/mo (saves 20%)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCA719;strokeColor=#101010;strokeWidth=3;fontSize=12;fontColor=#101010;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="930" width="260" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== LEGEND ==================== -->
+        <mxCell id="legend" value="LEGEND" style="swimlane;startSize=22;fillColor=#fff;strokeColor=#101010;fontStyle=1;fontSize=11;fontColor=#101010;rounded=1;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="20" y="750" width="280" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_gpu" value="GPU Compute" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#2E7D32;fontSize=9;fontStyle=1;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="30" width="120" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_fargate" value="Fargate (CPU)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#90CAF9;strokeColor=#458DFF;fontSize=9;fontStyle=1;" vertex="1" parent="legend">
+          <mxGeometry x="145" y="30" width="120" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_managed" value="Managed Services" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#FF9800;fontSize=9;fontStyle=1;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="65" width="120" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_external" value="External" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#999;fontSize=9;fontStyle=1;" vertex="1" parent="legend">
+          <mxGeometry x="145" y="65" width="120" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_brand" value="&lt;font style=&quot;font-size:9px&quot;&gt;Brand: &lt;font color=&quot;#FCA719&quot;&gt;■&lt;/font&gt; Gold #FCA719  &lt;font color=&quot;#458DFF&quot;&gt;■&lt;/font&gt; Blue #458DFF  &lt;font color=&quot;#101010&quot;&gt;■&lt;/font&gt; Dark #101010&lt;/font&gt;" style="text;html=1;align=left;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="100" width="260" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_arrow1" value="&lt;font style=&quot;font-size:9px&quot;&gt;── Data flow  |  - - - VPN tunnel&lt;/font&gt;" style="text;html=1;align=left;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="125" width="260" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_costs" value="&lt;font style=&quot;font-size:9px&quot;&gt;💰 Cost labels shown on each component&lt;/font&gt;" style="text;html=1;align=left;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="150" width="260" height="20" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
