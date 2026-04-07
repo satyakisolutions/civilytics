@@ -440,5 +440,95 @@ WasteWatch is positioned as a **SaaS / Managed Service** for Local Self Governme
 
 ---
 
+## ROI Analysis
+
+### Satyaki Solutions Business ROI (Per Starter Customer)
+
+| Metric | Year 1 | Year 2 | Year 3 |
+|--------|-------:|-------:|-------:|
+| Revenue | ₹7,20,000 | ₹3,00,000 | ₹3,00,000 |
+| Cost (OPEX + setup labor) | ₹3,16,480 | ₹66,480 | ₹66,480 |
+| **Profit** | **₹4,03,520** | **₹2,33,520** | **₹2,33,520** |
+| **Margin** | **56%** | **78%** | **78%** |
+
+### Satyaki Portfolio ROI (5 Starter Customers in Bangalore)
+
+| | Year 1 | Year 2 | Year 3 | Cumulative |
+|---|-------:|-------:|-------:|----------:|
+| Revenue | ₹36,00,000 | ₹15,00,000 | ₹15,00,000 | ₹66,00,000 |
+| Cost | ₹15,82,400 | ₹3,32,400 | ₹3,32,400 | ₹22,47,200 |
+| **Net Profit** | **₹20,17,600** | **₹11,67,600** | **₹11,67,600** | **₹43,52,800** |
+
+> Development cost is sunk. Every new customer from Year 2 onward is **78% gross margin** recurring revenue.
+
+### Customer's ROI (LSG Body / RWA / Industrial Estate)
+
+#### Monthly Financial Impact for the Customer
+
+```
+REVENUE GENERATED
+  Fines collected (8 caught × ₹10,000 avg)          = ₹80,000/mo
+
+COSTS AVOIDED
+  Cleanup cost savings (80% reduction)               = ₹40,000/mo
+  Guard cost reduction (1 fewer guard)                = ₹20,000/mo
+  Health/legal liability reduction                    = unquantified
+                                                       ──────────
+  Total monthly benefit                              = ₹1,40,000/mo
+  WasteWatch subscription                            = ₹25,000/mo
+                                                       ──────────
+  NET MONTHLY GAIN                                   = ₹1,15,000/mo
+```
+
+#### Payback Calculation
+
+| | Amount |
+|---|------:|
+| Year 1 cost (setup + hardware + 12 months) | ₹7,20,000 |
+| Year 1 benefit (₹1,40,000 × 12 months) | ₹16,80,000 |
+| **Year 1 net ROI** | **₹9,60,000 (133%)** |
+| **Payback period** | **5.1 months** |
+
+After payback, every month is **₹1,15,000 net positive** for the customer.
+
+#### Multi-Year Customer ROI
+
+| Year | Cost | Benefit | Net Gain | Cumulative |
+|:----:|-----:|--------:|---------:|---------:|
+| 1 | ₹7,20,000 | ₹16,80,000 | ₹9,60,000 | ₹9,60,000 |
+| 2 | ₹3,00,000 | ₹16,80,000 | ₹13,80,000 | ₹23,40,000 |
+| 3 | ₹3,00,000 | ₹16,80,000 | ₹13,80,000 | ₹37,20,000 |
+
+> 3-year customer ROI: **₹37.2 lakh net gain** on a ₹13.2 lakh total investment = **282% ROI**.
+
+### ROI by Customer Segment (Bangalore Market)
+
+| Segment | Fine/Incident | Catches/Month | Monthly Benefit | Subscription | Payback |
+|---------|-------------:|:------------:|----------------:|-------------:|--------:|
+| **RWA** (Prestige, Sobha) | ₹5,000 | 6 | ₹70,000 | ₹25,000 | **6 months** |
+| **BBMP Ward Office** | ₹10,000 | 10 | ₹1,40,000 | ₹25,000 | **4 months** |
+| **Industrial Estate** (Peenya) | ₹25,000 | 8 | ₹2,40,000 | ₹50,000 | **3 months** |
+| **Tech Park** (Manyata, RMZ) | ₹15,000 | 6 | ₹1,30,000 | ₹50,000 | **5 months** |
+| **Smart City SPV** | ₹10,000 | 20 | ₹2,40,000 | ₹1,50,000 | **6 months** |
+
+### Without vs With WasteWatch
+
+| Metric | Without | With | Improvement |
+|--------|--------:|-----:|:-----------:|
+| Dumping incidents/month | 20 | 4 | **80% reduction** |
+| Fines collected/month | ₹0 | ₹80,000 | **New revenue** |
+| Cleanup cost/month | ₹50,000 | ₹10,000 | **80% savings** |
+| Evidence for prosecution | None | HD video + plate + VLM report | **Court-grade** |
+| Detection time | Hours (manual) | <5 seconds | **99.9% faster** |
+| Guard requirement | 3 guards/site | 1 guard/site | **67% reduction** |
+| Repeat offender tracking | None | License plate database | **Automated** |
+| Operating hours | 8 hrs (guard shift) | 24/7/365 | **3x coverage** |
+
+### One-Slide Pitch
+
+> **"For ₹25,000/month, WasteWatch catches 8+ illegal dumpers that you're currently missing. At BBMP fine rates, that's ₹80,000 to ₹2,00,000/month in recoverable fines alone — plus ₹40,000/month in cleanup savings. The system pays for itself in 5 months. After that, it's pure revenue for your municipality."**
+
+---
+
 *Copyright 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.*
 *WasteWatch is a product of Satyaki Solutions Pvt Ltd — https://satyaki.co.in*
