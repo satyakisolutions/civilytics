@@ -1,4 +1,6 @@
+# Copyright (c) 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.
 import logging
+import time
 
 import orjson
 from confluent_kafka import Producer
@@ -79,6 +81,82 @@ class PipelineKafkaProducer:
             )
         except Exception:
             logger.exception("Failed to send LPR request")
+
+    def send_tts_request(
+        self,
+        camera_id: str,
+        track_id: int,
+        text: str,
+        priority: str = "normal",
+        timestamp: float | None = None,
+    ) -> None:
+        """Publish a TTS audio generation request to wastewatch.tts."""
+        try:
+            self._producer.produce(
+                topic="wastewatch.tts",
+                key=camera_id.encode("utf-8"),
+                value=orjson.dumps({
+                    "camera_id": camera_id,
+                    "track_id": track_id,
+                    "text": text,
+                    "priority": priority,
+                    "timestamp": timestamp or time.time(),
+                }),
+            )
+        except Exception:
+            logger.exception("Failed to send TTS request for %s", camera_id)
+
+    def send_alert(
+        self,
+        camera_id: str,
+        track_id: int,
+        severity: str,
+        message: str,
+        **kwargs,
+    ) -> None:
+        """Publish an alert event to wastewatch.alerts for WebSocket + Telegram dispatch."""
+        try:
+            payload = {
+                "camera_id": camera_id,
+                "track_id": track_id,
+                "severity": severity,
+                "message": message,
+                **kwargs,
+            }
+            self._producer.produce(
+                topic="wastewatch.alerts",
+                key=camera_id.encode("utf-8"),
+                value=orjson.dumps(payload),
+            )
+        except Exception:
+            logger.exception("Failed to send alert for %s", camera_id)
+
+    def produce(self, topic: str, key: str, value: dict) -> None:
+        """Generic produce helper -- serialises value as JSON and publishes.
+
+        This is used by the ViolationDispatcher for topics that don't have
+        a dedicated send_* method (e.g. wastewatch.evidence).
+        """
+        try:
+            self._producer.produce(
+                topic=topic,
+                key=key.encode("utf-8"),
+                value=orjson.dumps(value),
+            )
+        except Exception:
+            logger.exception("Failed to produce to %s (key=%s)", topic, key)
+
+    def send_event_dict(self, event: dict) -> None:
+        """Publish a raw event dict to wastewatch.events (used by CommandHandler)."""
+        camera_id = event.get("camera_id", "unknown")
+        try:
+            self._producer.produce(
+                topic="wastewatch.events",
+                key=camera_id.encode("utf-8"),
+                value=orjson.dumps(event),
+            )
+        except Exception:
+            logger.exception("Failed to send event dict for %s", camera_id)
 
     def flush(self) -> None:
         self._producer.flush(timeout=5)

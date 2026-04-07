@@ -11,4 +11,4 @@ COPY . .
 RUN useradd --no-create-home --shell /bin/false appuser
 USER appuser
 
-CMD ["python3", "-u", "app/pipeline.py"]
+CMD ["python3", "-u", "entrypoint.py"]

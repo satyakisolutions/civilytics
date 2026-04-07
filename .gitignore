@@ -31,3 +31,11 @@ frontend/.env.local
 # OS
 .DS_Store
 Thumbs.db
+
+# PyTorch weight caches
+*.pth
+rf-detr-base.pth
+
+# Coverage
+.coverage
+backend/.coverage

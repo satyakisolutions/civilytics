@@ -20,6 +20,21 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_ids: list[str] = []
 
+    # IP Speaker
+    ip_speaker_configs: list[dict] = []  # List of SpeakerConfig dicts
+    ip_speaker_enabled: bool = False
+
+    # SIP Gateway
+    sip_server: str = ""
+    sip_username: str = ""
+    sip_password: str = ""
+    sip_domain: str = ""
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
+    sip_escalation_contacts: list[dict] = []
+    sip_enabled: bool = False
+
     # Keycloak
     keycloak_url: str = "http://localhost:8180"
     keycloak_realm: str = "wastewatch"

@@ -1,0 +1,28 @@
+# WasteWatch Action Recognition Secondary GIE (SGIE)
+# Classifies human/vehicle actions on cropped regions from PGIE detections.
+# Model: MobileNet-V2 action classifier, TensorRT FP16
+#
+# Copyright (c) 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.
+
+[property]
+gpu-id=0
+net-scale-factor=0.00784313725
+offsets=127.5;127.5;127.5
+model-engine-file=models/action_classifier/action_classifier_fp16.engine
+onnx-file=models/action_classifier/action_classifier.onnx
+labelfile-path=configs/action_labels.txt
+batch-size=16
+process-mode=2
+model-color-format=0
+network-mode=2
+network-type=1
+num-detected-classes=8
+gie-unique-id=2
+operate-on-gie-id=1
+operate-on-class-ids=0;1;2;3;5;7
+infer-dims=3;224;224
+maintain-aspect-ratio=1
+interval=3
+classifier-async-mode=1
+classifier-threshold=0.3
+output-tensor-meta=1

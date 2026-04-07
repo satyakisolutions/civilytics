@@ -89,6 +89,13 @@ export interface SystemStatus {
 
 export type EventFSMState = 'idle' | 'enter' | 'observe' | 'violation' | 'alerting' | 'escalated' | 'exited';
 
+export interface VLMResult {
+  is_dumping: boolean;
+  waste_type?: string;
+  confidence: number;
+  reasoning?: string;
+}
+
 export interface BBoxDetection {
   class_id: number;
   class_name: string;
@@ -98,6 +105,20 @@ export interface BBoxDetection {
   dwell_time_s?: number;
   in_roi?: boolean;
   fsm_state?: EventFSMState;
+  // Action classification (from SGIE)
+  action_label?: string;
+  action_confidence?: number;
+  action_threat?: string;
+  action_fast_alert?: boolean;
+  // Object category
+  category?: 'person' | 'vehicle' | 'carried_item' | 'waste_object';
+  // Evidence
+  plate_number?: string;
+  vlm_result?: VLMResult;
+  recording?: boolean;
+  // Alert
+  alert_stage?: string;
+  alert_priority?: string;
 }
 
 export interface FrameMetadata {

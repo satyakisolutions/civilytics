@@ -1,0 +1,469 @@
+<mxfile host="draw.io" modified="2026-04-07T00:00:00.000Z" agent="draw.io" version="24.0.0" type="device">
+  <diagram id="wastewatch-user-flow" name="WasteWatch User Flow &amp; System Flow">
+    <mxGraphModel dx="2800" dy="3600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="4000" pageHeight="6000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ============================================================ -->
+        <!-- TITLE BAR -->
+        <!-- ============================================================ -->
+        <mxCell id="title-bg" value="" style="rounded=1;whiteSpace=wrap;fillColor=#101010;strokeColor=#FCA719;strokeWidth=3;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="3900" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="title-text" value="WasteWatch &amp;mdash; User Flow &amp; System Flow" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=28;fontStyle=1;fontColor=#FCA719;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="40" y="25" width="3900" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle-text" value="Satyaki Solutions Pvt Ltd" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=16;fontStyle=2;fontColor=#458DFF;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="40" y="70" width="3900" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- LEGEND -->
+        <!-- ============================================================ -->
+        <mxCell id="legend-box" value="" style="rounded=1;whiteSpace=wrap;fillColor=#1a1a1a;strokeColor=#333333;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="3200" y="140" width="740" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-title" value="Legend" style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontStyle=1;fontColor=#FFFFFF;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="3220" y="145" width="100" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-action" value="User Action" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="3220" y="175" width="100" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-system" value="System Process" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="3340" y="175" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-decision" value="Decision" style="rhombus;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="3470" y="165" width="90" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-data" value="Data / Message" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#2d2d2d;fontColor=#FFFFFF;strokeColor=#555555;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="3580" y="175" width="120" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-storage" value="Storage" style="shape=cylinder3;whiteSpace=wrap;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#333333;fontColor=#FFFFFF;strokeColor=#555555;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="3720" y="165" width="70" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-ws" value="WebSocket" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#00C853;fontColor=#101010;strokeColor=#00a844;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="3220" y="220" width="100" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-kafka" value="Kafka Topic" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#FF6D00;fontColor=#FFFFFF;strokeColor=#cc5700;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="3340" y="220" width="110" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- SWIMLANE 1: LSG OPERATOR -->
+        <!-- ============================================================ -->
+        <mxCell id="swim-operator" value="LSG Operator (Primary User)" style="shape=table;startSize=40;container=1;collapsible=0;childLayout=tableLayout;fillColor=#101010;strokeColor=#FCA719;strokeWidth=2;fontColor=#FCA719;fontSize=16;fontStyle=1;fontFamily=Inter;rounded=1;arcSize=4;align=center;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="290" width="3900" height="1550" as="geometry" />
+        </mxCell>
+
+        <!-- ===== FLOW 1: LIVE MONITORING ===== -->
+        <mxCell id="f1-label" value="Flow 1: Live Monitoring" style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontStyle=5;fontColor=#FCA719;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="80" y="340" width="300" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f1-1" value="Login via&lt;br&gt;Keycloak SSO" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="380" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f1-2" value="Dashboard Loads&lt;br&gt;Camera Grid View" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="280" y="380" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f1-3" value="WebRTC Streams&lt;br&gt;Connect to MediaMTX" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="500" y="380" width="170" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f1-4" value="Real-time Metadata Overlay&lt;br&gt;(Bounding Boxes, Track IDs, FSM State)" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="730" y="375" width="210" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f1-5" value="Alert Panel Shows&lt;br&gt;Live Violations" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#00C853;fontColor=#101010;strokeColor=#00a844;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="380" width="180" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f1-6" value="Click Alert &amp;rarr;&lt;br&gt;Zoomed Camera View&lt;br&gt;with Evidence" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1240" y="375" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Flow 1 arrows -->
+        <mxCell id="f1-e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f1-1" target="f1-2" parent="1" />
+        <mxCell id="f1-e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f1-2" target="f1-3" parent="1" />
+        <mxCell id="f1-e3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f1-3" target="f1-4" parent="1" />
+        <mxCell id="f1-e4" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f1-4" target="f1-5" parent="1" />
+        <mxCell id="f1-e5" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f1-5" target="f1-6" parent="1" />
+        <mxCell id="f1-ws-label" value="WebSocket" style="text;html=1;align=center;verticalAlign=middle;fontSize=9;fontColor=#00C853;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="360" width="70" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- ===== FLOW 2: RESPONDING TO A VIOLATION ALERT ===== -->
+        <mxCell id="f2-label" value="Flow 2: Responding to a Violation Alert" style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontStyle=5;fontColor=#FCA719;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="80" y="470" width="400" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f2-1" value="Violation Detected&lt;br&gt;FSM: OBSERVE &amp;rarr; VIOLATION" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="510" width="180" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f2-2" value="VLM Confirms Dumping&lt;br&gt;(Qwen2.5-VL-7B)" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="310" y="510" width="170" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f2-3" value="Alert Dispatched&lt;br&gt;WebSocket + Telegram" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#00C853;fontColor=#101010;strokeColor=#00a844;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="530" y="510" width="180" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f2-4" value="TTS Audio Warning&lt;br&gt;Generated" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="760" y="510" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f2-5" value="Operator Views Details&lt;br&gt;Snapshot, VLM Analysis,&lt;br&gt;Dwell Time, Plate Number" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="960" y="505" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f2-6" value="Acknowledge&lt;br&gt;or Escalate?" style="rhombus;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="500" width="130" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="f2-7a" value="Acknowledged" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1390" y="490" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="f2-7b" value="Escalated" style="rounded=1;whiteSpace=wrap;fillColor=#FF6D00;fontColor=#FFFFFF;strokeColor=#cc5700;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1390" y="545" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="f2-8" value="Evidence Package&lt;br&gt;Video + Snapshot +&lt;br&gt;Metadata JSON" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#2d2d2d;fontColor=#FFFFFF;strokeColor=#555555;fontStyle=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1550" y="505" width="170" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f2-9" value="Dropbox" style="shape=cylinder3;whiteSpace=wrap;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#333333;fontColor=#FFFFFF;strokeColor=#555555;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1775" y="505" width="80" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Flow 2 arrows -->
+        <mxCell id="f2-e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f2-1" target="f2-2" parent="1" />
+        <mxCell id="f2-e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f2-2" target="f2-3" parent="1" />
+        <mxCell id="f2-e3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f2-3" target="f2-4" parent="1" />
+        <mxCell id="f2-e4" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f2-4" target="f2-5" parent="1" />
+        <mxCell id="f2-e5" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f2-5" target="f2-6" parent="1" />
+        <mxCell id="f2-e6a" value="ACK" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.25;entryX=0;entryY=0.5;fontSize=9;fontColor=#FCA719;" edge="1" source="f2-6" target="f2-7a" parent="1" />
+        <mxCell id="f2-e6b" value="ESC" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6D00;strokeWidth=2;exitX=1;exitY=0.75;entryX=0;entryY=0.5;fontSize=9;fontColor=#FF6D00;" edge="1" source="f2-6" target="f2-7b" parent="1" />
+        <mxCell id="f2-e7" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f2-7a" target="f2-8" parent="1" />
+        <mxCell id="f2-e7b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.75;" edge="1" source="f2-7b" target="f2-8" parent="1" />
+        <mxCell id="f2-e8" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f2-8" target="f2-9" parent="1" />
+
+        <!-- ===== FLOW 3: ROI CONFIGURATION ===== -->
+        <mxCell id="f3-label" value="Flow 3: ROI Configuration" style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontStyle=5;fontColor=#FCA719;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="80" y="610" width="300" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f3-1" value="Navigate to&lt;br&gt;Camera Management" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="650" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f3-2" value="Select Camera &amp;rarr;&lt;br&gt;ROI Editor" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="300" y="650" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f3-3" value="Draw Polygon&lt;br&gt;on Camera Frame" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="500" y="650" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f3-4" value="Auto-derive Bounding Rect&lt;br&gt;for GPU-efficient Cropping" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="710" y="650" width="190" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f3-5" value="ROI Saved &amp;rarr;&lt;br&gt;Kafka Config Update" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#FF6D00;fontColor=#FFFFFF;strokeColor=#cc5700;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="960" y="650" width="170" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f3-6" value="Pipeline Updates&lt;br&gt;nvdsanalytics Config&lt;br&gt;Dynamically" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="645" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Flow 3 arrows -->
+        <mxCell id="f3-e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f3-1" target="f3-2" parent="1" />
+        <mxCell id="f3-e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f3-2" target="f3-3" parent="1" />
+        <mxCell id="f3-e3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f3-3" target="f3-4" parent="1" />
+        <mxCell id="f3-e4" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6D00;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f3-4" target="f3-5" parent="1" />
+        <mxCell id="f3-e5" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f3-5" target="f3-6" parent="1" />
+
+        <!-- ===== FLOW 4: ANALYTICS REVIEW ===== -->
+        <mxCell id="f4-label" value="Flow 4: Analytics Review" style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontStyle=5;fontColor=#FCA719;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="80" y="740" width="300" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f4-1" value="Navigate to&lt;br&gt;Analytics View" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="780" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f4-2" value="View Hourly Charts,&lt;br&gt;Zone Heatmaps,&lt;br&gt;Camera Breakdowns" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="280" y="775" width="170" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f4-3" value="Filter by Date Range,&lt;br&gt;Severity, Zone" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="510" y="780" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f4-4" value="Export Data" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="730" y="780" width="120" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Flow 4 arrows -->
+        <mxCell id="f4-e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f4-1" target="f4-2" parent="1" />
+        <mxCell id="f4-e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f4-2" target="f4-3" parent="1" />
+        <mxCell id="f4-e3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f4-3" target="f4-4" parent="1" />
+
+        <!-- ============================================================ -->
+        <!-- SWIMLANE 2: SYSTEM ADMINISTRATOR -->
+        <!-- ============================================================ -->
+        <mxCell id="swim-admin-bg" value="" style="rounded=1;whiteSpace=wrap;fillColor=#0a0a1a;strokeColor=#458DFF;strokeWidth=2;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1870" width="3900" height="520" as="geometry" />
+        </mxCell>
+        <mxCell id="swim-admin-label" value="System Administrator" style="text;html=1;align=left;verticalAlign=middle;fontSize=16;fontStyle=1;fontColor=#458DFF;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1880" width="300" height="35" as="geometry" />
+        </mxCell>
+
+        <!-- ===== FLOW 5: SYSTEM HEALTH MONITORING ===== -->
+        <mxCell id="f5-label" value="Flow 5: System Health Monitoring" style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontStyle=5;fontColor=#458DFF;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1920" width="350" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f5-1" value="Navigate to&lt;br&gt;Monitoring View" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1960" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f5-2" value="GPU Utilization,&lt;br&gt;Memory, Temperature&lt;br&gt;(nvidia-smi)" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="290" y="1955" width="160" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f5-3" value="Kafka Consumer&lt;br&gt;Lag" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="510" y="1960" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f5-4" value="Container&lt;br&gt;Health Status" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="700" y="1960" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f5-5" value="Storage&lt;br&gt;Usage" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="890" y="1960" width="110" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f5-6" value="Stream Watcher Status&lt;br&gt;Active / Down /&lt;br&gt;Reconnecting" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="1955" width="170" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Flow 5 arrows -->
+        <mxCell id="f5-e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f5-1" target="f5-2" parent="1" />
+        <mxCell id="f5-e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f5-2" target="f5-3" parent="1" />
+        <mxCell id="f5-e3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f5-3" target="f5-4" parent="1" />
+        <mxCell id="f5-e4" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f5-4" target="f5-5" parent="1" />
+        <mxCell id="f5-e5" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f5-5" target="f5-6" parent="1" />
+
+        <!-- ===== FLOW 6: CAMERA MANAGEMENT ===== -->
+        <mxCell id="f6-label" value="Flow 6: Camera Management" style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontStyle=5;fontColor=#458DFF;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="80" y="2050" width="300" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f6-1" value="Add New Camera&lt;br&gt;Name, Zone, GPS,&lt;br&gt;RTSP URL" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="2090" width="150" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f6-2" value="StreamWatcher&lt;br&gt;Probes RTSP" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="290" y="2095" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f6-3" value="RTSP&lt;br&gt;Reachable?" style="rhombus;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="490" y="2080" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="f6-4a" value="Add to DeepStream&lt;br&gt;Pipeline Dynamically" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="680" y="2070" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f6-4b" value="Queue with&lt;br&gt;Exponential Backoff" style="rounded=1;whiteSpace=wrap;fillColor=#FF6D00;fontColor=#FFFFFF;strokeColor=#cc5700;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="680" y="2140" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f6-5" value="Monitor Status&lt;br&gt;Online / Offline /&lt;br&gt;Warning / Alert" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="910" y="2070" width="150" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f6-6" value="Pin / Unpin&lt;br&gt;Priority Cameras" style="rounded=1;whiteSpace=wrap;fillColor=#FCA719;fontColor=#101010;strokeColor=#d48c00;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="2075" width="140" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Flow 6 arrows -->
+        <mxCell id="f6-e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f6-1" target="f6-2" parent="1" />
+        <mxCell id="f6-e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f6-2" target="f6-3" parent="1" />
+        <mxCell id="f6-e3a" value="Yes" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#00C853;strokeWidth=2;exitX=1;exitY=0.25;entryX=0;entryY=0.5;fontSize=10;fontColor=#00C853;" edge="1" source="f6-3" target="f6-4a" parent="1" />
+        <mxCell id="f6-e3b" value="No" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6D00;strokeWidth=2;exitX=1;exitY=0.75;entryX=0;entryY=0.5;fontSize=10;fontColor=#FF6D00;" edge="1" source="f6-3" target="f6-4b" parent="1" />
+        <mxCell id="f6-e4" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f6-4a" target="f6-5" parent="1" />
+        <mxCell id="f6-e5" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FCA719;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f6-5" target="f6-6" parent="1" />
+        <!-- Retry loop arrow from backoff back to probe -->
+        <mxCell id="f6-retry" value="Retry" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6D00;strokeWidth=1;dashed=1;exitX=0;exitY=0.5;entryX=0.5;entryY=1;fontSize=9;fontColor=#FF6D00;curved=1;" edge="1" source="f6-4b" target="f6-2" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="360" y="2165" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- SWIMLANE 3: SYSTEM AUTOMATED FLOW -->
+        <!-- ============================================================ -->
+        <mxCell id="swim-system-bg" value="" style="rounded=1;whiteSpace=wrap;fillColor=#0a0a0a;strokeColor=#00C853;strokeWidth=2;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="40" y="2420" width="3900" height="870" as="geometry" />
+        </mxCell>
+        <mxCell id="swim-system-label" value="System Automated Flow (Background Pipeline)" style="text;html=1;align=left;verticalAlign=middle;fontSize=16;fontStyle=1;fontColor=#00C853;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="60" y="2430" width="500" height="35" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f7-label" value="Flow 7: Detection &amp;rarr; Alert Pipeline" style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontStyle=5;fontColor=#00C853;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="80" y="2470" width="350" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Row 1: Detection -->
+        <mxCell id="f7-1" value="Camera Frame&lt;br&gt;Input" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#2d2d2d;fontColor=#FFFFFF;strokeColor=#555555;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="2520" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-2" value="DeepStream nvinfer&lt;br&gt;RF-DETR Detection" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="280" y="2520" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-3" value="nvtracker&lt;br&gt;ByteTrack&lt;br&gt;(Track IDs)" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="500" y="2515" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-4" value="nvdsanalytics&lt;br&gt;ROI Containment&lt;br&gt;Check" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="700" y="2515" width="150" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Row 1 arrows -->
+        <mxCell id="f7-e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-1" target="f7-2" parent="1" />
+        <mxCell id="f7-e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-2" target="f7-3" parent="1" />
+        <mxCell id="f7-e3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-3" target="f7-4" parent="1" />
+
+        <!-- Row 2: FSM -->
+        <mxCell id="f7-fsm-label" value="EventFSM State Machine" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontStyle=5;fontColor=#FCA719;fontFamily=Inter;" vertex="1" parent="1">
+          <mxGeometry x="80" y="2600" width="250" height="25" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f7-idle" value="IDLE" style="ellipse;whiteSpace=wrap;fillColor=#333333;fontColor=#FFFFFF;strokeColor=#555555;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="2640" width="80" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-enter" value="ENTER&lt;br&gt;(In ROI)" style="ellipse;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="230" y="2635" width="100" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-observe" value="OBSERVE&lt;br&gt;(Dwell &amp;gt; 5s)" style="ellipse;whiteSpace=wrap;fillColor=#FF6D00;fontColor=#FFFFFF;strokeColor=#cc5700;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="400" y="2635" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-violation" value="VIOLATION&lt;br&gt;(Dwell &amp;gt; 15s)" style="ellipse;whiteSpace=wrap;fillColor=#FF1744;fontColor=#FFFFFF;strokeColor=#cc0033;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="590" y="2635" width="130" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- FSM arrows -->
+        <mxCell id="f7-fsm-e1" value="" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-idle" target="f7-enter" parent="1" />
+        <mxCell id="f7-fsm-e2" value="" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6D00;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-enter" target="f7-observe" parent="1" />
+        <mxCell id="f7-fsm-e3" value="" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF1744;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-observe" target="f7-violation" parent="1" />
+        <!-- Link from ROI check down to FSM -->
+        <mxCell id="f7-roi-to-fsm" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" source="f7-4" target="f7-enter" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="775" y="2600" />
+              <mxPoint x="280" y="2600" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Row 3: On VIOLATION - Kafka fan-out -->
+        <mxCell id="f7-kafka-pub" value="On VIOLATION:&lt;br&gt;Publish to Kafka" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#FF6D00;fontColor=#FFFFFF;strokeColor=#cc5700;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="790" y="2640" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-kafka-e" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF1744;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-violation" target="f7-kafka-pub" parent="1" />
+
+        <!-- Worker branches -->
+        <mxCell id="f7-vlm" value="VLMWorker&lt;br&gt;Qwen2.5-VL-7B&lt;br&gt;is_dumping, waste_type,&lt;br&gt;severity" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="2520" width="170" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-lpr" value="LPRWorker&lt;br&gt;PaddleOCR&lt;br&gt;Indian Plate Validation&lt;br&gt;(KL-01-AB-1234)" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="2620" width="170" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-alert-dispatch" value="AlertDispatcher&lt;br&gt;Throttle Check &amp;rarr;&lt;br&gt;Telegram + WebSocket" style="rounded=1;whiteSpace=wrap;fillColor=#00C853;fontColor=#101010;strokeColor=#00a844;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="2720" width="170" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-tts" value="TTSWorker&lt;br&gt;Piper TTS&lt;br&gt;(Cached by Hash)" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="2810" width="170" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-evidence" value="EvidenceWorker&lt;br&gt;Smart Recording&lt;br&gt;(FFmpeg RTSP Capture)" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="2900" width="170" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Kafka fan-out arrows -->
+        <mxCell id="f7-ko1" value="VLM Request" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6D00;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=8;fontColor=#FF6D00;" edge="1" source="f7-kafka-pub" target="f7-vlm" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="990" y="665" />
+              <mxPoint x="990" y="2555" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f7-ko2" value="LPR Request" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6D00;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=8;fontColor=#FF6D00;" edge="1" source="f7-kafka-pub" target="f7-lpr" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="990" y="665" />
+              <mxPoint x="990" y="2655" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f7-ko3" value="Alert" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6D00;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=8;fontColor=#FF6D00;" edge="1" source="f7-kafka-pub" target="f7-alert-dispatch" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="990" y="665" />
+              <mxPoint x="990" y="2750" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f7-ko4" value="TTS" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6D00;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=8;fontColor=#FF6D00;" edge="1" source="f7-kafka-pub" target="f7-tts" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="990" y="665" />
+              <mxPoint x="990" y="2840" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f7-ko5" value="Record" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF6D00;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=8;fontColor=#FF6D00;" edge="1" source="f7-kafka-pub" target="f7-evidence" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="990" y="665" />
+              <mxPoint x="990" y="2930" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Post-worker flow: EXIT event -->
+        <mxCell id="f7-exit" value="On EXIT:&lt;br&gt;Stop Recording" style="ellipse;whiteSpace=wrap;fillColor=#333333;fontColor=#FFFFFF;strokeColor=#555555;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="2905" width="120" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-save" value="Save Clip" style="rounded=1;whiteSpace=wrap;fillColor=#458DFF;fontColor=#FFFFFF;strokeColor=#2a6fd4;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="2910" width="100" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-dropbox" value="Dropbox&lt;br&gt;Sync" style="shape=cylinder3;whiteSpace=wrap;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#333333;fontColor=#FFFFFF;strokeColor=#555555;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="2900" width="80" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f7-exit-e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-evidence" target="f7-exit" parent="1" />
+        <mxCell id="f7-exit-e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-exit" target="f7-save" parent="1" />
+        <mxCell id="f7-exit-e3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-save" target="f7-dropbox" parent="1" />
+
+        <!-- Outputs from VLM/LPR converge to alert -->
+        <mxCell id="f7-vlm-out" value="Classification&lt;br&gt;Result" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#2d2d2d;fontColor=#FFFFFF;strokeColor=#555555;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="2530" width="130" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-lpr-out" value="Plate Number&lt;br&gt;Result" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#2d2d2d;fontColor=#FFFFFF;strokeColor=#555555;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="2635" width="130" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-vlm-oe" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-vlm" target="f7-vlm-out" parent="1" />
+        <mxCell id="f7-lpr-oe" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-lpr" target="f7-lpr-out" parent="1" />
+
+        <!-- Alert outputs -->
+        <mxCell id="f7-telegram" value="Telegram&lt;br&gt;Notification" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#00C853;fontColor=#101010;strokeColor=#00a844;fontStyle=1;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="2720" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-ws-notif" value="WebSocket&lt;br&gt;Push" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#00C853;fontColor=#101010;strokeColor=#00a844;fontStyle=1;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="2775" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-alert-e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#00C853;strokeWidth=1;exitX=1;exitY=0.3;entryX=0;entryY=0.5;" edge="1" source="f7-alert-dispatch" target="f7-telegram" parent="1" />
+        <mxCell id="f7-alert-e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#00C853;strokeWidth=1;exitX=1;exitY=0.7;entryX=0;entryY=0.5;" edge="1" source="f7-alert-dispatch" target="f7-ws-notif" parent="1" />
+
+        <!-- TTS output -->
+        <mxCell id="f7-tts-out" value="Audio Warning&lt;br&gt;(Cached)" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;fillColor=#2d2d2d;fontColor=#FFFFFF;strokeColor=#555555;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="2820" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="f7-tts-oe" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#458DFF;strokeWidth=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" source="f7-tts" target="f7-tts-out" parent="1" />
+
+        <!-- ============================================================ -->
+        <!-- CROSS-LANE CONNECTORS (System to Operator) -->
+        <!-- ============================================================ -->
+        <mxCell id="cross-ws-1" value="WebSocket alerts feed to Operator dashboard" style="text;html=1;align=center;verticalAlign=middle;fontSize=10;fontStyle=2;fontColor=#00C853;" vertex="1" parent="1">
+          <mxGeometry x="1300" y="2470" width="280" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-arrow-1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#00C853;strokeWidth=2;dashed=1;exitX=0.5;exitY=0;entryX=0.85;entryY=1;" edge="1" source="f7-ws-notif" target="swim-operator" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1325" y="2460" />
+              <mxPoint x="3355" y="2460" />
+              <mxPoint x="3355" y="1840" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

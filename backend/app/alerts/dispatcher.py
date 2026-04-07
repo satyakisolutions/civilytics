@@ -7,6 +7,8 @@ from app.config.settings import settings
 from app.alerts.throttle import AlertThrottle
 from app.alerts.telegram import TelegramAlert
 from app.alerts.websocket import push_alert_ws
+from app.alerts.ip_speaker import IPSpeakerManager
+from app.alerts.pipeline_notifier import PipelineNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -15,12 +17,19 @@ _ALWAYS_ALERT_SEVERITIES = {"critical", "high", "medium"}
 
 
 class AlertDispatcher:
-    def __init__(self, bootstrap_servers: str | None = None):
+    def __init__(
+        self,
+        bootstrap_servers: str | None = None,
+        ip_speaker_manager: IPSpeakerManager | None = None,
+        pipeline_notifier: PipelineNotifier | None = None,
+    ):
         self._bootstrap_servers = bootstrap_servers or settings.kafka_bootstrap_servers
         self._consumer: AIOKafkaConsumer | None = None
         self._task: asyncio.Task | None = None
         self._throttle = AlertThrottle()
         self._telegram = TelegramAlert()
+        self._ip_speaker = ip_speaker_manager or IPSpeakerManager()
+        self._pipeline = pipeline_notifier or PipelineNotifier(settings.redis_url)
 
     async def start(self):
         self._consumer = AIOKafkaConsumer(
@@ -45,6 +54,7 @@ class AlertDispatcher:
             await self._consumer.stop()
         await self._throttle.close()
         await self._telegram.close()
+        await self._ip_speaker.close()
         logger.info("AlertDispatcher stopped")
 
     async def _consume_loop(self):
@@ -94,7 +104,25 @@ class AlertDispatcher:
             is_dumping,
         )
 
-        # Fan-out: Telegram + WebSocket (run concurrently, failures are isolated)
+        # --- Stage 3 enrichment: push VLM result to WebSocket metadata stream ---
+        # The pipeline (stage 1+2) fires recording, VLM request, SIP, etc.
+        # The backend (stage 3) receives VLM results HERE and pushes enrichment
+        # to the frontend so the bbox overlay shows VLM confirmation + waste type.
+        vlm_enrichment = {
+            "type": "vlm_enrichment",
+            "camera_id": camera_id,
+            "track_id": track_id,
+            "is_dumping": is_dumping,
+            "severity": severity,
+            "waste_type": payload.get("waste_type", "unknown"),
+            "vlm_confidence": payload.get("confidence", 0.0),
+            "vlm_summary": vlm_summary,
+            "plate_number": plate_number,
+            "reasoning": payload.get("reasoning", ""),
+        }
+
+        # Fan-out: Telegram + WebSocket alert + WebSocket enrichment + IP Speaker
+        # SIP calls are NOT in the immediate fan-out — handled by EscalationWorker
         await asyncio.gather(
             self._telegram.send_alert(
                 camera_id=camera_id,
@@ -115,5 +143,35 @@ class AlertDispatcher:
                 plate_number=plate_number,
                 snapshot_url=snapshot_url,
             ),
+            # Push VLM enrichment to the metadata WebSocket so the frontend
+            # bbox overlay can show VLM result per detection (stage 3)
+            push_alert_ws(
+                camera_id=camera_id,
+                severity=severity,
+                message="vlm_enrichment",
+                track_id=track_id,
+                **vlm_enrichment,
+            ),
+            self._ip_speaker.play_alert(
+                camera_id=camera_id,
+                text=message,
+                severity=severity,
+            ),
             return_exceptions=True,
         )
+
+        # --- Notify pipeline to stop recording if VLM says NOT dumping ---
+        # This is the feedback loop: backend → Redis pub/sub → pipeline
+        # Pipeline receives the command and: stops recording, resets FSM,
+        # saves evidence metadata, fades bbox to black
+        if not is_dumping and track_id is not None:
+            self._pipeline.clear_by_vlm(
+                camera_id=camera_id,
+                track_id=track_id,
+                vlm_confidence=payload.get("confidence", 0.0),
+                waste_type=payload.get("waste_type", "unknown"),
+            )
+            logger.info(
+                "VLM cleared: %s track=%s — pipeline notified to stop recording",
+                camera_id, track_id,
+            )

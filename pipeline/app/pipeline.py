@@ -1,3 +1,4 @@
+# Copyright (c) 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.
 """WasteWatch DeepStream pipeline.
 
 Reads RTSP streams from MediaMTX, runs RF-DETR object detection via nvinfer,
@@ -18,6 +19,7 @@ import logging
 import os
 import sys
 import time
+from typing import Optional
 
 import gi
 
@@ -28,9 +30,11 @@ from gi.repository import GLib, Gst  # noqa: E402
 import pyds  # noqa: E402 — provided by the DeepStream Docker image
 
 from app.config import pipeline_settings
+from app.connection_monitor import ConnectionMonitor
 from app.event_fsm import EventFSMManager
 from app.health import CameraHealth
 from app.kafka_producer import PipelineKafkaProducer
+from app.output_manager import OutputStreamManager
 from app.preprocessor import ROIPreprocessor
 from app.roi import ROIManager
 from app.source_manager import SourceManager
@@ -43,14 +47,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Subset of COCO classes that WasteWatch cares about.
+# Relevant COCO classes for waste dumping surveillance.
 COCO_CLASS_MAP: dict[int, str] = {
+    # Persons
     0: "person",
+    # Vehicles
     1: "bicycle",
     2: "car",
     3: "motorcycle",
     5: "bus",
     7: "truck",
+    # Carried items (potential waste containers)
+    24: "backpack",
+    26: "handbag",
+    28: "suitcase",
+    # Waste objects (evidence of dumping)
+    39: "bottle",
+    56: "chair",
+    57: "couch",
+    58: "potted_plant",
+    59: "bed",
+    60: "dining_table",
+    61: "toilet",
+    62: "tv",
+    68: "microwave",
+    69: "oven",
+    71: "sink",
+    72: "refrigerator",
+}
+
+# Category mapping for detection enrichment.
+CLASS_CATEGORIES: dict[str, str] = {
+    "person": "person",
+    "bicycle": "vehicle", "car": "vehicle", "motorcycle": "vehicle",
+    "bus": "vehicle", "truck": "vehicle",
+    "backpack": "carried_item", "handbag": "carried_item", "suitcase": "carried_item",
+    "bottle": "waste_object", "chair": "waste_object", "couch": "waste_object",
+    "potted_plant": "waste_object", "bed": "waste_object", "dining_table": "waste_object",
+    "toilet": "waste_object", "tv": "waste_object", "microwave": "waste_object",
+    "oven": "waste_object", "sink": "waste_object", "refrigerator": "waste_object",
+}
+
+# Vehicle classes that trigger LPR.
+VEHICLE_CLASSES = {"bicycle", "car", "motorcycle", "bus", "truck"}
+
+# Waste objects that serve as direct evidence of dumping.
+WASTE_EVIDENCE_CLASSES = {
+    "bottle", "chair", "couch", "potted_plant", "bed",
+    "dining_table", "toilet", "tv", "microwave", "oven",
+    "sink", "refrigerator",
 }
 
 
@@ -69,7 +114,7 @@ def make_element(factory_name: str, name: str) -> Gst.Element:
 
 
 # ---------------------------------------------------------------------------
-# Pad probe — metadata extraction
+# Pad probe — metadata extraction (Python fallback)
 # ---------------------------------------------------------------------------
 
 
@@ -126,6 +171,7 @@ def extract_metadata(
                 detection_dict: dict = {
                     "class_id": class_id,
                     "label": class_name,
+                    "category": CLASS_CATEGORIES.get(class_name, "unknown"),
                     "confidence": round(float(obj_meta.confidence), 4),
                     "bbox": bbox_dict,
                     "track_id": track_id,
@@ -157,7 +203,7 @@ def extract_metadata(
                             )
 
                             # Trigger LPR for vehicles
-                            if class_name in ("car", "motorcycle", "bus", "truck"):
+                            if class_name in VEHICLE_CLASSES:
                                 kafka_producer.send_lpr_request(
                                     camera_id=camera_id,
                                     track_id=track_id,
@@ -201,13 +247,17 @@ def extract_metadata(
 # ---------------------------------------------------------------------------
 
 
-def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Element]:
+def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Element, bool, Optional[Gst.Element], OutputStreamManager]:
     """Construct and return the DeepStream GStreamer pipeline.
 
     Returns:
-        (pipeline, streammux, fakesink, nvdsanalytics)  — the caller needs
-        streammux to hand to SourceManager, fakesink to attach the metadata pad
-        probe, and nvdsanalytics for ROI/dwell queries.
+        (pipeline, streammux, fakesink, nvdsanalytics, use_native_meta,
+         ww_meta_elem, output_manager)
+        The caller needs streammux to hand to SourceManager, fakesink to attach
+        the metadata pad probe, nvdsanalytics for ROI/dwell queries,
+        use_native_meta to select the probe path, ww_meta_elem (may be None)
+        for the native C metadata processor, and output_manager for per-camera
+        RTSP output stream management.
     """
     cfg = pipeline_settings
 
@@ -241,6 +291,35 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     nvdsanalytics.set_property("config-file", cfg.analytics_config_path)
     pipeline.add(nvdsanalytics)
 
+    # --- Custom wastewatchmeta plugin (optional) ----------------------------
+    use_native_meta = False
+    ww_meta_elem = None
+    try:
+        from app.plugin_loader import ensure_plugin_loaded, create_wastewatch_element, configure_element
+
+        use_native_meta = ensure_plugin_loaded()
+        if use_native_meta:
+            ww_meta_elem = create_wastewatch_element("ww_meta_processor")
+            if ww_meta_elem:
+                configure_element(
+                    ww_meta_elem,
+                    enter_threshold_s=cfg.dwell_enter_threshold_s,
+                    observe_threshold_s=cfg.dwell_observe_threshold_s,
+                    exit_timeout_s=300.0,
+                    roi_config_path=cfg.analytics_config_path,
+                    input_width=cfg.input_width,
+                    input_height=cfg.input_height,
+                )
+                pipeline.add(ww_meta_elem)
+                logger.info("Using native C wastewatchmeta plugin for metadata processing")
+            else:
+                use_native_meta = False
+                logger.warning("wastewatchmeta element creation failed — falling back to Python metadata processing")
+        else:
+            logger.warning("wastewatchmeta plugin not found — falling back to Python metadata processing")
+    except ImportError:
+        logger.warning("plugin_loader module not available — falling back to Python metadata processing")
+
     # --- On-screen display --------------------------------------------------
     nvosd = make_element("nvdsosd", "on_screen_display")
     pipeline.add(nvosd)
@@ -249,24 +328,17 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     tee = make_element("tee", "stream_tee")
     pipeline.add(tee)
 
-    # --- Branch 1: RTSP re-stream to MediaMTX via UDP -----------------------
-    queue_rtsp = make_element("queue", "queue_rtsp")
-    nvvidconv = make_element("nvvideoconvert", "nvvidconv_rtsp")
-    capsfilter = make_element("capsfilter", "caps_rtsp")
-    caps = Gst.Caps.from_string("video/x-raw(memory:NVMM), format=I420")
-    capsfilter.set_property("caps", caps)
-    encoder = make_element("nvv4l2h264enc", "h264_encoder")
-    encoder.set_property("bitrate", 4_000_000)
-    rtppay = make_element("rtph264pay", "rtp_pay")
-    rtppay.set_property("config-interval", 1)
-    rtppay.set_property("pt", 96)
-    udpsink = make_element("udpsink", "udp_out")
-    udpsink.set_property("host", "mediamtx")
-    udpsink.set_property("port", 8554)
-    udpsink.set_property("sync", False)
-
-    for elem in (queue_rtsp, nvvidconv, capsfilter, encoder, rtppay, udpsink):
-        pipeline.add(elem)
+    # --- Branch 1: Per-camera RTSP output via nvstreamdemux -----------------
+    # Instead of a single muxed output, we demux back to per-camera streams.
+    # Each camera gets its own H.264 encoding chain → UDP → MediaMTX.
+    output_manager = OutputStreamManager(
+        pipeline=pipeline,
+        mediamtx_host="mediamtx",
+        mediamtx_rtp_base_port=20000,
+    )
+    demux = output_manager.setup_demux()
+    queue_demux = make_element("queue", "queue_demux")
+    pipeline.add(queue_demux)
 
     # --- Branch 2: metadata extraction (fakesink) ---------------------------
     queue_meta = make_element("queue", "queue_meta")
@@ -277,53 +349,61 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     for elem in (queue_meta, fakesink):
         pipeline.add(elem)
 
-    # --- Link main chain: streammux → nvinfer → nvtracker → nvdsanalytics → nvosd → tee
+    # --- Link main chain ----------------------------------------------------
+    # streammux -> nvinfer -> nvtracker -> nvdsanalytics -> [wastewatchmeta] -> nvosd -> tee
     if not streammux.link(nvinfer):
-        logger.critical("Failed to link streammux → nvinfer")
+        logger.critical("Failed to link streammux -> nvinfer")
         sys.exit(1)
     if not nvinfer.link(nvtracker):
-        logger.critical("Failed to link nvinfer → nvtracker")
+        logger.critical("Failed to link nvinfer -> nvtracker")
         sys.exit(1)
     if not nvtracker.link(nvdsanalytics):
-        logger.critical("Failed to link nvtracker → nvdsanalytics")
-        sys.exit(1)
-    if not nvdsanalytics.link(nvosd):
-        logger.critical("Failed to link nvdsanalytics → nvosd")
-        sys.exit(1)
-    if not nvosd.link(tee):
-        logger.critical("Failed to link nvosd → tee")
+        logger.critical("Failed to link nvtracker -> nvdsanalytics")
         sys.exit(1)
 
-    # --- Link branch 1: tee → queue_rtsp → nvvidconv → capsfilter → encoder → rtppay → udpsink
-    tee_src_rtsp = tee.get_request_pad("src_%u")
-    queue_rtsp_sink = queue_rtsp.get_static_pad("sink")
-    if tee_src_rtsp.link(queue_rtsp_sink) != Gst.PadLinkReturn.OK:
-        logger.critical("Failed to link tee → queue_rtsp")
-        sys.exit(1)
-
-    for src_elem, dst_elem in (
-        (queue_rtsp, nvvidconv),
-        (nvvidconv, capsfilter),
-        (capsfilter, encoder),
-        (encoder, rtppay),
-        (rtppay, udpsink),
-    ):
-        if not src_elem.link(dst_elem):
-            logger.critical("Failed to link %s → %s", src_elem.get_name(), dst_elem.get_name())
+    if ww_meta_elem is not None:
+        # Native path: nvdsanalytics -> wastewatchmeta -> nvosd
+        if not nvdsanalytics.link(ww_meta_elem):
+            logger.critical("Failed to link nvdsanalytics -> wastewatchmeta")
+            sys.exit(1)
+        if not ww_meta_elem.link(nvosd):
+            logger.critical("Failed to link wastewatchmeta -> nvosd")
+            sys.exit(1)
+    else:
+        # Fallback path: nvdsanalytics -> nvosd (original behavior)
+        if not nvdsanalytics.link(nvosd):
+            logger.critical("Failed to link nvdsanalytics -> nvosd")
             sys.exit(1)
 
-    # --- Link branch 2: tee → queue_meta → fakesink -------------------------
+    if not nvosd.link(tee):
+        logger.critical("Failed to link nvosd -> tee")
+        sys.exit(1)
+
+    # --- Link branch 1: tee -> queue_demux -> nvstreamdemux
+    # Per-camera output branches are added dynamically by OutputStreamManager
+    # when cameras are registered via ConnectionMonitor.
+    tee_src_demux = tee.get_request_pad("src_%u")
+    queue_demux_sink = queue_demux.get_static_pad("sink")
+    if tee_src_demux.link(queue_demux_sink) != Gst.PadLinkReturn.OK:
+        logger.critical("Failed to link tee -> queue_demux")
+        sys.exit(1)
+
+    if not queue_demux.link(demux):
+        logger.critical("Failed to link queue_demux -> nvstreamdemux")
+        sys.exit(1)
+
+    # --- Link branch 2: tee -> queue_meta -> fakesink -------------------------
     tee_src_meta = tee.get_request_pad("src_%u")
     queue_meta_sink = queue_meta.get_static_pad("sink")
     if tee_src_meta.link(queue_meta_sink) != Gst.PadLinkReturn.OK:
-        logger.critical("Failed to link tee → queue_meta")
+        logger.critical("Failed to link tee -> queue_meta")
         sys.exit(1)
 
     if not queue_meta.link(fakesink):
-        logger.critical("Failed to link queue_meta → fakesink")
+        logger.critical("Failed to link queue_meta -> fakesink")
         sys.exit(1)
 
-    return pipeline, streammux, fakesink, nvdsanalytics
+    return pipeline, streammux, fakesink, nvdsanalytics, use_native_meta, ww_meta_elem, output_manager
 
 
 # ---------------------------------------------------------------------------
@@ -334,22 +414,11 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
 def main() -> None:
     Gst.init(None)
 
-    pipeline, streammux, fakesink, nvdsanalytics = build_pipeline()  # noqa: F841
+    pipeline, streammux, fakesink, nvdsanalytics, use_native_meta, ww_meta_elem, output_manager = build_pipeline()  # noqa: F841
 
     kafka_producer = PipelineKafkaProducer()
     health = CameraHealth(timeout_s=30.0, max_retries=5)
     source_manager = SourceManager(pipeline, streammux)
-    track_manager = TrackStateManager(lost_timeout_s=pipeline_settings.dwell_observe_threshold_s * 2)
-    roi_manager = ROIManager()
-    fsm_manager = EventFSMManager(
-        enter_threshold_s=pipeline_settings.dwell_enter_threshold_s,
-        observe_threshold_s=pipeline_settings.dwell_observe_threshold_s,
-    )
-    roi_preprocessor = ROIPreprocessor(
-        roi_manager,
-        frame_width=pipeline_settings.input_width,
-        frame_height=pipeline_settings.input_height,
-    )
 
     # Attach metadata probe to fakesink's sink pad
     fakesink_sink_pad = fakesink.get_static_pad("sink")
@@ -357,21 +426,66 @@ def main() -> None:
         logger.critical("Could not get fakesink sink pad")
         sys.exit(1)
 
-    probe_ctx = {
-        "kafka_producer": kafka_producer,
-        "health": health,
-        "track_manager": track_manager,
-        "roi_manager": roi_manager,
-        "fsm_manager": fsm_manager,
-        "roi_preprocessor": roi_preprocessor,
-    }
-    fakesink_sink_pad.add_probe(
-        Gst.PadProbeType.BUFFER,
-        extract_metadata,
-        probe_ctx,
+    if use_native_meta and ww_meta_elem is not None:
+        # --- Native C plugin path: simplified probe, no Python managers -----
+        from app.meta_probe import extract_metadata_v2, create_probe_context
+
+        probe_ctx = create_probe_context(kafka_producer, health)
+        fakesink_sink_pad.add_probe(
+            Gst.PadProbeType.BUFFER,
+            extract_metadata_v2,
+            probe_ctx,
+        )
+
+        # These managers are not needed — the C plugin handles ROI, FSM,
+        # dwell time, and tracking internally.
+        track_manager = None
+        roi_manager = None
+        fsm_manager = None
+        roi_preprocessor = None
+
+        logger.info("Metadata probe: using optimized extract_metadata_v2 (C plugin handles ROI/FSM/tracking)")
+    else:
+        # --- Python fallback path: full Python managers ----------------------
+        track_manager = TrackStateManager(lost_timeout_s=pipeline_settings.dwell_observe_threshold_s * 2)
+        roi_manager = ROIManager()
+        fsm_manager = EventFSMManager(
+            enter_threshold_s=pipeline_settings.dwell_enter_threshold_s,
+            observe_threshold_s=pipeline_settings.dwell_observe_threshold_s,
+        )
+        roi_preprocessor = ROIPreprocessor(
+            roi_manager,
+            frame_width=pipeline_settings.input_width,
+            frame_height=pipeline_settings.input_height,
+        )
+
+        probe_ctx = {
+            "kafka_producer": kafka_producer,
+            "health": health,
+            "track_manager": track_manager,
+            "roi_manager": roi_manager,
+            "fsm_manager": fsm_manager,
+            "roi_preprocessor": roi_preprocessor,
+        }
+        fakesink_sink_pad.add_probe(
+            Gst.PadProbeType.BUFFER,
+            extract_metadata,
+            probe_ctx,
+        )
+
+        logger.warning("Custom plugin not available — using Python fallback")
+
+    # Connection monitor — manages both input sources and per-camera output
+    # streams, with RTSP probing, health checks, and auto-reconnection.
+    connection_monitor = ConnectionMonitor(
+        source_manager=source_manager,
+        output_manager=output_manager,
+        health=health,
+        kafka_producer=kafka_producer,
+        poll_interval_s=10.0,
     )
 
-    # Stream watcher — dynamic source addition with polling and auto-reconnect
+    # Legacy stream watcher kept for backward compatibility (used in health_check_cb)
     stream_watcher = StreamWatcher(
         source_manager=source_manager,
         health=health,
@@ -392,20 +506,21 @@ def main() -> None:
             cam_id = cam_id.strip()
             uri = uri.strip()
             if cam_id and uri:
-                stream_watcher.register_source(cam_id, uri)
+                connection_monitor.register_camera(cam_id, uri)
     else:
         logger.warning(
             "No WW_SOURCES configured — pipeline will run with no input sources."
         )
 
-    # Initial ROI preprocessor update after sources are registered
-    active_cams = list(source_manager.active_sources.keys())
-    if active_cams:
-        crops = roi_preprocessor.update_crops(active_cams)
-        if crops:
-            savings = roi_preprocessor.get_gpu_savings_estimate()
-            for cam_id, pct in savings.items():
-                logger.info("Camera %s: ROI crop saves ~%.0f%% GPU inference", cam_id, pct)
+    # Initial ROI preprocessor update after sources are registered (fallback path only)
+    if roi_preprocessor is not None:
+        active_cams = list(source_manager.active_sources.keys())
+        if active_cams:
+            crops = roi_preprocessor.update_crops(active_cams)
+            if crops:
+                savings = roi_preprocessor.get_gpu_savings_estimate()
+                for cam_id, pct in savings.items():
+                    logger.info("Camera %s: ROI crop saves ~%.0f%% GPU inference", cam_id, pct)
 
     # GLib main loop
     loop = GLib.MainLoop()
@@ -432,17 +547,21 @@ def main() -> None:
 
     # Periodic health check — runs every 10 seconds
     def health_check_cb() -> bool:
-        # Stream watcher handles reconnection with exponential backoff
-        stream_watcher.poll()
+        # Connection monitor handles health checks, reconnection, and
+        # per-camera output stream lifecycle
+        connection_monitor.poll()
 
-        stale_events = fsm_manager.prune_stale()
-        for evt in stale_events:
-            kafka_producer.send_event(evt)
-        track_manager.prune_lost()
+        if fsm_manager is not None and track_manager is not None:
+            # Python fallback path — prune stale FSM entries and lost tracks
+            stale_events = fsm_manager.prune_stale()
+            for evt in stale_events:
+                kafka_producer.send_event(evt)
+            track_manager.prune_lost()
 
-        # Update ROI preprocessor crops if sources changed
-        current_cams = list(source_manager.active_sources.keys())
-        roi_preprocessor.update_crops(current_cams)
+        # Update ROI preprocessor crops if sources changed (fallback path only)
+        if roi_preprocessor is not None:
+            current_cams = list(source_manager.active_sources.keys())
+            roi_preprocessor.update_crops(current_cams)
 
         return True  # Keep the timeout alive
 

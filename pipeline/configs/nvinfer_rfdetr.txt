@@ -1,3 +1,9 @@
+# WasteWatch Primary GIE — RF-DETR Object Detection (COCO 80-class)
+# Only relevant classes for waste dumping surveillance are detected
+# via per-class threshold overrides; all others suppressed at 0.99.
+#
+# Copyright (c) 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.
+
 [property]
 gpu-id=0
 net-scale-factor=0.00392156862745
@@ -9,14 +15,83 @@ batch-size=4
 process-mode=1
 model-color-format=0
 network-mode=2
-num-detected-classes=6
+num-detected-classes=80
 interval=2
 gie-unique-id=1
 output-blob-names=output
 cluster-mode=2
 maintain-aspect-ratio=1
 
+# Default: suppress all irrelevant COCO classes
 [class-attrs-all]
-pre-cluster-threshold=0.4
+pre-cluster-threshold=0.99
 topk=100
 nms-iou-threshold=0.5
+
+# --- Person — primary detection target ---
+[class-attrs-0]
+pre-cluster-threshold=0.3
+topk=50
+
+# --- Vehicles — high priority ---
+[class-attrs-1]
+pre-cluster-threshold=0.35
+
+[class-attrs-2]
+pre-cluster-threshold=0.35
+
+[class-attrs-3]
+pre-cluster-threshold=0.35
+
+[class-attrs-5]
+pre-cluster-threshold=0.35
+
+[class-attrs-7]
+pre-cluster-threshold=0.35
+
+# --- Carried items — medium priority ---
+[class-attrs-24]
+pre-cluster-threshold=0.4
+
+[class-attrs-26]
+pre-cluster-threshold=0.4
+
+[class-attrs-28]
+pre-cluster-threshold=0.4
+
+# --- Waste objects — evidence of dumping ---
+[class-attrs-39]
+pre-cluster-threshold=0.4
+
+[class-attrs-56]
+pre-cluster-threshold=0.45
+
+[class-attrs-57]
+pre-cluster-threshold=0.45
+
+[class-attrs-58]
+pre-cluster-threshold=0.45
+
+[class-attrs-59]
+pre-cluster-threshold=0.45
+
+[class-attrs-60]
+pre-cluster-threshold=0.45
+
+[class-attrs-61]
+pre-cluster-threshold=0.45
+
+[class-attrs-62]
+pre-cluster-threshold=0.45
+
+[class-attrs-68]
+pre-cluster-threshold=0.45
+
+[class-attrs-69]
+pre-cluster-threshold=0.45
+
+[class-attrs-71]
+pre-cluster-threshold=0.45
+
+[class-attrs-72]
+pre-cluster-threshold=0.45

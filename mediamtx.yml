@@ -12,3 +12,24 @@ pathDefaults:
   record: no
 paths:
   all_others:
+
+  # --- Per-camera annotated output streams (from DeepStream pipeline) ---
+  # Each camera's inference output is published via RTP/UDP to a unique port.
+  # The frontend connects to these paths via WebRTC (WHEP) for live viewing.
+  # WebRTC URLs: http://mediamtx:8889/{path}/whep
+  cam-00-out:
+    source: udp://0.0.0.0:20000
+  cam-01-out:
+    source: udp://0.0.0.0:20001
+  cam-02-out:
+    source: udp://0.0.0.0:20002
+  cam-03-out:
+    source: udp://0.0.0.0:20003
+  cam-04-out:
+    source: udp://0.0.0.0:20004
+  cam-05-out:
+    source: udp://0.0.0.0:20005
+  cam-06-out:
+    source: udp://0.0.0.0:20006
+  cam-07-out:
+    source: udp://0.0.0.0:20007

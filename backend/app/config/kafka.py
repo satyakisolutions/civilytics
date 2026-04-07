@@ -11,6 +11,8 @@ TOPIC_TTS = "wastewatch.tts"
 TOPIC_EVIDENCE = "wastewatch.evidence"
 TOPIC_LOGS = "wastewatch.logs"
 TOPIC_CONFIG_UPDATES = "wastewatch.config.updates"
+TOPIC_SIP_CALLS = "wastewatch.sip"
+TOPIC_CAMERA_STATUS = "wastewatch.camera.status"
 
 # ---------------------------------------------------------------------------
 # Kafka consumer group IDs
@@ -20,3 +22,4 @@ GROUP_EVENT_FSM = "wastewatch.group.event-fsm"
 GROUP_VLM_WORKER = "wastewatch.group.vlm-worker"
 GROUP_ALERT_DISPATCHER = "wastewatch.group.alert-dispatcher"
 GROUP_LOG_INGESTION = "wastewatch.group.log-ingestion"
+GROUP_ESCALATION = "wastewatch.group.escalation"

@@ -1,0 +1,8 @@
+dumping_waste
+carrying_object
+loading_unloading
+standing_idle
+walking
+running
+driving
+normal_activity

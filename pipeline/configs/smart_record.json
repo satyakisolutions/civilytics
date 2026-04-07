@@ -1,0 +1,11 @@
+{
+    "output_dir": "/tmp/wastewatch/evidence/recordings",
+    "pre_buffer_s": 15,
+    "post_buffer_s": 30,
+    "max_duration_s": 120,
+    "container": "mp4",
+    "codec": "h264",
+    "bitrate": 4000000,
+    "max_concurrent_recordings": 8,
+    "enable_smart_record": true
+}

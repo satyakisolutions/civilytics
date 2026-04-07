@@ -1,0 +1,15 @@
+{
+    "_comment": "MediaMTX path configuration for WasteWatch per-camera output streams",
+    "_note": "Each camera's annotated inference output is published via RTP to a unique port. MediaMTX must be configured to accept RTP on these ports and serve them as RTSP/WebRTC paths.",
+    "rtp_base_port": 20000,
+    "paths": {
+        "cam-00-out": {"rtp_port": 20000, "source": "rtp://0.0.0.0:20000"},
+        "cam-01-out": {"rtp_port": 20001, "source": "rtp://0.0.0.0:20001"},
+        "cam-02-out": {"rtp_port": 20002, "source": "rtp://0.0.0.0:20002"},
+        "cam-03-out": {"rtp_port": 20003, "source": "rtp://0.0.0.0:20003"},
+        "cam-04-out": {"rtp_port": 20004, "source": "rtp://0.0.0.0:20004"},
+        "cam-05-out": {"rtp_port": 20005, "source": "rtp://0.0.0.0:20005"},
+        "cam-06-out": {"rtp_port": 20006, "source": "rtp://0.0.0.0:20006"},
+        "cam-07-out": {"rtp_port": 20007, "source": "rtp://0.0.0.0:20007"}
+    }
+}
