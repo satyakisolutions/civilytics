@@ -189,6 +189,25 @@ services:
     command: ["python3", "-m", "services.evidence.main"]
     restart: unless-stopped
 
+  # ── Health Monitor Service ─────────────────────────────────────
+  health-monitor:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WW_REDIS_URL: redis://redis:6379/0
+      WW_MEDIAMTX_API_URL: http://mediamtx:9997
+      WW_VLM_BASE_URL: http://vlm:8000/v1
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python3", "-m", "services.health_monitor.main"]
+    restart: unless-stopped
+
   # ── Log Ingestion Service ─────────────────────────────────────
   log-worker:
     build:
@@ -201,6 +220,53 @@ services:
       kafka:
         condition: service_healthy
     command: ["python3", "-m", "services.logs.main"]
+    restart: unless-stopped
+
+  # ── Report Generation Service (SMTP email reports) ────────────
+  reports:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WW_REDIS_URL: redis://redis:6379/0
+      WW_DATABASE_URL: ${WW_DATABASE_URL}
+      WW_SMTP_HOST: ${WW_SMTP_HOST:-}
+      WW_SMTP_PORT: ${WW_SMTP_PORT:-587}
+      WW_SMTP_USER: ${WW_SMTP_USER:-}
+      WW_SMTP_PASSWORD: ${WW_SMTP_PASSWORD:-}
+      WW_SMTP_FROM: ${WW_SMTP_FROM:-wastewatch@satyaki.co.in}
+      WW_SMTP_TLS: ${WW_SMTP_TLS:-true}
+      WW_SMTP_ENABLED: ${WW_SMTP_ENABLED:-false}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python3", "-m", "services.reports.main"]
+    restart: unless-stopped
+
+  # ── Self-Healing Agent + MCP Server ──────────────────────────
+  healer:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WW_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - evidence_data:/tmp/wastewatch/evidence
+    ports:
+      - "9100:9100"
+    command: ["python3", "-m", "services.healer.main"]
     restart: unless-stopped
 
   pipeline:

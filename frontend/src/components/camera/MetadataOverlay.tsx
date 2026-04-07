@@ -1,5 +1,5 @@
 // Copyright (c) 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.
-import type { FrameMetadata, BBoxDetection, EventFSMState } from "@/types/monitoring";
+import type { FrameMetadata, BBoxDetection, EventFSMState, CameraAlertFlag } from "@/types/monitoring";
 
 interface MetadataOverlayProps {
   metadata: FrameMetadata | null;
@@ -291,6 +291,66 @@ function DetectionBox({ detection, width, height }: { detection: BBoxDetection; 
 }
 
 // ---------------------------------------------------------------------------
+// Per-camera alert flag banner
+// ---------------------------------------------------------------------------
+
+const ALERT_LEVEL_STYLES: Record<string, { bg: string; pulse: boolean; icon: string }> = {
+  monitoring:  { bg: "#3b82f6", pulse: false, icon: "MON" },
+  suspicious:  { bg: "#f59e0b", pulse: false, icon: "SUS" },
+  violation:   { bg: "#ef4444", pulse: true,  icon: "VIO" },
+  critical:    { bg: "#dc2626", pulse: true,  icon: "CRT" },
+};
+
+function CameraAlertBanner({ alert, width }: { alert: CameraAlertFlag; width: number }) {
+  const style = ALERT_LEVEL_STYLES[alert.level] ?? ALERT_LEVEL_STYLES.monitoring;
+  const elapsed = alert.since ? Math.floor((Date.now() - alert.since) / 1000) : null;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: `${width}px`,
+        backgroundColor: alert.color || style.bg,
+        color: "#fff",
+        fontSize: "11px",
+        fontFamily: "'Poppins', sans-serif",
+        fontWeight: 600,
+        padding: "3px 8px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        pointerEvents: "none",
+        animation: style.pulse ? "violationPulse 1s ease-in-out infinite alternate" : undefined,
+        zIndex: 10,
+      }}
+    >
+      <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+        <span
+          style={{
+            backgroundColor: "rgba(255,255,255,0.25)",
+            padding: "0 4px",
+            borderRadius: "2px",
+            fontSize: "9px",
+            fontWeight: 700,
+            letterSpacing: "0.05em",
+          }}
+        >
+          {style.icon}
+        </span>
+        {alert.text}
+      </span>
+      {elapsed !== null && (
+        <span style={{ fontSize: "10px", opacity: 0.8 }}>
+          {elapsed}s
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Frame Overlay
 // ---------------------------------------------------------------------------
 
@@ -323,6 +383,11 @@ export function MetadataOverlay({ metadata, width, height }: MetadataOverlayProp
           100% { opacity: 0; border-color: #101010; }
         }
       `}</style>
+
+      {/* Per-camera alert flag banner (top of frame) */}
+      {metadata.camera_alert && metadata.camera_alert.level !== "none" && (
+        <CameraAlertBanner alert={metadata.camera_alert} width={width} />
+      )}
 
       {/* Detection boxes */}
       {metadata.detections.map((det, i) => (

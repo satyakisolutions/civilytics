@@ -614,28 +614,45 @@ attach_frame_user_meta (NvDsBatchMeta *batch_meta, NvDsFrameMeta *frame_meta,
 }
 
 /* --------------------------------------------------------------------------
- * Get or create track state
+ * Per-camera track table helpers
+ *
+ * camera_states: camera_id (str) → GHashTable(track_id_key → WwTrackState*)
+ * Each camera is fully isolated — bulk cleanup when camera is removed.
  * ----------------------------------------------------------------------- */
+
+/* Get or create the per-camera track table */
+static GHashTable *
+get_or_create_camera_table (GstWasteWatchMeta *self, const gchar *camera_id)
+{
+    GHashTable *tracks = (GHashTable *) g_hash_table_lookup (self->camera_states, camera_id);
+    if (tracks)
+        return tracks;
+
+    /* Create new per-camera track table: track_id(guint64) → WwTrackState* */
+    tracks = g_hash_table_new_full (g_int64_hash, g_int64_equal, g_free, g_free);
+    g_hash_table_insert (self->camera_states, g_strdup (camera_id), tracks);
+    GST_DEBUG ("Created track table for camera %s", camera_id);
+    return tracks;
+}
+
+/* Get or create track state within a camera */
 static WwTrackState *
 get_or_create_track (GstWasteWatchMeta *self, const gchar *camera_id,
                      guint64 track_id, const gchar *class_name, gdouble now)
 {
-    TrackKey lookup_key;
-    memset (&lookup_key, 0, sizeof (lookup_key));
-    g_strlcpy (lookup_key.camera_id, camera_id, sizeof (lookup_key.camera_id));
-    lookup_key.track_id = track_id;
+    GHashTable *tracks = get_or_create_camera_table (self, camera_id);
 
-    WwTrackState *state = (WwTrackState *) g_hash_table_lookup (self->track_states, &lookup_key);
+    guint64 *lookup_key = g_new (guint64, 1);
+    *lookup_key = track_id;
+
+    WwTrackState *state = (WwTrackState *) g_hash_table_lookup (tracks, lookup_key);
     if (state) {
+        g_free (lookup_key);
         state->last_seen = now;
         return state;
     }
 
     /* Create new track state */
-    TrackKey *new_key = g_new0 (TrackKey, 1);
-    g_strlcpy (new_key->camera_id, camera_id, sizeof (new_key->camera_id));
-    new_key->track_id = track_id;
-
     state = g_new0 (WwTrackState, 1);
     state->track_id = track_id;
     state->fsm_state = WW_FSM_IDLE;
@@ -645,38 +662,58 @@ get_or_create_track (GstWasteWatchMeta *self, const gchar *camera_id,
     state->in_roi = FALSE;
     g_strlcpy (state->class_name, class_name, sizeof (state->class_name));
 
-    g_hash_table_insert (self->track_states, new_key, state);
+    g_hash_table_insert (tracks, lookup_key, state);
     GST_LOG ("New track: camera=%s track_id=%lu class=%s", camera_id, track_id, class_name);
 
     return state;
 }
 
 /* --------------------------------------------------------------------------
- * Prune stale tracks that haven't been seen for lost_timeout_s
+ * Prune stale tracks — iterates per-camera, then per-track within each
  * ----------------------------------------------------------------------- */
 static void
 prune_stale_tracks (GstWasteWatchMeta *self, gdouble now)
 {
-    GHashTableIter iter;
-    gpointer key, value;
-    GList *to_remove = NULL;
+    GHashTableIter cam_iter;
+    gpointer cam_key, cam_value;
+    GList *empty_cameras = NULL;
 
-    g_hash_table_iter_init (&iter, self->track_states);
-    while (g_hash_table_iter_next (&iter, &key, &value)) {
-        WwTrackState *ts = (WwTrackState *) value;
-        gdouble elapsed = now - ts->last_seen;
-        if (elapsed > (gdouble) self->lost_timeout_s) {
-            GST_DEBUG ("Pruning stale track %lu (%.1fs since last seen)",
-                       ts->track_id, elapsed);
-            to_remove = g_list_prepend (to_remove, key);
+    g_hash_table_iter_init (&cam_iter, self->camera_states);
+    while (g_hash_table_iter_next (&cam_iter, &cam_key, &cam_value)) {
+        GHashTable *tracks = (GHashTable *) cam_value;
+        const gchar *camera_id = (const gchar *) cam_key;
+        GHashTableIter trk_iter;
+        gpointer trk_key, trk_value;
+        GList *stale_tracks = NULL;
+
+        g_hash_table_iter_init (&trk_iter, tracks);
+        while (g_hash_table_iter_next (&trk_iter, &trk_key, &trk_value)) {
+            WwTrackState *ts = (WwTrackState *) trk_value;
+            gdouble elapsed = now - ts->last_seen;
+            if (elapsed > (gdouble) self->lost_timeout_s) {
+                GST_DEBUG ("Pruning stale track %s/%lu (%.1fs since last seen)",
+                           camera_id, ts->track_id, elapsed);
+                stale_tracks = g_list_prepend (stale_tracks, trk_key);
+            }
+        }
+
+        for (GList *l = stale_tracks; l != NULL; l = l->next) {
+            g_hash_table_remove (tracks, l->data);
+        }
+        g_list_free (stale_tracks);
+
+        /* Mark empty camera tables for cleanup */
+        if (g_hash_table_size (tracks) == 0) {
+            empty_cameras = g_list_prepend (empty_cameras, cam_key);
         }
     }
 
-    for (GList *l = to_remove; l != NULL; l = l->next) {
-        g_hash_table_remove (self->track_states, l->data);
+    /* Remove empty camera entries */
+    for (GList *l = empty_cameras; l != NULL; l = l->next) {
+        GST_DEBUG ("Removing empty camera table: %s", (const gchar *) l->data);
+        g_hash_table_remove (self->camera_states, l->data);
     }
-
-    g_list_free (to_remove);
+    g_list_free (empty_cameras);
 }
 
 /* --------------------------------------------------------------------------
@@ -1001,9 +1038,10 @@ gst_wastewatch_meta_stop (GstBaseTransform *trans)
     GstWasteWatchMeta *self = GST_WASTEWATCH_META (trans);
 
     g_mutex_lock (&self->state_lock);
-    guint n_tracks = g_hash_table_size (self->track_states);
-    g_hash_table_remove_all (self->track_states);
+    guint n_cameras = g_hash_table_size (self->camera_states);
+    g_hash_table_remove_all (self->camera_states);
     g_mutex_unlock (&self->state_lock);
+    GST_INFO_OBJECT (self, "Cleared track state for %u cameras", n_cameras);
 
     GST_INFO_OBJECT (self, "Stopped WasteWatch meta plugin (cleared %u tracks)", n_tracks);
     return TRUE;
@@ -1017,9 +1055,9 @@ gst_wastewatch_meta_finalize (GObject *object)
 {
     GstWasteWatchMeta *self = GST_WASTEWATCH_META (object);
 
-    if (self->track_states) {
-        g_hash_table_destroy (self->track_states);
-        self->track_states = NULL;
+    if (self->camera_states) {
+        g_hash_table_destroy (self->camera_states);
+        self->camera_states = NULL;
     }
 
     if (self->roi_polygons) {
@@ -1125,9 +1163,11 @@ gst_wastewatch_meta_init (GstWasteWatchMeta *self)
     self->roi_config_path = NULL;
     self->roi_polygons = NULL;
 
-    self->track_states = g_hash_table_new_full (
-        track_key_hash, track_key_equal,
-        track_key_free, track_state_free);
+    /* Outer: camera_id (str) → GHashTable(track_id → WwTrackState)
+     * Inner tables are destroyed via (GDestroyNotify) g_hash_table_destroy */
+    self->camera_states = g_hash_table_new_full (
+        g_str_hash, g_str_equal,
+        g_free, (GDestroyNotify) g_hash_table_destroy);
 
     g_mutex_init (&self->state_lock);
 

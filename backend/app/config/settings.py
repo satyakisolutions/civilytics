@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     sip_escalation_contacts: list[dict] = []
     sip_enabled: bool = False
 
+    # SMTP (Email reports)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "wastewatch@satyaki.co.in"
+    smtp_tls: bool = True
+    smtp_enabled: bool = False
+
     # Keycloak
     keycloak_url: str = "http://localhost:8180"
     keycloak_realm: str = "wastewatch"

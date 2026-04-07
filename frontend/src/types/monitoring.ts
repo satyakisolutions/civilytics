@@ -121,12 +121,22 @@ export interface BBoxDetection {
   alert_priority?: string;
 }
 
+export type CameraAlertLevel = 'none' | 'monitoring' | 'suspicious' | 'violation' | 'critical';
+
+export interface CameraAlertFlag {
+  level: CameraAlertLevel;
+  text: string;             // Custom per-camera alert text shown on frame
+  color: string;            // Hex color for the banner
+  since?: number;           // timestamp when alert started
+}
+
 export interface FrameMetadata {
   camera_id: string;
   frame_number: number;
   timestamp: number;
   detections: BBoxDetection[];
   fps?: number;
+  camera_alert?: CameraAlertFlag;  // Per-camera alert banner
 }
 
 // --- Phase 2: Tracking + ROI types ---

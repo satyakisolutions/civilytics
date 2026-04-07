@@ -13,6 +13,9 @@ TOPIC_LOGS = "wastewatch.logs"
 TOPIC_CONFIG_UPDATES = "wastewatch.config.updates"
 TOPIC_SIP_CALLS = "wastewatch.sip"
 TOPIC_CAMERA_STATUS = "wastewatch.camera.status"
+TOPIC_HEALTH = "wastewatch.health"
+TOPIC_HEALING = "wastewatch.healing"
+TOPIC_MISSES = "wastewatch.misses"
 
 # ---------------------------------------------------------------------------
 # Kafka consumer group IDs
@@ -23,3 +26,5 @@ GROUP_VLM_WORKER = "wastewatch.group.vlm-worker"
 GROUP_ALERT_DISPATCHER = "wastewatch.group.alert-dispatcher"
 GROUP_LOG_INGESTION = "wastewatch.group.log-ingestion"
 GROUP_ESCALATION = "wastewatch.group.escalation"
+GROUP_HEALTH_MONITOR = "wastewatch.group.health-monitor"
+GROUP_HEALER = "wastewatch.group.healer"

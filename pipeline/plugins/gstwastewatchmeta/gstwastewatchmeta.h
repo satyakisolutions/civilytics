@@ -110,8 +110,8 @@ struct _GstWasteWatchMeta {
     guint       input_height;        /* default 1080 */
     gchar      *roi_config_path;     /* path to ROI polygon JSON */
 
-    /* Internal state */
-    GHashTable *track_states;        /* (camera_id, track_id) -> WwTrackState* */
+    /* Internal state — per-camera isolated */
+    GHashTable *camera_states;       /* camera_id (str) -> GHashTable(track_id -> WwTrackState*) */
     GHashTable *roi_polygons;        /* camera_id -> GArray of ROI polygon points */
     GMutex      state_lock;
 };

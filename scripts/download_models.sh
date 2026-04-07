@@ -137,7 +137,29 @@ echo "  Ensure the package is installed: pip install paddleocr"
 # 5. Verification
 # ---------------------------------------------------------------------------
 echo ""
-echo "[5/5] Verification"
+# --- 5. BitNet (Report Narrator) ---
+echo ""
+echo "[5/6] BitNet 1.58b (Report Narrator)"
+BITNET_DIR="${MODELS_DIR}/bitnet"
+mkdir -p "$BITNET_DIR"
+BITNET_MODEL="BitNet-b1.58-2B-4T-Q4_K_M.gguf"
+BITNET_URL="https://huggingface.co/microsoft/BitNet-b1.58-2B-4T-GGUF/resolve/main/${BITNET_MODEL}"
+
+if [ -f "$BITNET_DIR/$BITNET_MODEL" ]; then
+    echo "  OK  BitNet model already downloaded ($(du -h "$BITNET_DIR/$BITNET_MODEL" | cut -f1))"
+else
+    echo "  Downloading BitNet 1.58b GGUF (~1.5 GB)..."
+    curl -L --progress-bar -o "$BITNET_DIR/$BITNET_MODEL" "$BITNET_URL"
+    if [ -f "$BITNET_DIR/$BITNET_MODEL" ]; then
+        echo "  OK  BitNet downloaded ($(du -h "$BITNET_DIR/$BITNET_MODEL" | cut -f1))"
+    else
+        echo "  WARN  BitNet download failed — reports will use template fallbacks"
+    fi
+fi
+
+# --- 6. Verification ---
+echo ""
+echo "[6/6] Verification"
 echo "  Checking model files..."
 
 MISSING=0
@@ -160,6 +182,7 @@ check_file "$ACTION_DIR/action_classifier.onnx" "Action Classifier ONNX"
 check_file "$ACTION_DIR/action_classifier_fp16.engine" "Action Classifier TensorRT FP16"
 check_file "$TTS_DIR/${PIPER_MODEL}.onnx" "Piper TTS Model"
 check_file "$TTS_DIR/${PIPER_MODEL}.onnx.json" "Piper TTS Config"
+check_file "$BITNET_DIR/$BITNET_MODEL" "BitNet 1.58b GGUF"
 
 echo ""
 if [ "$MISSING" -gt 0 ]; then

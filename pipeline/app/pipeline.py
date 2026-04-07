@@ -32,6 +32,7 @@ import pyds  # noqa: E402 — provided by the DeepStream Docker image
 from app.config import pipeline_settings
 from app.connection_monitor import ConnectionMonitor
 from app.event_fsm import EventFSMManager
+from app.frame_batcher import FrameBatcher
 from app.health import CameraHealth
 from app.kafka_producer import PipelineKafkaProducer
 from app.output_manager import OutputStreamManager
@@ -114,6 +115,69 @@ def make_element(factory_name: str, name: str) -> Gst.Element:
 
 
 # ---------------------------------------------------------------------------
+# Per-camera alert flag derivation
+# ---------------------------------------------------------------------------
+
+# Alert levels in priority order (highest wins)
+_ALERT_PRIORITY = {
+    "escalated": 4,
+    "alerting": 3,
+    "violation": 2,
+    "observe": 1,
+    "enter": 0,
+}
+
+_ALERT_CONFIG: dict[str, dict] = {
+    "escalated": {"level": "critical",    "color": "#dc2626", "text": "ESCALATED — Supervisor notified"},
+    "alerting":  {"level": "critical",    "color": "#ef4444", "text": "VIOLATION — Alert dispatched"},
+    "violation": {"level": "violation",   "color": "#ef4444", "text": "VIOLATION DETECTED"},
+    "observe":   {"level": "suspicious",  "color": "#f59e0b", "text": "Suspicious activity — monitoring"},
+    "enter":     {"level": "monitoring",  "color": "#3b82f6", "text": "Object entered zone"},
+}
+
+
+def _derive_camera_alert(camera_id: str, detections: list[dict]) -> dict | None:
+    """Derive a per-camera alert flag from the worst FSM state in this frame.
+
+    Each camera gets a unique alert banner based on the highest-priority
+    detection across all tracked objects in that camera's frame.
+    """
+    worst_state = None
+    worst_priority = -1
+    worst_class = ""
+    worst_dwell = 0.0
+
+    for det in detections:
+        fsm = det.get("fsm_state")
+        if fsm and fsm in _ALERT_PRIORITY:
+            prio = _ALERT_PRIORITY[fsm]
+            if prio > worst_priority:
+                worst_priority = prio
+                worst_state = fsm
+                worst_class = det.get("label", det.get("class_name", ""))
+                worst_dwell = det.get("dwell_time_s", 0.0)
+
+    if worst_state is None:
+        return None
+
+    cfg = _ALERT_CONFIG[worst_state]
+
+    # Build contextual alert text unique to this camera
+    text = cfg["text"]
+    if worst_class:
+        text = f"{text} — {worst_class}"
+    if worst_dwell > 0:
+        text = f"{text} ({worst_dwell:.0f}s)"
+
+    return {
+        "level": cfg["level"],
+        "text": text,
+        "color": cfg["color"],
+        "since": int(time.monotonic() * 1000),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Pad probe — metadata extraction (Python fallback)
 # ---------------------------------------------------------------------------
 
@@ -123,12 +187,19 @@ def extract_metadata(
     info: Gst.PadProbeInfo,
     ctx: dict,
 ) -> Gst.PadProbeReturn:
-    """GStreamer pad probe that extracts NvDsBatchMeta and publishes to Kafka."""
+    """GStreamer pad probe that extracts NvDsBatchMeta and publishes to Kafka.
+
+    VLM requests are batched conditionally: the FrameBatcher collects 1 frame
+    every 10s ONLY when FSM is in OBSERVE/VIOLATION/ALERTING/ESCALATED state.
+    After 6 frames (60s window), or on track exit, the batch is sent to VLM.
+    This gives the VLM temporal context instead of a single snapshot.
+    """
     kafka_producer: PipelineKafkaProducer = ctx["kafka_producer"]
     health: CameraHealth = ctx["health"]
     track_manager: TrackStateManager = ctx["track_manager"]
     roi_manager: ROIManager = ctx["roi_manager"]
     fsm_manager: EventFSMManager = ctx["fsm_manager"]
+    frame_batcher: FrameBatcher = ctx["frame_batcher"]
 
     gst_buffer = info.get_buffer()
     if gst_buffer is None:
@@ -194,15 +265,9 @@ def extract_metadata(
 
                     if fsm_event:
                         kafka_producer.send_event(fsm_event)
-                        if fsm_event.state.value == "violation":
-                            kafka_producer.send_vlm_request(
-                                camera_id=camera_id, track_id=track_id,
-                                zone_name=camera_id, dwell_time_s=track_info.dwell_time_s,
-                                class_name=class_name,
-                                path_summary="stationary" if track_info.dwell_time_s > 10 else "moving",
-                            )
 
-                            # Trigger LPR for vehicles
+                        # LPR triggers immediately on violation (no batching needed)
+                        if fsm_event.state.value == "violation":
                             if class_name in VEHICLE_CLASSES:
                                 kafka_producer.send_lpr_request(
                                     camera_id=camera_id,
@@ -211,10 +276,43 @@ def extract_metadata(
                                     class_name=class_name,
                                 )
 
+                        # Flush partial batch on track exit
+                        if fsm_event.state.value == "exited":
+                            exit_batch = frame_batcher.on_track_exit(camera_id, track_id)
+                            if exit_batch:
+                                kafka_producer.send_vlm_request(
+                                    camera_id=camera_id, track_id=track_id,
+                                    zone_name=camera_id, dwell_time_s=track_info.dwell_time_s,
+                                    class_name=class_name,
+                                    path_summary=f"exit_batch:{len(exit_batch)}frames",
+                                )
+
                     # Enrich detection with tracking data
                     detection_dict["dwell_time_s"] = round(track_info.dwell_time_s, 1)
                     detection_dict["in_roi"] = in_roi
                     detection_dict["fsm_state"] = fsm_manager.get_fsm_state(camera_id, track_id)
+
+                    # --- Conditional frame batching for VLM ---
+                    # Instead of sending every violation frame to VLM immediately,
+                    # collect frames over a 60s window (1 every 10s = 6 frames).
+                    # VLM gets temporal context: "what happened over the last minute"
+                    current_fsm = detection_dict.get("fsm_state")
+                    vlm_batch = frame_batcher.on_frame(
+                        camera_id=camera_id,
+                        track_id=track_id,
+                        frame_num=frame_meta.frame_num,
+                        timestamp_ms=int(time.monotonic() * 1000),
+                        fsm_state=current_fsm,
+                        detections=detections,
+                    )
+                    if vlm_batch is not None:
+                        # Batch ready — send to VLM with temporal context
+                        kafka_producer.send_vlm_request(
+                            camera_id=camera_id, track_id=track_id,
+                            zone_name=camera_id, dwell_time_s=track_info.dwell_time_s,
+                            class_name=class_name,
+                            path_summary=f"batch:{len(vlm_batch)}frames:{current_fsm}",
+                        )
 
                 detections.append(detection_dict)
 
@@ -223,11 +321,17 @@ def extract_metadata(
             except StopIteration:
                 break
 
+        # --- Per-camera alert flag ---
+        # Derive the camera-level alert from the worst FSM state across all
+        # detections in this frame. Each camera gets a unique flag.
+        camera_alert = _derive_camera_alert(camera_id, detections)
+
         metadata: dict = {
             "camera_id": camera_id,
             "frame_num": frame_meta.frame_num,
             "timestamp_ms": int(time.monotonic() * 1000),
             "detections": detections,
+            "camera_alert": camera_alert,
         }
 
         kafka_producer.send_metadata(camera_id, metadata)
@@ -426,11 +530,19 @@ def main() -> None:
         logger.critical("Could not get fakesink sink pad")
         sys.exit(1)
 
+    # Frame batcher for conditional VLM analysis (used by both paths)
+    frame_batcher = FrameBatcher(
+        sample_interval_s=5.0,    # 1 frame every 5 seconds
+        batch_size=12,            # 12 frames per batch (60s window)
+        batch_timeout_s=90.0,     # Yield partial batch after 90s
+    )
+
     if use_native_meta and ww_meta_elem is not None:
         # --- Native C plugin path: simplified probe, no Python managers -----
         from app.meta_probe import extract_metadata_v2, create_probe_context
 
         probe_ctx = create_probe_context(kafka_producer, health)
+        probe_ctx["frame_batcher"] = frame_batcher
         fakesink_sink_pad.add_probe(
             Gst.PadProbeType.BUFFER,
             extract_metadata_v2,
@@ -466,6 +578,7 @@ def main() -> None:
             "roi_manager": roi_manager,
             "fsm_manager": fsm_manager,
             "roi_preprocessor": roi_preprocessor,
+            "frame_batcher": frame_batcher,
         }
         fakesink_sink_pad.add_probe(
             Gst.PadProbeType.BUFFER,
@@ -557,6 +670,16 @@ def main() -> None:
             for evt in stale_events:
                 kafka_producer.send_event(evt)
             track_manager.prune_lost()
+
+        # Prune stale frame batchers and send partial batches to VLM
+        stale_batches = frame_batcher.prune_stale()
+        for cam_id, trk_id, frames in stale_batches:
+            kafka_producer.send_vlm_request(
+                camera_id=cam_id, track_id=trk_id,
+                zone_name=cam_id, dwell_time_s=0,
+                class_name="unknown",
+                path_summary=f"timeout_batch:{len(frames)}frames",
+            )
 
         # Update ROI preprocessor crops if sources changed (fallback path only)
         if roi_preprocessor is not None:

@@ -12,6 +12,9 @@ Commands:
     resume_camera    — re-enable inference for a camera
     update_roi       — reload ROI polygons for a camera
     force_stop_all   — emergency stop all recordings and alerts
+    add_camera       — register a new RTSP source in the running pipeline
+    update_camera    — reconfigure an existing camera (remove + re-add)
+    remove_camera    — unregister a camera and clean up pipeline state
 
 Data flow:
     Backend → Redis PUBLISH ww:pipeline:commands → CommandReceiver → pipeline state
@@ -35,6 +38,9 @@ class CommandType(str, Enum):
     RESUME_CAMERA = "resume_camera"
     UPDATE_ROI = "update_roi"
     FORCE_STOP_ALL = "force_stop_all"
+    ADD_CAMERA = "add_camera"
+    UPDATE_CAMERA = "update_camera"
+    REMOVE_CAMERA = "remove_camera"
 
 
 @dataclass
@@ -172,11 +178,15 @@ class CommandHandler:
         smart_record_mgr=None,
         alert_router=None,
         kafka_producer=None,
+        connection_monitor=None,
+        frame_batcher=None,
     ) -> None:
         self._fsm = fsm_manager
         self._sr = smart_record_mgr
         self._router = alert_router
         self._kafka = kafka_producer
+        self._connection_monitor = connection_monitor
+        self._frame_batcher = frame_batcher
 
     def handle(self, cmd: PipelineCommand) -> None:
         """Dispatch a command to the appropriate handler."""
@@ -186,6 +196,9 @@ class CommandHandler:
             CommandType.RESUME_CAMERA: self._handle_resume,
             CommandType.UPDATE_ROI: self._handle_update_roi,
             CommandType.FORCE_STOP_ALL: self._handle_force_stop,
+            CommandType.ADD_CAMERA: self._handle_add_camera,
+            CommandType.UPDATE_CAMERA: self._handle_update_camera,
+            CommandType.REMOVE_CAMERA: self._handle_remove_camera,
         }
         handler = handlers.get(cmd.action)
         if handler:
@@ -268,3 +281,50 @@ class CommandHandler:
                 logger.exception("Error in force stop all recordings")
         if self._router:
             self._router.cleanup_stale()
+
+    # ------------------------------------------------------------------
+    # Camera CRUD commands (from REST API via Redis)
+    # ------------------------------------------------------------------
+
+    def _handle_add_camera(self, cmd: PipelineCommand) -> None:
+        """Add a new RTSP source to the running pipeline."""
+        uri = (cmd.data or {}).get("uri", "")
+        logger.info("ADD CAMERA: %s uri=%s", cmd.camera_id, uri)
+        if self._connection_monitor:
+            try:
+                self._connection_monitor.register_camera(cmd.camera_id, uri)
+                logger.info("Camera registered in connection monitor: %s", cmd.camera_id)
+            except Exception:
+                logger.exception("Failed to register camera %s", cmd.camera_id)
+        else:
+            logger.warning("No connection_monitor — cannot add camera %s", cmd.camera_id)
+
+    def _handle_update_camera(self, cmd: PipelineCommand) -> None:
+        """Update an RTSP source — remove old, add new."""
+        uri = (cmd.data or {}).get("uri", "")
+        logger.info("UPDATE CAMERA: %s uri=%s", cmd.camera_id, uri)
+        if self._connection_monitor:
+            try:
+                self._connection_monitor.unregister_camera(cmd.camera_id)
+                self._connection_monitor.register_camera(cmd.camera_id, uri)
+                logger.info("Camera updated in connection monitor: %s", cmd.camera_id)
+            except Exception:
+                logger.exception("Failed to update camera %s", cmd.camera_id)
+        else:
+            logger.warning("No connection_monitor — cannot update camera %s", cmd.camera_id)
+
+    def _handle_remove_camera(self, cmd: PipelineCommand) -> None:
+        """Remove an RTSP source from the running pipeline."""
+        logger.info("REMOVE CAMERA: %s", cmd.camera_id)
+        if self._connection_monitor:
+            try:
+                self._connection_monitor.unregister_camera(cmd.camera_id)
+                logger.info("Camera unregistered from connection monitor: %s", cmd.camera_id)
+            except Exception:
+                logger.exception("Failed to unregister camera %s", cmd.camera_id)
+        if self._frame_batcher:
+            try:
+                self._frame_batcher.on_camera_removed(cmd.camera_id)
+                logger.info("Camera removed from frame batcher: %s", cmd.camera_id)
+            except Exception:
+                logger.exception("Failed to remove camera %s from frame batcher", cmd.camera_id)
