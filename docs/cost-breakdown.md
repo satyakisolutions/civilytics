@@ -273,9 +273,9 @@ Per Camera/Month       $344         $293        $177
 
 ## Neeraj's Deployment — On-Premise Reference Build
 
-**Location**: 133, 1st Cross, Lake Shore Gardens (LSG), Thindlu, Vidyaranyapura, Bangalore 560097
+**Location**: Lake Shore Gardens, Vidyaranyapura, Bangalore
 
-The WasteWatch reference deployment runs on Neeraj's local server at Lake Shore Gardens. This is the first production site and the baseline for on-premise cost calculations.
+The WasteWatch reference deployment runs on Neeraj's local server at Lake Shore Gardens (LSG), Bangalore. This is the first production site and the baseline for on-premise cost calculations.
 
 ### Server Specifications
 

@@ -23,7 +23,7 @@
 
 ---
 
-*Deployed at 133, 1st Cross, Lake Shore Gardens, Thindlu, Vidyaranyapura, Bangalore*
+*First deployment: Lake Shore Gardens, Vidyaranyapura, Bangalore*
 
 </div>
 
