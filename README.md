@@ -10,7 +10,7 @@
 
 # WasteWatch
 
-**AI-Powered Illegal Waste Dumping Detection for Local Self Government Bodies**
+**AI-Powered Illegal Waste Dumping Detection Platform**
 
 `Computer Vision` `Deep Learning` `Real-Time Analytics` `Edge AI` `IoT Surveillance`
 
@@ -23,7 +23,7 @@
 
 ---
 
-*Built for LSG (Local Self Government) bodies in Kerala, India*
+*Deployed at 133, 1st Cross, Lake Shore Gardens, Thindlu, Vidyaranyapura, Bangalore*
 
 </div>
 
@@ -31,7 +31,7 @@
 
 ## Overview
 
-WasteWatch is an enterprise-grade, AI-powered surveillance platform that detects and prevents illegal waste dumping in real time. Designed for deployment across municipalities and panchayats under Kerala's Local Self Government framework, the system processes live RTSP camera feeds through a high-performance NVIDIA DeepStream inference pipeline, applies a multi-stage finite state machine for violation tracking, and dispatches multi-channel alerts with full evidentiary chains.
+WasteWatch is an enterprise-grade, AI-powered surveillance platform that detects and prevents illegal waste dumping in real time. Originally deployed at Lake Shore Gardens (LSG), Thindlu, Vidyaranyapura, Bangalore, the system processes live RTSP camera feeds through a high-performance NVIDIA DeepStream inference pipeline, applies a multi-stage finite state machine for violation tracking, and dispatches multi-channel alerts with full evidentiary chains. Designed for residential communities, municipal bodies, industrial estates, and smart city deployments across India.
 
 The platform combines edge-optimized object detection (RF-DETR with TensorRT FP16), vision-language model analysis (Qwen2.5-VL-7B), license plate recognition (PaddleOCR), and text-to-speech audio warnings into a unified, event-driven architecture orchestrated through Apache Kafka.
 
@@ -777,7 +777,7 @@ External:
 
 ### AWS Cost Estimation
 
-#### 4-Camera Deployment (Small LSG Body)
+#### 4-Camera Deployment (Residential Community / Small Site)
 
 | Resource | Service | Config | Monthly | Yearly |
 |----------|---------|--------|--------:|-------:|
@@ -795,7 +795,7 @@ External:
 | **TOTAL (On-Demand)** | | | **$1,726** | **$20,712** |
 | **TOTAL (Reserved GPU)** | | | **$1,375** | **$16,500** |
 
-#### 8-Camera Deployment (Medium LSG Body)
+#### 8-Camera Deployment (Industrial Estate / Tech Park)
 
 | Resource | Change | Monthly | Yearly |
 |----------|--------|--------:|-------:|
@@ -808,7 +808,7 @@ External:
 | Other | ALB + ElastiCache + transfer | $120 | $1,440 |
 | **TOTAL (Reserved GPU)** | | **$1,881** | **$22,572** |
 
-#### 16-Camera Deployment (Large LSG Body)
+#### 16-Camera Deployment (Smart City / Multi-Site)
 
 | Resource | Change | Monthly | Yearly |
 |----------|--------|--------:|-------:|

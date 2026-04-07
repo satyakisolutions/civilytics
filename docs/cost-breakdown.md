@@ -273,7 +273,9 @@ Per Camera/Month       $344         $293        $177
 
 ## Neeraj's Deployment — On-Premise Reference Build
 
-The WasteWatch reference deployment runs on Neeraj's local server in India. This is the baseline for on-premise cost calculations.
+**Location**: 133, 1st Cross, Lake Shore Gardens (LSG), Thindlu, Vidyaranyapura, Bangalore 560097
+
+The WasteWatch reference deployment runs on Neeraj's local server at Lake Shore Gardens. This is the first production site and the baseline for on-premise cost calculations.
 
 ### Server Specifications
 
@@ -341,11 +343,11 @@ The WasteWatch reference deployment runs on Neeraj's local server in India. This
 
 ### Recommended Pricing for Bangalore / Tier-1 Indian Customers
 
-WasteWatch is positioned as a **SaaS / Managed Service** for Local Self Government (LSG) bodies, residential welfare associations (RWAs), industrial estates, and smart city projects.
+WasteWatch is positioned as a **SaaS / Managed Service** for residential communities (like Lake Shore Gardens), BBMP ward offices, industrial estates, tech parks, and smart city projects.
 
 ### Pricing Tiers
 
-#### Tier 1: WasteWatch Starter (Small LSG / RWA)
+#### Tier 1: WasteWatch Starter (Residential Community / Small Site)
 
 | Item | Description | Price (INR) |
 |------|-------------|------------:|
@@ -358,7 +360,7 @@ WasteWatch is positioned as a **SaaS / Managed Service** for Local Self Governme
 | **Year 1 Total** | Setup + hardware + 12 months | **₹7,20,000** |
 | **Year 2+ Total** | Subscription only | **₹3,00,000/yr** |
 
-#### Tier 2: WasteWatch Professional (Medium LSG / Industrial Estate)
+#### Tier 2: WasteWatch Professional (Industrial Estate / Tech Park)
 
 | Item | Description | Price (INR) |
 |------|-------------|------------:|
@@ -410,7 +412,7 @@ WasteWatch is positioned as a **SaaS / Managed Service** for Local Self Governme
 | Segment | Example | Cameras | Tier | Annual Value |
 |---------|---------|:-------:|:----:|------------:|
 | RWA (Residential) | Prestige Lakeside Habitat, Sobha Dream Acres | 4 | Starter | ₹3,00,000 |
-| LSG / Panchayat | BBMP ward offices, KSPCB monitoring sites | 4-8 | Starter/Pro | ₹3-6,00,000 |
+| BBMP / Municipality | BBMP ward offices, KSPCB monitoring sites | 4-8 | Starter/Pro | ₹3-6,00,000 |
 | Industrial Estate | Peenya Industrial Area, Electronic City | 8-16 | Professional | ₹6-18,00,000 |
 | Smart City SPV | Bengaluru Smart City Ltd | 16+ | Enterprise | ₹18,00,000+ |
 | Waste Management Co | Hasiru Dala, BWSSB transfer stations | 8 | Professional | ₹6,00,000 |
@@ -436,7 +438,7 @@ WasteWatch is positioned as a **SaaS / Managed Service** for Local Self Governme
 | **Monthly ROI** | — | **₹70,000-2,50,000** |
 | **Payback period** | — | **3-6 months** |
 
-> **Key pitch**: WasteWatch pays for itself in 3-6 months through fine collection and cleanup cost savings. After payback, it generates net revenue for the LSG body.
+> **Key pitch**: WasteWatch pays for itself in 3-6 months through fine collection and cleanup cost savings. After payback, it generates net revenue for the community or municipality.
 
 ---
 
@@ -461,7 +463,7 @@ WasteWatch is positioned as a **SaaS / Managed Service** for Local Self Governme
 
 > Development cost is sunk. Every new customer from Year 2 onward is **78% gross margin** recurring revenue.
 
-### Customer's ROI (LSG Body / RWA / Industrial Estate)
+### Customer's ROI (Residential Community / BBMP / Industrial Estate)
 
 #### Monthly Financial Impact for the Customer
 
