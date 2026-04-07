@@ -271,5 +271,174 @@ Per Camera/Month       $344         $293        $177
 
 ---
 
+## Neeraj's Deployment — On-Premise Reference Build
+
+The WasteWatch reference deployment runs on Neeraj's local server in India. This is the baseline for on-premise cost calculations.
+
+### Server Specifications
+
+| Component | Spec |
+|-----------|------|
+| CPU | Intel Core i5-12400F (6C/12T, 4.4 GHz) |
+| RAM | 16 GB DDR4 |
+| GPU | NVIDIA GeForce RTX 3060 12GB |
+| Storage | 124 GB SSD (34 GB free) |
+| OS | Ubuntu 24.04.4 LTS |
+| CUDA | 12.x, Driver 580.126 |
+
+### Monthly Operating Cost
+
+| Expense | Monthly (INR) | Monthly (USD) | Notes |
+|---------|-------------:|-------------:|-------|
+| Server hardware | — | — | Already owned (₹75,000 one-time) |
+| Electricity (250W avg, ₹8/kWh, 24/7) | ₹1,440 | $17 | Power + cooling |
+| Internet (business fiber, 100 Mbps static IP) | ₹2,500 | $30 | Required for RTSP cameras |
+| Domain + SSL | ₹100 | $1 | Let's Encrypt = free |
+| Telegram Bot API | ₹0 | $0 | Free tier (unlimited) |
+| SIP / Twilio (~100 calls/mo) | ₹500 | $6 | Free with local Asterisk PBX |
+| Cloud evidence sync (Dropbox 2TB / S3) | ₹800 | $10 | Or local NAS = ₹0 |
+| UPS battery replacement (annualized) | ₹200 | $2 | 600 VA UPS |
+| **TOTAL OPEX** | **₹5,540** | **$66** | |
+
+### Capacity
+
+| Cameras | VRAM Usage | FPS | VLM | Verdict |
+|:-------:|:----------:|:---:|:---:|---------|
+| 2 | ~7 GB / 12 GB | 30 | Concurrent | Comfortable |
+| **4** | **~9.6 GB / 12 GB** | **30** | **Time-shared** | **Sweet spot** |
+| 6 | ~11 GB / 12 GB | 20 | Queued | Pushing limits |
+| 8 | 12+ GB | — | — | OOM — needs second GPU |
+
+### vs AWS (4-Camera Comparison)
+
+| | Neeraj's Server | AWS (Reserved) |
+|---|---:|---:|
+| Upfront hardware | ₹75,000 ($900) | ₹0 |
+| Monthly OPEX | ₹5,540 ($66) | ₹1,15,000 ($1,375) |
+| **Year 1 Total** | **₹1,41,480 ($1,692)** | **₹13,80,000 ($16,500)** |
+| **Year 2 Total** | **₹2,07,960 ($2,484)** | **₹27,60,000 ($33,000)** |
+| **Year 3 Total** | **₹2,74,440 ($3,276)** | **₹41,40,000 ($49,500)** |
+| Break-even | — | Never (on-prem always cheaper) |
+| Availability | Single server, manual recovery | Multi-AZ, 99.9% SLA |
+| Scaling | Buy hardware | Add instances |
+| Maintenance | Self-managed | AWS managed |
+
+> **Verdict**: On-premise is **10-15x cheaper** for single-site deployments up to 4 cameras.
+> AWS is justified for multi-site, high-availability, or zero-maintenance requirements.
+
+### Upgrade Path
+
+| Upgrade | Cost (INR) | Benefit |
+|---------|----------:|---------|
+| +16 GB RAM (32 GB total) | ₹3,000 | Run all 15 services comfortably |
+| +1 TB NVMe SSD | ₹5,000 | 6 months of evidence storage locally |
+| +RTX 3060 (second GPU) | ₹25,000 | 8 cameras: pipeline on GPU 0, VLM on GPU 1 |
+| Upgrade to RTX 4070 Ti | ₹50,000 | 12 GB + faster inference, 8 cameras single GPU |
+
+---
+
+## Commercial Pricing — Indian Market
+
+### Recommended Pricing for Bangalore / Tier-1 Indian Customers
+
+WasteWatch is positioned as a **SaaS / Managed Service** for Local Self Government (LSG) bodies, residential welfare associations (RWAs), industrial estates, and smart city projects.
+
+### Pricing Tiers
+
+#### Tier 1: WasteWatch Starter (Small LSG / RWA)
+
+| Item | Description | Price (INR) |
+|------|-------------|------------:|
+| Setup fee (one-time) | Hardware procurement, installation, camera setup, network config, Keycloak user setup, ROI configuration | ₹2,00,000 |
+| Hardware (customer-owned) | Server (i5 + 16GB + RTX 3060) + 4 IP cameras + 2 IP speakers + UPS + cabling | ₹2,50,000 |
+| Monthly subscription | 4 cameras, SaaS license, Telegram alerts, dashboard access, evidence storage (30 days) | ₹25,000/mo |
+| Annual contract | 12 months prepaid (10% discount) | ₹2,70,000/yr |
+| Per additional camera | Add-on beyond 4 cameras | ₹5,000/cam/mo |
+| | | |
+| **Year 1 Total** | Setup + hardware + 12 months | **₹7,20,000** |
+| **Year 2+ Total** | Subscription only | **₹3,00,000/yr** |
+
+#### Tier 2: WasteWatch Professional (Medium LSG / Industrial Estate)
+
+| Item | Description | Price (INR) |
+|------|-------------|------------:|
+| Setup fee (one-time) | Multi-zone deployment, VPN setup, SIP integration, IP speaker array, custom ROI per zone | ₹5,00,000 |
+| Hardware (customer-owned) | Server (i7 + 32GB + RTX 4070 Ti) + 8 cameras + 4 speakers + managed switch + UPS | ₹5,00,000 |
+| Monthly subscription | 8 cameras, priority support, SIP voice alerts, LPR, VLM analysis, evidence storage (90 days) | ₹50,000/mo |
+| Annual contract | 12 months prepaid (10% discount) | ₹5,40,000/yr |
+| Per additional camera | | ₹4,500/cam/mo |
+| | | |
+| **Year 1 Total** | Setup + hardware + 12 months | **₹15,40,000** |
+| **Year 2+ Total** | Subscription only | **₹6,00,000/yr** |
+
+#### Tier 3: WasteWatch Enterprise (Smart City / Multi-Site)
+
+| Item | Description | Price (INR) |
+|------|-------------|------------:|
+| Setup fee (one-time) | Multi-site architecture, AWS/hybrid deployment, custom integrations, training, SLA | ₹15,00,000 |
+| Infrastructure | AWS or dedicated on-prem servers, per-site hardware | Custom quote |
+| Monthly subscription | 16+ cameras, 24/7 support, SIP escalation cascade, analytics API, custom dashboards | ₹1,50,000/mo |
+| Annual contract | 12 months prepaid (15% discount) | ₹15,30,000/yr |
+| Per additional camera | Volume discount above 16 | ₹3,500/cam/mo |
+| | | |
+| **Year 1 Total** | Setup + infra + 12 months | **₹35,00,000+** |
+| **Year 2+ Total** | Subscription only | **₹18,00,000/yr** |
+
+### Margin Analysis (Bangalore Tier 1 Customer)
+
+| Item | Customer Pays (INR) | Our Cost (INR) | Gross Margin |
+|------|--------------------:|---------------:|:------------:|
+| Setup fee | ₹2,00,000 | ₹50,000 (2 engineer-days) | **75%** |
+| Hardware (pass-through) | ₹2,50,000 | ₹2,00,000 (procurement) | **20%** |
+| Monthly subscription | ₹25,000/mo | ₹5,540/mo (OPEX) | **78%** |
+| Annual subscription | ₹2,70,000/yr | ₹66,480/yr (OPEX) | **75%** |
+| **Year 1 blended** | **₹7,20,000** | **₹3,16,480** | **56%** |
+| **Year 2+ blended** | **₹3,00,000/yr** | **₹66,480/yr** | **78%** |
+
+### Competitive Positioning (Bangalore Market)
+
+| Competitor / Alternative | Price Range | WasteWatch Advantage |
+|--------------------------|-------------|----------------------|
+| Manual CCTV monitoring (guards) | ₹30,000-50,000/mo per site | 24/7 automated, no human fatigue, evidence-grade recording |
+| Generic CCTV analytics (Hikvision/Dahua) | ₹5-15 lakh setup + AMC | No waste-specific detection, no VLM, no action SGIE |
+| IBM Maximo / SAP IoT | ₹50+ lakh/yr | Overkill for waste monitoring, long deployment |
+| Custom ML solution (consultancy) | ₹20-50 lakh + ₹5-10 lakh/yr | 6-12 month build time, no productized platform |
+| **WasteWatch** | **₹7.2 lakh Y1, ₹3 lakh/yr** | **Purpose-built, <1s alerts, VLM + LPR, production-ready** |
+
+### Target Customers in Bangalore
+
+| Segment | Example | Cameras | Tier | Annual Value |
+|---------|---------|:-------:|:----:|------------:|
+| RWA (Residential) | Prestige Lakeside Habitat, Sobha Dream Acres | 4 | Starter | ₹3,00,000 |
+| LSG / Panchayat | BBMP ward offices, KSPCB monitoring sites | 4-8 | Starter/Pro | ₹3-6,00,000 |
+| Industrial Estate | Peenya Industrial Area, Electronic City | 8-16 | Professional | ₹6-18,00,000 |
+| Smart City SPV | Bengaluru Smart City Ltd | 16+ | Enterprise | ₹18,00,000+ |
+| Waste Management Co | Hasiru Dala, BWSSB transfer stations | 8 | Professional | ₹6,00,000 |
+| Tech Park | Manyata, RMZ Ecoworld, Embassy | 8-16 | Professional | ₹6-18,00,000 |
+
+### Payment Terms (Standard)
+
+- Setup fee: 50% advance, 50% on go-live
+- Hardware: 100% advance (pass-through procurement)
+- Subscription: Monthly or annual prepaid
+- Annual contracts: 10-15% discount
+- Multi-year (3yr): 20% discount on subscription
+- Multi-site: volume discount negotiable
+
+### ROI Pitch for Customer
+
+| Metric | Without WasteWatch | With WasteWatch |
+|--------|-------------------:|----------------:|
+| Waste dumping incidents/month | 15-30 | 2-5 (80% reduction) |
+| Fine collection (per incident, BBMP) | ₹0 (no evidence) | ₹5,000-25,000 |
+| Monthly fine revenue (8 incidents caught) | ₹0 | ₹40,000-2,00,000 |
+| Cleanup cost savings/month | ₹0 | ₹30,000-50,000 |
+| **Monthly ROI** | — | **₹70,000-2,50,000** |
+| **Payback period** | — | **3-6 months** |
+
+> **Key pitch**: WasteWatch pays for itself in 3-6 months through fine collection and cleanup cost savings. After payback, it generates net revenue for the LSG body.
+
+---
+
 *Copyright 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.*
 *WasteWatch is a product of Satyaki Solutions Pvt Ltd — https://satyaki.co.in*
