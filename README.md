@@ -178,21 +178,163 @@ The platform combines edge-optimized object detection (RF-DETR with TensorRT FP1
 
 ---
 
-## Services
+## Services — Microservices Architecture
 
-All services are defined in `docker-compose.yml`:
+WasteWatch runs as **15 Docker Compose services**: 6 infrastructure, 1 pipeline, and 8 backend microservices (same Docker image, different `CMD`).
 
-| Service | Image / Build | Port(s) | Purpose |
+### Infrastructure Services
+
+| Service | Image | Port(s) | Purpose |
 |---|---|---|---|
 | `kafka` | apache/kafka:3.7.0 | 9092 | Event streaming (KRaft mode, no ZooKeeper) |
-| `redis` | redis:7-alpine | 6379 | Caching and session state |
-| `mediamtx` | bluenviron/mediamtx | 8554, 8889, 9997 | RTSP ingest, WebRTC output, API |
+| `redis` | redis:7-alpine | 6379 | Caching, throttling, pipeline command channel |
+| `mediamtx` | bluenviron/mediamtx | 8554, 8889, 9997 | RTSP ingest, per-camera WebRTC output, API |
 | `keycloak` | keycloak:24.0 | 8180 | Identity and access management / SSO |
 | `qdrant` | qdrant/qdrant:v1.9 | 6333 | Vector store for semantic log search |
-| `api` | ./backend | 8080 | FastAPI REST + WebSocket backend |
-| `pipeline` | ./pipeline | -- | DeepStream inference pipeline (GPU) |
-| `vlm` | vLLM | 8000 | Qwen2.5-VL-7B vision-language model |
-| `tts` | Piper | 5500 | Text-to-speech audio generation |
+| `vlm` | vLLM | 8000 | Qwen2.5-VL-7B-AWQ vision-language model (GPU) |
+
+### AI Pipeline
+
+| Service | Image | GPU | Purpose |
+|---|---|---|---|
+| `pipeline` | DeepStream 7.0 | Required | PGIE (RF-DETR) + SGIE (Action Classifier) + ByteTrack + wastewatchmeta C plugin + NvDsSR smart recording + per-camera RTSP output |
+
+### Backend Microservices
+
+Each service consumes its own Kafka topics and scales independently. All use the same `./backend` Docker image with different `command`:
+
+| Service | Consumes | Produces | Purpose |
+|---|---|---|---|
+| `api` | — | — | FastAPI REST + WebSocket (no workers, thin) |
+| `vlm-worker` | `vlm.requests` | `vlm.results` | Qwen2.5-VL-7B waste dumping analysis |
+| `tts-worker` | `tts` | — | Piper TTS audio generation for IP speakers |
+| `lpr-worker` | `lpr` | — | PaddleOCR Indian license plate recognition |
+| `alert-svc` | `vlm.results`, `alerts` | — | Telegram + IP speaker + WebSocket dispatch |
+| `sip-svc` | `sip`, `alerts` | — | SIP/Twilio voice calls + escalation cascade |
+| `evidence-svc` | `evidence` | — | Video clip management + Dropbox cloud sync |
+| `log-worker` | `logs` | — | Centralized log ingestion + Qdrant vectors |
+
+### Communication
+
+| Channel | Purpose | Direction |
+|---|---|---|
+| **Kafka** (12 topics) | Data streaming — metadata, events, VLM, alerts, TTS, LPR, evidence, logs | Pipeline → Services, Service ↔ Service |
+| **Redis pub/sub** | Control commands — clear violation, update ROI, pause camera | Backend → Pipeline |
+| **WebSocket** | Real-time UI updates — detections, alerts, VLM enrichment | API → Frontend |
+
+---
+
+## Alert Priority System
+
+WasteWatch uses a **3-stage priority alert pipeline** that fires alerts in order within 5-20 seconds:
+
+### Priority Order
+
+| Priority | Channel | Trigger |
+|:--------:|---------|---------|
+| **P1** | Smart Recording | NvDsSRStart — 15s pre-buffer captures lead-up |
+| **P2** | VLM + LPR via Kafka | Confirm dumping + identify vehicle plate |
+| **P3** | SIP Call | Voice call to zone operator (immediate for P0_CRITICAL) |
+| **P4** | WebSocket | Dashboard red/yellow alert banner |
+| **P5** | Telegram | Push notification to zone operator's phone |
+| **P6** | IP Speaker | On-site audio deterrent |
+
+### Alert Stages
+
+```
+Stage 1: PRELIMINARY (T+200-500ms)
+    Detection consistent across 2-3 frames
+    → Recording starts, VLM requested, WebSocket warning
+
+Stage 2: CONFIRMED (T+500ms or dwell > 20s)
+    Action SGIE high-confidence OR dwell threshold met
+    → SIP call, Telegram, IP speaker, full fan-out
+
+Stage 3: ENRICHED (T+2-5s)
+    VLM + LPR results arrive
+    → Update alert severity, add plate number, waste type
+    → If VLM says NOT dumping → auto-downgrade + cancel SIP
+```
+
+### Escalation Cascade
+
+| Delay | Action |
+|------:|--------|
+| T+0s | IP Speaker + WebSocket + Telegram (instant) |
+| T+0s | SIP call if P0_CRITICAL (confidence > 0.8) |
+| T+60s | SIP call to primary operator (if not acknowledged) |
+| T+120s | SIP call to zone supervisor |
+| T+300s | SIP call to admin (final escalation) |
+
+### Auto-Stop / Auto-Recovery
+
+| Trigger | Action |
+|---------|--------|
+| Object leaves ROI for 5+ seconds | Stop recording, clear alert, fade bbox |
+| VLM says NOT dumping + stagnant dwell 10s | Downgrade to info, stop recording |
+| Track re-enters ROI within 60s | **Auto-recover**: restart full alert cascade |
+| High-conf dumping redetected on same track | **Auto-recover**: re-dispatch all channels |
+
+---
+
+## Resource Requirements
+
+### Minimum Deployment Specs
+
+| Tier | Setup | RAM | GPU | Cameras |
+|------|-------|----:|-----|--------:|
+| **Dev** | Single machine | 32 GB | RTX 3060 12GB | 4 cameras |
+| **Production (small)** | Single server | 64 GB | RTX 4080 16GB | 8 cameras |
+| **Production (large)** | 2 servers | 128 GB | 2x RTX 4090 24GB | 16+ cameras |
+
+### Per-Service Memory
+
+| Service | RAM | GPU VRAM | CPU |
+|---------|----:|--------:|----:|
+| `pipeline` (DeepStream) | 4 GB | 4-6 GB | 4 cores |
+| `vlm` (Qwen2.5-VL-7B-AWQ) | 8 GB | 6-8 GB | 2 cores |
+| `api` (FastAPI) | 256 MB | — | 1 core |
+| `vlm-worker` | 512 MB | — | 1 core |
+| `tts-worker` (Piper) | 512 MB | — | 1 core |
+| `lpr-worker` (PaddleOCR) | 1 GB | — | 2 cores |
+| `alert-svc` | 256 MB | — | 1 core |
+| `sip-svc` | 256 MB | — | 1 core |
+| `evidence-svc` | 512 MB | — | 1 core |
+| `log-worker` | 256 MB | — | 1 core |
+| `kafka` | 1 GB | — | 1 core |
+| `redis` | 256 MB | — | 1 core |
+| PostgreSQL | 512 MB | — | 1 core |
+| `keycloak` | 512 MB | — | 1 core |
+| `qdrant` | 512 MB | — | 1 core |
+| `mediamtx` | 128 MB | — | 1 core |
+| **TOTAL** | **~19 GB** | **~12 GB** | **~20 cores** |
+
+### GPU VRAM Breakdown (RTX 3060 12GB)
+
+```
+RF-DETR TensorRT FP16:        ~1.5 GB
+Action Classifier TensorRT:   ~0.3 GB
+ByteTrack tracker:             ~0.2 GB
+NvDsSR recording encoder:     ~0.5 GB
+nvvideoconvert + nvosd:        ~0.3 GB
+Per-camera decode (4 cams):    ~0.8 GB
+vLLM Qwen2.5-VL-7B-AWQ:       ~6.0 GB  (gpu-memory-utilization=0.6)
+─────────────────────────────────────────
+Total:                         ~9.6 GB / 12 GB available
+Headroom:                      ~2.4 GB
+```
+
+### Storage Requirements
+
+| Data | Size | Notes |
+|------|-----:|-------|
+| AI Models (Git LFS) | ~180 MB | RF-DETR ONNX + Action Classifier ONNX + Piper TTS |
+| TensorRT Engines | ~100 MB | Auto-built on first run, cached in Docker volume |
+| Docker Images | ~15 GB | DeepStream + vLLM + backend |
+| Evidence Recordings | ~50 MB/event | MP4 clips (pre+post buffer), snapshots, metadata |
+| PostgreSQL | ~1 GB/year | Cameras, events, alerts, tracks, VLM analyses, plates |
+| Kafka Logs | ~2 GB | Retention-based, configurable |
+| Qdrant Vectors | ~500 MB/year | Log embeddings for semantic search |
 
 ---
 
@@ -207,8 +349,9 @@ All services are defined in `docker-compose.yml`:
 | Docker Compose | v2.20+ |
 | PostgreSQL | 15+ (host or containerized) |
 | Node.js | 18+ (for frontend development) |
-| Python | 3.11+ (for backend development) |
-| VRAM | 8 GB+ (16 GB+ recommended for VLM) |
+| Python | 3.12+ (for backend development) |
+| RAM | 32 GB+ (19 GB for all services) |
+| VRAM | 12 GB+ (RTX 3060 minimum, RTX 4080+ recommended) |
 
 ---
 
@@ -531,36 +674,166 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 
 ## Deployment
 
-### Production
+### Local / On-Premise
 
 ```bash
-# Build all images
+# One-command setup
+bash scripts/setup.sh
+
+# Or manually:
 docker compose build
-
-# Start all services
 docker compose up -d
-
-# Verify
 docker compose ps
 curl http://localhost:8080/api/health
 ```
 
-### GPU Requirements
+### AWS Cloud Deployment Architecture
 
-The `pipeline` service requires the NVIDIA Container Toolkit. Ensure the Docker runtime is configured:
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            AWS VPC (10.0.0.0/16)                            │
+│                                                                             │
+│  ┌──── Public Subnet ────────────────────────────────────────────────────┐  │
+│  │                                                                       │  │
+│  │  CloudFront CDN ──→ ALB (Application Load Balancer)                   │  │
+│  │                       ├─→ :443 → api (Fargate)                        │  │
+│  │                       └─→ :8889 → mediamtx WebRTC (Fargate)           │  │
+│  │                                                                       │  │
+│  │  NAT Gateway (for private subnet egress)                              │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│  ┌──── Private Subnet A (GPU) ───────────────────────────────────────────┐  │
+│  │                                                                       │  │
+│  │  EC2 g5.2xlarge (NVIDIA A10G 24GB)                                    │  │
+│  │  ├── pipeline (DeepStream 7.0)        ~6 GB VRAM                      │  │
+│  │  └── vlm (vLLM Qwen2.5-VL-7B-AWQ)    ~8 GB VRAM                      │  │
+│  │                                                                       │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│  ┌──── Private Subnet B (Fargate — CPU microservices) ───────────────────┐  │
+│  │                                                                       │  │
+│  │  ECS Fargate Cluster                                                  │  │
+│  │  ├── api           (0.5 vCPU, 1 GB)    REST + WebSocket              │  │
+│  │  ├── vlm-worker    (0.5 vCPU, 1 GB)    VLM Kafka consumer            │  │
+│  │  ├── tts-worker    (0.5 vCPU, 1 GB)    Piper TTS audio               │  │
+│  │  ├── lpr-worker    (1 vCPU, 2 GB)      PaddleOCR plates              │  │
+│  │  ├── alert-svc     (0.25 vCPU, 512 MB) Telegram + IP speaker         │  │
+│  │  ├── sip-svc       (0.25 vCPU, 512 MB) SIP gateway + escalation      │  │
+│  │  ├── evidence-svc  (0.5 vCPU, 1 GB)    Evidence + S3 sync            │  │
+│  │  ├── log-worker    (0.25 vCPU, 512 MB) Qdrant log ingestion          │  │
+│  │  └── mediamtx      (0.5 vCPU, 512 MB)  RTSP/WebRTC media server      │  │
+│  │                                                                       │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│  ┌──── AWS Managed Services ─────────────────────────────────────────────┐  │
+│  │                                                                       │  │
+│  │  Amazon MSK (Kafka)         — 2 brokers, kafka.m5.large               │  │
+│  │  Amazon ElastiCache (Redis) — cache.t3.medium, 1 replica              │  │
+│  │  Amazon RDS (PostgreSQL)    — db.t3.medium, Multi-AZ                  │  │
+│  │  Amazon S3                  — Evidence storage (replaces Dropbox)      │  │
+│  │  Amazon ECR                 — Docker image registry                   │  │
+│  │  AWS Secrets Manager        — Keycloak passwords, API keys            │  │
+│  │                                                                       │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│  ┌──── Private Subnet C (Auth + Vector DB) ──────────────────────────────┐  │
+│  │                                                                       │  │
+│  │  Fargate: keycloak  (1 vCPU, 2 GB)   IAM/SSO                         │  │
+│  │  Fargate: qdrant    (0.5 vCPU, 1 GB) Vector log search               │  │
+│  │                                                                       │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
 
-```bash
-# Verify NVIDIA runtime
-docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
+External:
+  ├── Telegram Bot API      (alert push notifications)
+  ├── SIP/Twilio            (voice call escalation)
+  └── IP Speakers           (on-premise, connected via VPN)
 ```
 
-### Scaling Considerations
+### AWS Service Mapping
 
-- **Kafka**: Scale partitions per topic for higher throughput
-- **Pipeline**: One pipeline container per GPU; configure `WW_SOURCES` per instance
-- **VLM**: Requires 8 GB+ VRAM; use separate GPU or time-share with pipeline
-- **API**: Stateless; scale horizontally behind a load balancer
-- **Redis**: Use Redis Sentinel or Cluster for HA
+| WasteWatch Service | AWS Service | Instance / Config |
+|---|---|---|
+| `pipeline` + `vlm` | **EC2 g5.2xlarge** | NVIDIA A10G 24GB, 8 vCPU, 32 GB RAM |
+| `api` | **ECS Fargate** | 0.5 vCPU, 1 GB |
+| `vlm-worker` | **ECS Fargate** | 0.5 vCPU, 1 GB |
+| `tts-worker` | **ECS Fargate** | 0.5 vCPU, 1 GB |
+| `lpr-worker` | **ECS Fargate** | 1 vCPU, 2 GB |
+| `alert-svc` | **ECS Fargate** | 0.25 vCPU, 512 MB |
+| `sip-svc` | **ECS Fargate** | 0.25 vCPU, 512 MB |
+| `evidence-svc` | **ECS Fargate** | 0.5 vCPU, 1 GB |
+| `log-worker` | **ECS Fargate** | 0.25 vCPU, 512 MB |
+| `mediamtx` | **ECS Fargate** | 0.5 vCPU, 512 MB |
+| `keycloak` | **ECS Fargate** | 1 vCPU, 2 GB |
+| `qdrant` | **ECS Fargate** | 0.5 vCPU, 1 GB |
+| Kafka | **Amazon MSK** | 2x kafka.m5.large |
+| Redis | **Amazon ElastiCache** | cache.t3.medium |
+| PostgreSQL | **Amazon RDS** | db.t3.medium, Multi-AZ |
+| Evidence/Recordings | **Amazon S3** | Standard tier + lifecycle rules |
+| Docker Images | **Amazon ECR** | Private registry |
+| Secrets | **AWS Secrets Manager** | Keycloak, Telegram, Twilio tokens |
+| Load Balancer | **ALB** | HTTPS termination, WebSocket support |
+| CDN | **CloudFront** | Frontend static assets |
+
+### AWS Cost Estimation
+
+#### 4-Camera Deployment (Small LSG Body)
+
+| Resource | Service | Config | Monthly | Yearly |
+|----------|---------|--------|--------:|-------:|
+| GPU Instance | EC2 g5.2xlarge | 1x On-Demand | $958 | $11,496 |
+| | EC2 g5.2xlarge | 1x Reserved (1yr) | **$607** | **$7,284** |
+| Fargate (9 services) | ECS | ~5 vCPU, 10 GB total | $165 | $1,980 |
+| Kafka | MSK | 2x kafka.m5.large | $380 | $4,560 |
+| Redis | ElastiCache | cache.t3.medium | $47 | $564 |
+| PostgreSQL | RDS | db.t3.medium Multi-AZ | $98 | $1,176 |
+| S3 Storage | S3 | ~100 GB/month evidence | $3 | $36 |
+| Load Balancer | ALB | 1 ALB + data transfer | $25 | $300 |
+| ECR | ECR | ~5 GB images | $1 | $12 |
+| Secrets Manager | Secrets | ~10 secrets | $4 | $48 |
+| Data Transfer | VPC | ~500 GB/month | $45 | $540 |
+| **TOTAL (On-Demand)** | | | **$1,726** | **$20,712** |
+| **TOTAL (Reserved GPU)** | | | **$1,375** | **$16,500** |
+
+#### 8-Camera Deployment (Medium LSG Body)
+
+| Resource | Change | Monthly | Yearly |
+|----------|--------|--------:|-------:|
+| GPU | g5.4xlarge (A10G 24GB, more CPU) | $1,214 | $14,568 |
+| | Reserved 1yr | **$770** | **$9,240** |
+| Fargate | Scale lpr-worker x2, vlm-worker x2 | $220 | $2,640 |
+| MSK | 3x kafka.m5.large | $570 | $6,840 |
+| RDS | db.t3.large Multi-AZ | $196 | $2,352 |
+| S3 | ~200 GB/month | $5 | $60 |
+| Other | ALB + ElastiCache + transfer | $120 | $1,440 |
+| **TOTAL (Reserved GPU)** | | **$1,881** | **$22,572** |
+
+#### 16-Camera Deployment (Large LSG Body)
+
+| Resource | Change | Monthly | Yearly |
+|----------|--------|--------:|-------:|
+| GPU | 2x g5.2xlarge (pipeline + VLM separate) | $1,214 | $14,568 |
+| | Reserved 1yr | **$1,214** | **$14,568** |
+| Fargate | Scale all workers x2-3 | $400 | $4,800 |
+| MSK | 3x kafka.m5.xlarge | $760 | $9,120 |
+| RDS | db.r6g.large Multi-AZ | $350 | $4,200 |
+| S3 | ~500 GB/month | $12 | $144 |
+| Other | ALB + ElastiCache + transfer | $180 | $2,160 |
+| **TOTAL (Reserved GPU)** | | **$2,916** | **$34,992** |
+
+#### Cost Optimization Tips
+
+| Strategy | Savings |
+|----------|--------:|
+| EC2 Reserved Instances (1yr) | ~37% on GPU |
+| EC2 Reserved Instances (3yr) | ~55% on GPU |
+| Spot Instances for VLM (interruptible) | ~70% on VLM GPU |
+| Fargate Spot for non-critical workers (log, evidence) | ~70% on Fargate |
+| S3 Intelligent Tiering for old evidence | ~40% on storage |
+| NAT Gateway → VPC endpoints for S3/ECR | ~$30/month |
+| Scale down non-business hours (8pm-6am) | ~40% on Fargate |
+
+> **Note**: Prices based on AWS ap-south-1 (Mumbai) region as of 2026. Actual costs vary by region, usage patterns, and negotiated rates. GPU Reserved Instance pricing assumes Standard 1-year All Upfront.
 
 ---
 
