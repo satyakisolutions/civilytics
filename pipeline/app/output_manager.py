@@ -95,9 +95,17 @@ class OutputStreamManager:
         """Create a per-camera output encoding chain.
 
         Requests a src pad from nvstreamdemux for the given source_id,
-        builds the encoding pipeline (nvvideoconvert → capsfilter →
-        nvv4l2h264enc → rtph264pay → udpsink), links everything, and
-        syncs the element states with the running pipeline.
+        builds the encoding pipeline
+
+            queue → nvvideoconvert → caps → nvv4l2h264enc → h264parse
+                  → rtspclientsink location=rtsp://mediamtx:8554/<cam>-out
+
+        rtspclientsink *pushes* an RTSP ANNOUNCE to the mediamtx
+        server, which is the only ingress mode mediamtx actually
+        accepts for live encoded H.264 (its `source: udp://...`
+        form expects MPEG-TS, not raw RTP, so a plain `udpsink`
+        leaves `cam-01-out` permanently empty and the frontend
+        sees 404).
 
         Args:
             camera_id: Logical camera identifier (e.g. "cam-01").
@@ -140,32 +148,66 @@ class OutputStreamManager:
                 "nvv4l2h264enc", f"h264enc_{camera_id}"
             )
             h264enc.set_property("bitrate", 4_000_000)
+            # Emit IDR frames every 30 frames (~1s at 30fps) so WebRTC
+            # subscribers can start decoding quickly after join.
+            try:
+                h264enc.set_property("iframeinterval", 30)
+            except Exception:
+                pass
+            # Zero-latency preset when the encoder supports it (Jetson
+            # and recent desktop DeepStream builds).
+            try:
+                h264enc.set_property("preset-level", 1)  # 1 = UltraFastPreset
+            except Exception:
+                pass
 
-            rtppay = Gst.ElementFactory.make("rtph264pay", f"rtppay_{camera_id}")
-            rtppay.set_property("config-interval", 1)
-            rtppay.set_property("pt", 96)
+            # Required by rtspclientsink: the payload must be wrapped in
+            # a parser so the element can inspect SPS/PPS for the SDP.
+            h264parse = Gst.ElementFactory.make(
+                "h264parse", f"h264parse_out_{camera_id}"
+            )
+            if h264parse is not None:
+                h264parse.set_property("config-interval", -1)
 
-            udpsink = Gst.ElementFactory.make("udpsink", f"udpsink_{camera_id}")
-            udpsink.set_property("host", self._mediamtx_host)
-            udpsink.set_property("port", rtp_port)
-            udpsink.set_property("sync", False)
-            udpsink.set_property("async", False)
+            # rtspclientsink pushes an RTSP ANNOUNCE to mediamtx at the
+            # given `location`. mediamtx's `paths.<cam>-out.source` must
+            # be `publisher` (the default) — we do NOT need the per-cam
+            # `source: udp://...` stanza in mediamtx.yml at all for this
+            # mode; the path gets created on first publish.
+            rtspsink = Gst.ElementFactory.make(
+                "rtspclientsink", f"rtspsink_{camera_id}"
+            )
+            if rtspsink is not None:
+                rtspsink.set_property("location", rtsp_url)
+                # TCP transport — more reliable than UDP on loopback,
+                # and the LSG mediamtx.yml already uses `protocols: [tcp]`.
+                try:
+                    rtspsink.set_property("protocols", 0x4)  # GST_RTSP_LOWER_TRANS_TCP
+                except Exception:
+                    pass
+                # Reduce latency for live monitoring walls.
+                try:
+                    rtspsink.set_property("latency", 0)
+                except Exception:
+                    pass
 
-            elements = [queue, nvvidconv, capsfilter, h264enc, rtppay, udpsink]
+            elements = [queue, nvvidconv, capsfilter, h264enc, h264parse, rtspsink]
 
             # Verify all elements were created
             for elem in elements:
                 if elem is None:
                     raise RuntimeError(
                         f"Failed to create GStreamer element in output branch "
-                        f"for {camera_id}"
+                        f"for {camera_id} "
+                        f"(rtspclientsink requires `gstreamer1.0-rtsp` in the "
+                        f"pipeline image)"
                     )
 
             # --- Add to pipeline ------------------------------------------
             for elem in elements:
                 self._pipeline.add(elem)
 
-            # --- Link: queue → nvvidconv → caps → h264enc → rtppay → udpsink
+            # --- Link: queue → nvvidconv → caps → h264enc → h264parse → rtspsink
             if not queue.link(nvvidconv):
                 raise RuntimeError(
                     f"Failed to link queue → nvvidconv for {camera_id}"
@@ -178,13 +220,13 @@ class OutputStreamManager:
                 raise RuntimeError(
                     f"Failed to link capsfilter → h264enc for {camera_id}"
                 )
-            if not h264enc.link(rtppay):
+            if not h264enc.link(h264parse):
                 raise RuntimeError(
-                    f"Failed to link h264enc → rtppay for {camera_id}"
+                    f"Failed to link h264enc → h264parse for {camera_id}"
                 )
-            if not rtppay.link(udpsink):
+            if not h264parse.link(rtspsink):
                 raise RuntimeError(
-                    f"Failed to link rtppay → udpsink for {camera_id}"
+                    f"Failed to link h264parse → rtspsink for {camera_id}"
                 )
 
             # --- Link demux src pad → queue sink pad ----------------------

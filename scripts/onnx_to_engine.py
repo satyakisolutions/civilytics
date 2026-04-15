@@ -70,6 +70,14 @@ class ModelSpec:
     # (onnxsim's default) to avoid removing weights that RF-DETR's
     # tokenwise logic relies on.
     skip_constant_folding: bool = False
+    # If set, append a DeepStream-compatible head that fuses the two
+    # RF-DETR outputs (dets [N,Q,4] cxcywh-normalised + labels [N,Q,C]
+    # logits) into a single YOLO-style output [N,Q,6] where each row
+    # is (x1, y1, x2, y2, score, class_id). This mirrors the
+    # `DeepStreamOutput` nn.Module from marcoslucianops/DeepStream-Yolo
+    # (utils/export_rfdetr.py) so the compiled `NvDsInferParseYolo`
+    # C++ parser in pipeline/nvdsinfer_custom_impl_Yolo can decode it.
+    rfdetr_deepstream_head: bool = False
 
 
 MODELS: list[ModelSpec] = [
@@ -81,6 +89,7 @@ MODELS: list[ModelSpec] = [
         min_batch=1, opt_batch=1, max_batch=1,
         workspace_mb=4096,
         fp16=True,
+        rfdetr_deepstream_head=True,
     ),
     ModelSpec(
         key="action",
@@ -257,16 +266,28 @@ def sanitise_onnx(spec: ModelSpec, onnx_path: Path) -> None:
     if froze:
         log(f"  graphsurgeon: froze {froze} dynamic Reshape target shape(s)")
 
-    if folded or froze or reduce_converted:
+    head_appended = False
+    if spec.rfdetr_deepstream_head:
+        # Re-import the model into graphsurgeon (if we haven't already)
+        # so we can append nodes before exporting.
+        if not (folded or froze or reduce_converted):
+            graph = gs.import_onnx(model)
+        try:
+            append_rfdetr_deepstream_head(graph, pinned)
+            head_appended = True
+            log("  graphsurgeon: appended DeepStreamOutput head "
+                "(boxes cxcywh->xyxy, scores.sigmoid + argmax, concat -> [N,Q,6])")
+        except Exception as e:  # pragma: no cover
+            log(f"  WARNING: DeepStreamOutput head append FAILED: {e}")
+
+    if folded or froze or reduce_converted or head_appended:
         graph.cleanup().toposort()
         model = gs.export_onnx(graph)
-        # Our Reduce-op attribute conversion targets opset<=13 semantics
-        # while the rest of the graph may still be opset 18. That is a
-        # TRT-parser-friendly hybrid that `onnx.checker.check_model`
-        # legitimately rejects under strict schema rules. Skip the
-        # strict checker in that case — trtexec will catch anything
-        # the parser actually can't consume.
-        skip_check = reduce_converted > 0
+        # Skip strict schema checking any time we've done surgery:
+        #   * Reduce attribute conversion violates opset 13+ schema.
+        #   * DeepStream head appends intermediates whose rank may
+        #     not be fully inferable until TRT runs its own parser.
+        skip_check = bool(reduce_converted or head_appended)
     else:
         skip_check = False
 
@@ -281,6 +302,187 @@ def sanitise_onnx(spec: ModelSpec, onnx_path: Path) -> None:
     after = count_ops(onnx_path)
     log(f"  ops after : ScatterND={after.get('ScatterND', 0)} "
         f"Shape={after.get('Shape', 0)} Reshape={after.get('Reshape', 0)}")
+
+
+def append_rfdetr_deepstream_head(graph, pinned_input_shape: list[int]) -> None:
+    """Append the marcoslucianops DeepStreamOutput head to an RF-DETR graph.
+
+    The original RF-DETR ONNX exposes two outputs:
+        dets    [N, Q, 4]    normalised cxcywh
+        labels  [N, Q, C]    logits per class
+
+    DeepStream's `NvDsInferParseYolo` parser wants ONE output:
+        output  [N, Q, 6]    (x1, y1, x2, y2, score, class_id)
+
+    This function inserts the necessary ONNX nodes inline and swaps
+    the graph outputs over to the new fused tensor. Everything below
+    matches the PyTorch body of
+    `utils/export_rfdetr.py::DeepStreamOutput` from DeepStream-Yolo.
+    """
+    import numpy as np
+    import onnx_graphsurgeon as gs
+
+    if len(pinned_input_shape) != 4:
+        raise ValueError(
+            f"RF-DETR head needs a 4D input [N,C,H,W], got {pinned_input_shape}"
+        )
+    _, _, img_h, img_w = pinned_input_shape
+
+    # Locate the `dets` and `labels` tensors (graph outputs by name).
+    outputs_by_name = {o.name: o for o in graph.outputs}
+    if "dets" not in outputs_by_name or "labels" not in outputs_by_name:
+        # Fall back: use the first/second outputs in declaration order.
+        if len(graph.outputs) < 2:
+            raise ValueError(
+                f"Expected >=2 outputs for RF-DETR, got {len(graph.outputs)}"
+            )
+        dets_tensor = graph.outputs[0]
+        labels_tensor = graph.outputs[1]
+    else:
+        dets_tensor = outputs_by_name["dets"]
+        labels_tensor = outputs_by_name["labels"]
+
+    # Derive num_queries + num_classes from the upstream tensor shapes
+    # so we can give every intermediate Variable a concrete shape.
+    # Without shapes the ONNX proto serialiser fails with
+    #     "Field 'shape' of 'type' is required but missing."
+    def _to_int(d):
+        return int(d) if isinstance(d, (int, float)) else None
+
+    dets_shape = list(dets_tensor.shape or [1, 300, 4])
+    labels_shape = list(labels_tensor.shape or [1, 300, 91])
+    batch = _to_int(dets_shape[0]) or 1
+    num_queries = _to_int(dets_shape[1]) or 300
+    num_classes = _to_int(labels_shape[-1]) or 91
+
+    # ---- Box decode: cxcywh -> xyxy using a constant 4x4 matrix ----
+    # The PyTorch version does `boxes @ [[1,0,1,0],[0,1,0,1],
+    # [-0.5,0,0.5,0],[0,-0.5,0,0.5]]` which maps (cx,cy,w,h) -> (x1,y1,x2,y2).
+    convert_matrix = np.array(
+        [
+            [1.0, 0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [-0.5, 0.0, 0.5, 0.0],
+            [0.0, -0.5, 0.0, 0.5],
+        ],
+        dtype=np.float32,
+    )
+    convert_const = gs.Constant(name="rfdetr_convert_mat", values=convert_matrix)
+
+    xyxy_norm = gs.Variable(
+        name="rfdetr_xyxy_norm",
+        dtype=np.float32,
+        shape=[batch, num_queries, 4],
+    )
+    matmul_node = gs.Node(
+        op="MatMul",
+        name="rfdetr_head_matmul",
+        inputs=[dets_tensor, convert_const],
+        outputs=[xyxy_norm],
+    )
+    graph.nodes.append(matmul_node)
+
+    # ---- Scale xyxy from normalised [0,1] to pixel space ----
+    # Shape of the scale vector: [1, 1, 4] = [W, H, W, H]
+    scale_values = np.array([[[float(img_w), float(img_h), float(img_w), float(img_h)]]], dtype=np.float32)
+    scale_const = gs.Constant(name="rfdetr_xyxy_scale", values=scale_values)
+    xyxy_pixel = gs.Variable(
+        name="rfdetr_xyxy_pixel",
+        dtype=np.float32,
+        shape=[batch, num_queries, 4],
+    )
+    mul_node = gs.Node(
+        op="Mul",
+        name="rfdetr_head_scale",
+        inputs=[xyxy_norm, scale_const],
+        outputs=[xyxy_pixel],
+    )
+    graph.nodes.append(mul_node)
+
+    # ---- Sigmoid(labels) -> scores [N, Q, C] ----
+    scores = gs.Variable(
+        name="rfdetr_scores",
+        dtype=np.float32,
+        shape=[batch, num_queries, num_classes],
+    )
+    sig_node = gs.Node(
+        op="Sigmoid",
+        name="rfdetr_head_sigmoid",
+        inputs=[labels_tensor],
+        outputs=[scores],
+    )
+    graph.nodes.append(sig_node)
+
+    # ---- ReduceMax over last axis -> max_score [N, Q, 1] (keepdims=1) ----
+    # Use axes-attribute form, matching our Reduce surgery convention
+    # (TRT 8.6 ONNX parser handles the attribute form reliably).
+    max_score = gs.Variable(
+        name="rfdetr_max_score",
+        dtype=np.float32,
+        shape=[batch, num_queries, 1],
+    )
+    reduce_max_node = gs.Node(
+        op="ReduceMax",
+        name="rfdetr_head_reduce_max",
+        inputs=[scores],
+        outputs=[max_score],
+        attrs={"axes": [-1], "keepdims": 1},
+    )
+    graph.nodes.append(reduce_max_node)
+
+    # ---- ArgMax over last axis -> class_id [N, Q, 1] as int64 ----
+    class_id_i64 = gs.Variable(
+        name="rfdetr_class_id_i64",
+        dtype=np.int64,
+        shape=[batch, num_queries, 1],
+    )
+    argmax_node = gs.Node(
+        op="ArgMax",
+        name="rfdetr_head_argmax",
+        inputs=[scores],
+        outputs=[class_id_i64],
+        attrs={"axis": -1, "keepdims": 1},
+    )
+    graph.nodes.append(argmax_node)
+
+    # ---- Cast class_id to float ----
+    class_id_f32 = gs.Variable(
+        name="rfdetr_class_id_f32",
+        dtype=np.float32,
+        shape=[batch, num_queries, 1],
+    )
+    cast_node = gs.Node(
+        op="Cast",
+        name="rfdetr_head_class_cast",
+        inputs=[class_id_i64],
+        outputs=[class_id_f32],
+        attrs={"to": int(onnx_helper_TensorProto_FLOAT())},
+    )
+    graph.nodes.append(cast_node)
+
+    # ---- Concat([xyxy_pixel, max_score, class_id_f32], axis=-1) -> [N,Q,6] ----
+    fused_output = gs.Variable(
+        name="output",
+        dtype=np.float32,
+        shape=[batch, num_queries, 6],
+    )
+    concat_node = gs.Node(
+        op="Concat",
+        name="rfdetr_head_concat",
+        inputs=[xyxy_pixel, max_score, class_id_f32],
+        outputs=[fused_output],
+        attrs={"axis": -1},
+    )
+    graph.nodes.append(concat_node)
+
+    # Swap graph outputs: drop dets + labels, expose `output`.
+    graph.outputs = [fused_output]
+
+
+def onnx_helper_TensorProto_FLOAT() -> int:
+    # ONNX TensorProto.FLOAT = 1; local helper avoids importing onnx.TensorProto
+    # at module-top since this function is a hot-path for the surgeon.
+    return 1
 
 
 def _resolve_constant_chain(tensor) -> "np.ndarray | None":

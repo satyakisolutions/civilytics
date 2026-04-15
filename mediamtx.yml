@@ -14,28 +14,12 @@ paths:
   all_others:
 
   # --- Per-camera annotated output streams (from DeepStream pipeline) ---
-  # Each camera's inference output is published via RTP/UDP to a unique port.
-  # The frontend connects to these paths via WebRTC (WHEP) for live viewing.
-  # WebRTC URLs: http://mediamtx:8889/{path}/whep
-  #
-  # NOTE: the DeepStream pipeline allocates output UDP ports sequentially
-  # starting at 20000 in the order cameras are added. When cam-01 is the
-  # only active camera it gets port 20000, NOT 20001. We map cam-01-out
-  # to 20000 for that single-camera case and keep the legacy cam-00-out
-  # slot on 20001 so adding a second camera lands on a different port.
-  cam-01-out:
-    source: udp://0.0.0.0:20000
-  cam-00-out:
-    source: udp://0.0.0.0:20001
-  cam-02-out:
-    source: udp://0.0.0.0:20002
-  cam-03-out:
-    source: udp://0.0.0.0:20003
-  cam-04-out:
-    source: udp://0.0.0.0:20004
-  cam-05-out:
-    source: udp://0.0.0.0:20005
-  cam-06-out:
-    source: udp://0.0.0.0:20006
-  cam-07-out:
-    source: udp://0.0.0.0:20007
+  # The DeepStream pipeline now pushes each camera's annotated output to
+  # mediamtx via RTSP ANNOUNCE (rtspclientsink) instead of raw UDP/RTP.
+  # Paths are created on first publish against the `all_others` default
+  # (source: publisher), so no per-camera stanza is required here.
+  # The frontend reads them via WebRTC at
+  #   http://mediamtx:8889/{path}/whep
+  # Leaving the old `cam-XX-out: source: udp://...` stanzas in place
+  # would make mediamtx reserve those paths as UDP-MPEG-TS pullers and
+  # then reject the RTSP ANNOUNCE with 400 Bad Request.

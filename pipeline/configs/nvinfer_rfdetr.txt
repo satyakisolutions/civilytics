@@ -26,17 +26,21 @@ network-mode=2
 num-detected-classes=80
 interval=2
 gie-unique-id=1
-# RF-DETR outputs two tensors (`labels` [N,num_classes] + `dets` [N,4]),
-# which DeepStream's built-in single-tensor bbox parser can't decode.
-# Setting network-type=100 ("other") turns off DS's automatic
-# parsing — the pipeline's Python probe at pipeline/app/pipeline.py
-# reads the raw NvDsInferTensorMeta and does the top-k + sigmoid +
-# xyxy-conversion itself.
-output-blob-names=labels;dets
-network-type=100
-output-tensor-meta=1
+# RF-DETR exports two tensors natively (`labels` [N,Q,C] + `dets` [N,Q,4]);
+# scripts/onnx_to_engine.py appends a DeepStreamOutput head via ONNX
+# graphsurgeon that fuses them into a single YOLO-compatible layout
+#   output  [N, Q, 6]  where each row is (x1, y1, x2, y2, score, class_id)
+# Those bboxes are then decoded by marcoslucianops' NvDsInferParseYolo
+# parser compiled into libnvdsinfer_custom_impl_Yolo.so (see
+# pipeline/nvdsinfer_custom_impl_Yolo/Makefile).
+output-blob-names=output
+network-type=0
+parse-bbox-func-name=NvDsInferParseYolo
+custom-lib-path=/app/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so
 cluster-mode=4
-maintain-aspect-ratio=1
+# RF-DETR does not resize with padding — disable maintain-aspect-ratio
+# per the upstream guidance in DeepStream-Yolo/docs/RFDETR.md.
+maintain-aspect-ratio=0
 
 # Default: suppress all irrelevant COCO classes
 [class-attrs-all]
