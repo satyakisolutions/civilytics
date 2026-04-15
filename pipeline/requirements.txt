@@ -1,5 +1,16 @@
-pyds==1.1.11
+# pyds is preinstalled in nvcr.io/nvidia/deepstream base image
 confluent-kafka==2.6.1
 orjson==3.10.12
 pydantic-settings==2.7.1
 httpx==0.28.1
+
+# ONNX sanitisation stack for scripts/onnx_to_engine.py. Pinned so
+# onnxsim can consume the graph produced by torch.onnx.export from the
+# current `rfdetr` / `torchvision` packages, and so onnx_graphsurgeon
+# is compatible with the ONNX ir_version (8 for rfdetr, 10 for the
+# action classifier MobileNet-V2 export).
+numpy==1.26.4
+onnx==1.17.0
+onnxsim==0.4.36
+onnxruntime==1.20.1
+onnx-graphsurgeon==0.5.2

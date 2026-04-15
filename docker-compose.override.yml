@@ -12,6 +12,48 @@ services:
   # NOTE: host-port remap for api is done in docker-compose.yml directly
   # because Compose merge semantics make !reset unreliable across versions.
 
+  # Bind-mount the pipeline models dir so ONNX changes on the host are
+  # picked up without having to rebuild the 30 GB DeepStream image.
+  pipeline:
+    volumes:
+      - ./pipeline/models:/app/models:rw
+      - ./pipeline/configs:/app/configs:rw
+      - ./scripts:/scripts:ro
+    environment:
+      # Comma-separated list of `cam-id=rtsp://...` pairs. cam-01 is
+      # the only live camera right now (the other sample clips are fed
+      # to the VLM worker as historical footage via history-publisher).
+      WW_SOURCES: "cam-01=rtsp://mediamtx:8554/cam-01"
+
+  # One-shot ONNX -> TRT engine converter. Reuses the pipeline image
+  # (has CUDA + trtexec + our onnx/onnxsim/onnx_graphsurgeon pins).
+  # Runs as root so it can write sanitised ONNX back to the bind-mounted
+  # models dir regardless of host uid; the long-running pipeline service
+  # keeps its non-root `appuser` identity untouched.
+  # Usage:
+  #   docker compose run --rm onnx-to-engine              # all models
+  #   docker compose run --rm onnx-to-engine rfdetr       # just RF-DETR
+  #   docker compose run --rm onnx-to-engine --force      # rebuild existing
+  onnx-to-engine:
+    build:
+      context: ./pipeline
+    image: lsg-wastewatch-pipeline
+    container_name: lsg-onnx-to-engine
+    user: "0:0"
+    volumes:
+      - ./pipeline/models:/app/models:rw
+      - ./pipeline/configs:/app/configs:ro
+      - ./scripts:/scripts:ro
+    entrypoint: ["python3", "-u", "/scripts/onnx_to_engine.py"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: "no"
+
   # One-shot container that replays recorded clips through a GStreamer
   # pipeline ending in the custom `wastewatchvlmpublisher` sink, which
   # publishes one VLMRequest per clip into Kafka for the VLM worker to

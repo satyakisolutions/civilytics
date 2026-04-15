@@ -17,9 +17,15 @@ paths:
   # Each camera's inference output is published via RTP/UDP to a unique port.
   # The frontend connects to these paths via WebRTC (WHEP) for live viewing.
   # WebRTC URLs: http://mediamtx:8889/{path}/whep
-  cam-00-out:
-    source: udp://0.0.0.0:20000
+  #
+  # NOTE: the DeepStream pipeline allocates output UDP ports sequentially
+  # starting at 20000 in the order cameras are added. When cam-01 is the
+  # only active camera it gets port 20000, NOT 20001. We map cam-01-out
+  # to 20000 for that single-camera case and keep the legacy cam-00-out
+  # slot on 20001 so adding a second camera lands on a different port.
   cam-01-out:
+    source: udp://0.0.0.0:20000
+  cam-00-out:
     source: udp://0.0.0.0:20001
   cam-02-out:
     source: udp://0.0.0.0:20002

@@ -61,13 +61,20 @@ class EngineSpec:
 # Engine specifications for all models
 ENGINES: list[EngineSpec] = [
     EngineSpec(
+        # RF-DETR base exports ONNX at 560x560 with a static batch of 1.
+        # (This is the default from `rfdetr.RFDETRBase().export()`.) The
+        # ONNX was previously written as if it were a 640x640 dynamic-
+        # batch export, which the TRT 8.6 builder then rejected on the
+        # first Shape/ScatterND it hit. Keep the engine matched to the
+        # shape the model was actually trained for — also update
+        # configs/nvinfer_rfdetr.txt so DeepStream feeds 560x560 crops.
         name="RF-DETR (PGIE)",
         onnx_path=MODELS_DIR / "rfdetr" / "rfdetr.onnx",
         engine_path=MODELS_DIR / "rfdetr" / "rfdetr_fp16.engine",
         export_script="export_rfdetr_onnx.py",
-        min_shapes="input:1x3x640x640",
-        opt_shapes="input:4x3x640x640",
-        max_shapes="input:8x3x640x640",
+        min_shapes="input:1x3x560x560",
+        opt_shapes="input:1x3x560x560",
+        max_shapes="input:1x3x560x560",
         workspace_mb=4096,
     ),
     EngineSpec(

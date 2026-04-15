@@ -44,3 +44,7 @@ backend/.coverage
 sample_videos/*.mp4
 sample_videos/*.MP4
 local-config/
+
+# LSG bring-up: TRT engines + onnx originals (rebuild via scripts/onnx_to_engine.py)
+pipeline/models/**/*.engine
+pipeline/models/**/*.orig.onnx

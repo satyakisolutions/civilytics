@@ -387,7 +387,12 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     nvtracker.set_property("ll-lib-file", cfg.tracker_ll_lib)
     nvtracker.set_property("ll-config-file", cfg.tracker_config_path)
     nvtracker.set_property("gpu-id", 0)
-    nvtracker.set_property("enable-batch-process", 1)
+    # DeepStream 7.0 removed `enable-batch-process` from nvtracker —
+    # batch processing is now always on. Set it only on legacy DS 6.x
+    # (where it exists as a GObject property).
+    _tracker_props = {p.name for p in nvtracker.list_properties()}
+    if "enable-batch-process" in _tracker_props:
+        nvtracker.set_property("enable-batch-process", 1)
     pipeline.add(nvtracker)
 
     # --- Analytics (ROI / line-crossing via nvdsanalytics) ------------------

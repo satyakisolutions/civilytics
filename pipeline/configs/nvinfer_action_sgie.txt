@@ -8,8 +8,8 @@
 gpu-id=0
 net-scale-factor=0.00784313725
 offsets=127.5;127.5;127.5
-model-engine-file=models/action_classifier/action_classifier_fp16.engine
-onnx-file=models/action_classifier/action_classifier.onnx
+model-engine-file=/app/models/action_classifier/action_classifier_fp16.engine
+onnx-file=/app/models/action_classifier/action_classifier.onnx
 labelfile-path=configs/action_labels.txt
 batch-size=16
 process-mode=2

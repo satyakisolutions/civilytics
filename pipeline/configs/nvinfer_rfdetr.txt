@@ -7,19 +7,35 @@
 [property]
 gpu-id=0
 net-scale-factor=0.00392156862745
-infer-dims=3;640;640
-model-engine-file=models/rfdetr/rfdetr_fp16.engine
-onnx-file=models/rfdetr/rfdetr.onnx
-labelfile-path=configs/labels.txt
-batch-size=4
+# RF-DETR base was exported at 560x560 with static batch=1 (see
+# pipeline/app/engine_builder.py for the matching TRT min/opt/max
+# shapes). Keep nvinfer and the engine spec in lock-step or DeepStream
+# will silently resize/crop and confuse the position-embedding layer.
+infer-dims=3;560;560
+# Absolute paths — DeepStream resolves relative model-engine-file
+# relative to the nvinfer config file's directory (/app/configs),
+# not the pipeline cwd. Using absolute /app/models/... keeps both
+# the bind-mount override and the baked-in fallback working.
+model-engine-file=/app/models/rfdetr/rfdetr_fp16.engine
+onnx-file=/app/models/rfdetr/rfdetr.onnx
+labelfile-path=/app/configs/labels.txt
+batch-size=1
 process-mode=1
 model-color-format=0
 network-mode=2
 num-detected-classes=80
 interval=2
 gie-unique-id=1
-output-blob-names=output
-cluster-mode=2
+# RF-DETR outputs two tensors (`labels` [N,num_classes] + `dets` [N,4]),
+# which DeepStream's built-in single-tensor bbox parser can't decode.
+# Setting network-type=100 ("other") turns off DS's automatic
+# parsing — the pipeline's Python probe at pipeline/app/pipeline.py
+# reads the raw NvDsInferTensorMeta and does the top-k + sigmoid +
+# xyxy-conversion itself.
+output-blob-names=labels;dets
+network-type=100
+output-tensor-meta=1
+cluster-mode=4
 maintain-aspect-ratio=1
 
 # Default: suppress all irrelevant COCO classes
