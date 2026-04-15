@@ -315,6 +315,43 @@
   }
 }
 
+/*
+ * Alert border pulse — used on camera feed cards while the corresponding
+ * camera has an active critical/warning alert. Alternates the border
+ * colour and adds an outward shadow so the card reads as "on fire" from
+ * across a large monitoring wall. Tuned to ~1.1s so it's noticeable
+ * without being seizure-inducing during shift handover.
+ */
+@keyframes alert-border-pulse {
+  0%, 100% {
+    border-color: hsl(var(--destructive));
+    box-shadow:
+      0 0 0 0 hsl(var(--destructive) / 0.55),
+      0 0 14px 2px hsl(var(--destructive) / 0.55);
+  }
+  50% {
+    border-color: hsl(var(--destructive) / 0.35);
+    box-shadow:
+      0 0 0 4px hsl(var(--destructive) / 0),
+      0 0 24px 6px hsl(var(--destructive) / 0.15);
+  }
+}
+
+@keyframes alert-border-pulse-warning {
+  0%, 100% {
+    border-color: hsl(38 92% 50%);
+    box-shadow:
+      0 0 0 0 hsl(38 92% 50% / 0.55),
+      0 0 12px 2px hsl(38 92% 50% / 0.5);
+  }
+  50% {
+    border-color: hsl(38 92% 50% / 0.4);
+    box-shadow:
+      0 0 0 4px hsl(38 92% 50% / 0),
+      0 0 22px 5px hsl(38 92% 50% / 0.18);
+  }
+}
+
 @keyframes slide-in-right {
   from {
     transform: translateX(100%);
@@ -343,4 +380,30 @@
 
 .animate-fade-in-up {
   animation: fade-in-up 0.3s ease-out;
+}
+
+/*
+ * Apply to any element that should pulse a red border while an alert
+ * is active. Requires `border` (any width) + a visible border colour
+ * baseline so the animation's color changes are visible.
+ */
+.animate-alert-border {
+  animation: alert-border-pulse 1.1s ease-in-out infinite;
+  border-width: 2px !important;
+  border-style: solid !important;
+}
+
+.animate-alert-border-warning {
+  animation: alert-border-pulse-warning 1.3s ease-in-out infinite;
+  border-width: 2px !important;
+  border-style: solid !important;
+}
+
+/* Pair with a `prefers-reduced-motion: reduce` opt-out for accessibility. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-alert-border,
+  .animate-alert-border-warning {
+    animation: none;
+    border-color: hsl(var(--destructive)) !important;
+  }
 }
