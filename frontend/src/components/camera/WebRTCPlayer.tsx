@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHand
 import { Loader2, WifiOff, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { MEDIAMTX_BASE } from '@/lib/api-base';
 
 export interface WebRTCPlayerHandle {
   captureFrame: () => string | null;
@@ -20,62 +21,131 @@ interface WebRTCPlayerProps {
 
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'failed' | 'reconnecting';
 
+const MAX_RECONNECT_ATTEMPTS = 5;
+
+/**
+ * WHEP (WebRTC-HTTP Egress Protocol) player for MediaMTX.
+ *
+ * The previous version of this component had a subtle re-entrancy
+ * bug: the `connect` function was a `useCallback` that depended on
+ * `reconnectAttempts`, and the `useEffect` calling `connect` listed
+ * `connect` in its dep array. Every failed connection bumped
+ * `reconnectAttempts` -> new `connect` ref -> useEffect re-ran ->
+ * the cleanup tore down the FRESH RTCPeerConnection that had just
+ * been created -> the next attempt bumped the counter again -> repeat.
+ * End result: the player looked like it was "keeping disconnected"
+ * because it was thrashing peer connections in a loop instead of
+ * actually settling on one.
+ *
+ * This version keeps all the volatile state (reconnect counter,
+ * the mutable callbacks the user passes, the current pc) in refs,
+ * and the only thing the main useEffect watches is `streamPath` +
+ * `resolvedServerUrl`. That way the connection is created once per
+ * path change and reconnects happen inside a single stable lifecycle.
+ *
+ * Negotiation pattern mirrors the standalone WHEP test page exactly:
+ *   1. `new RTCPeerConnection()` with no explicit iceServers — mediamtx
+ *      advertises reachable host candidates via webrtcAdditionalHosts,
+ *      so LAN host-only negotiation works.
+ *   2. Pre-create a `MediaStream`, attach it to `video.srcObject`
+ *      immediately, and append each inbound track via `stream.addTrack`
+ *      in `ontrack`. More robust than `event.streams[0]`, which is
+ *      undefined when mediamtx's SDP answer lacks stream IDs per m-line.
+ *   3. POST `offer.sdp` to WHEP right after `setLocalDescription` —
+ *      no wait for ICE gathering. mediamtx handles non-trickle ICE
+ *      on the answer side.
+ */
 export const WebRTCPlayer = forwardRef<WebRTCPlayerHandle, WebRTCPlayerProps>(({
   streamPath,
-  serverUrl = 'http://localhost:8889',
+  serverUrl,
   className,
   onStreamReady,
   onStreamError,
   autoReconnect = true,
   muted = true,
 }, ref) => {
+  // Resolve the server URL from the prop OR our runtime-derived
+  // MEDIAMTX_BASE. The prop can override it, but we never fall back
+  // to a hard-coded localhost string — that breaks LAN access.
+  const resolvedServerUrl = serverUrl || MEDIAMTX_BASE;
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
-  const [reconnectAttempts, setReconnectAttempts] = useState(0);
-  const maxReconnectAttempts = 5;
+  const streamRef = useRef<MediaStream | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectCountRef = useRef<number>(0);
+  const mountedRef = useRef<boolean>(true);
 
-  const cleanup = useCallback(() => {
+  const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
+  const [reconnectDisplay, setReconnectDisplay] = useState<number>(0);
+
+  // Stash the latest user callbacks in refs so `connectOnce`'s
+  // identity never changes. Otherwise the useEffect re-runs on
+  // every parent re-render and tears down the healthy connection.
+  const callbacksRef = useRef({
+    onStreamReady,
+    onStreamError,
+    autoReconnect,
+  });
+  callbacksRef.current = { onStreamReady, onStreamError, autoReconnect };
+
+  const cleanupInternal = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
     if (pcRef.current) {
-      pcRef.current.close();
+      try {
+        pcRef.current.close();
+      } catch {
+        /* noop */
+      }
       pcRef.current = null;
+    }
+    if (streamRef.current) {
+      try {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      } catch {
+        /* noop */
+      }
+      streamRef.current = null;
     }
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
   }, []);
 
-  const connect = useCallback(async () => {
-    cleanup();
+  const connectOnceRef = useRef<() => Promise<void>>(async () => undefined);
+
+  connectOnceRef.current = async () => {
+    cleanupInternal();
+    if (!mountedRef.current) return;
     setConnectionState('connecting');
 
     try {
-      // Create RTCPeerConnection with STUN servers
-      const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-        ],
-      });
+      const pc = new RTCPeerConnection();
       pcRef.current = pc;
 
-      // Handle incoming tracks
+      // Pre-created MediaStream attached to the <video> before any
+      // tracks arrive. Append each inbound track on ontrack.
+      const stream = new MediaStream();
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+
       pc.ontrack = (event) => {
-        if (videoRef.current && event.streams[0]) {
-          videoRef.current.srcObject = event.streams[0];
-          setConnectionState('connected');
-          setReconnectAttempts(0);
-          onStreamReady?.();
-        }
+        stream.addTrack(event.track);
+        if (!mountedRef.current) return;
+        setConnectionState('connected');
+        reconnectCountRef.current = 0;
+        setReconnectDisplay(0);
+        callbacksRef.current.onStreamReady?.();
       };
 
-      // Monitor connection state
       pc.onconnectionstatechange = () => {
+        if (!mountedRef.current) return;
+        if (!pcRef.current || pc !== pcRef.current) return;
         switch (pc.connectionState) {
           case 'connected':
             setConnectionState('connected');
@@ -83,9 +153,12 @@ export const WebRTCPlayer = forwardRef<WebRTCPlayerHandle, WebRTCPlayerProps>(({
           case 'disconnected':
           case 'failed':
             setConnectionState('failed');
-            onStreamError?.(`Connection ${pc.connectionState}`);
-            if (autoReconnect && reconnectAttempts < maxReconnectAttempts) {
-              scheduleReconnect();
+            callbacksRef.current.onStreamError?.(`Connection ${pc.connectionState}`);
+            if (
+              callbacksRef.current.autoReconnect &&
+              reconnectCountRef.current < MAX_RECONNECT_ATTEMPTS
+            ) {
+              scheduleReconnectInternal();
             }
             break;
           case 'closed':
@@ -94,82 +167,76 @@ export const WebRTCPlayer = forwardRef<WebRTCPlayerHandle, WebRTCPlayerProps>(({
         }
       };
 
-      // Add transceivers for receiving video and audio
       pc.addTransceiver('video', { direction: 'recvonly' });
       pc.addTransceiver('audio', { direction: 'recvonly' });
 
-      // Create offer
       const offer = await pc.createOffer();
+      if (!mountedRef.current || pc !== pcRef.current) return;
       await pc.setLocalDescription(offer);
+      if (!mountedRef.current || pc !== pcRef.current) return;
 
-      // Wait for ICE gathering to complete
-      await new Promise<void>((resolve) => {
-        if (pc.iceGatheringState === 'complete') {
-          resolve();
-        } else {
-          pc.onicegatheringstatechange = () => {
-            if (pc.iceGatheringState === 'complete') {
-              resolve();
-            }
-          };
-          // Timeout after 5 seconds
-          setTimeout(resolve, 5000);
-        }
-      });
+      const whepUrl = `${resolvedServerUrl.replace(/\/+$/, '')}/${streamPath}/whep`;
+      // eslint-disable-next-line no-console
+      console.debug('[WebRTCPlayer] WHEP POST', whepUrl);
 
-      // Send offer to MediaMTX WHEP endpoint
-      const whepUrl = `${serverUrl}/${streamPath}/whep`;
       const response = await fetch(whepUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/sdp',
-        },
-        body: pc.localDescription?.sdp,
+        headers: { 'Content-Type': 'application/sdp' },
+        body: offer.sdp,
       });
 
+      if (!mountedRef.current || pc !== pcRef.current) return;
       if (!response.ok) {
         throw new Error(`WHEP request failed: ${response.status} ${response.statusText}`);
       }
 
-      // Set remote description from answer
       const answerSdp = await response.text();
-      await pc.setRemoteDescription({
-        type: 'answer',
-        sdp: answerSdp,
-      });
-
+      if (!mountedRef.current || pc !== pcRef.current) return;
+      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     } catch (error) {
-      console.error('WebRTC connection error:', error);
+      // eslint-disable-next-line no-console
+      console.error('[WebRTCPlayer] connection error:', error);
+      if (!mountedRef.current) return;
       setConnectionState('failed');
-      onStreamError?.(error instanceof Error ? error.message : 'Connection failed');
-      
-      if (autoReconnect && reconnectAttempts < maxReconnectAttempts) {
-        scheduleReconnect();
+      callbacksRef.current.onStreamError?.(
+        error instanceof Error ? error.message : 'Connection failed'
+      );
+      if (
+        callbacksRef.current.autoReconnect &&
+        reconnectCountRef.current < MAX_RECONNECT_ATTEMPTS
+      ) {
+        scheduleReconnectInternal();
       }
     }
-  }, [streamPath, serverUrl, cleanup, onStreamReady, onStreamError, autoReconnect, reconnectAttempts]);
+  };
 
-  const scheduleReconnect = useCallback(() => {
+  const scheduleReconnectInternal = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    if (!mountedRef.current) return;
     setConnectionState('reconnecting');
-    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-    
+    const delay = Math.min(1000 * Math.pow(2, reconnectCountRef.current), 30000);
     reconnectTimeoutRef.current = setTimeout(() => {
-      setReconnectAttempts(prev => prev + 1);
-      connect();
+      if (!mountedRef.current) return;
+      reconnectCountRef.current += 1;
+      setReconnectDisplay(reconnectCountRef.current);
+      void connectOnceRef.current();
     }, delay);
-  }, [reconnectAttempts, connect]);
+  }, []);
 
   // Capture frame for AI analysis - returns base64 string
   const captureFrame = useCallback((): string | null => {
     if (!videoRef.current || connectionState !== 'connected') return null;
-    
+
     const video = videoRef.current;
     if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
@@ -183,12 +250,24 @@ export const WebRTCPlayer = forwardRef<WebRTCPlayerHandle, WebRTCPlayerProps>(({
     getVideoElement: () => videoRef.current,
   }), [captureFrame]);
 
+  // THE ONLY useEffect that manages the peer connection lifecycle.
+  // Depends on just streamPath + resolvedServerUrl — nothing that
+  // changes on every render. So flipping quality tiers (which changes
+  // streamPath) correctly tears down and creates a new connection,
+  // but ordinary re-renders don't touch the pc.
   useEffect(() => {
+    mountedRef.current = true;
     if (streamPath) {
-      connect();
+      reconnectCountRef.current = 0;
+      setReconnectDisplay(0);
+      void connectOnceRef.current();
     }
-    return cleanup;
-  }, [streamPath, connect, cleanup]);
+    return () => {
+      mountedRef.current = false;
+      cleanupInternal();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamPath, resolvedServerUrl]);
 
   return (
     <div className={cn('relative bg-muted rounded-lg overflow-hidden', className)}>
@@ -217,12 +296,12 @@ export const WebRTCPlayer = forwardRef<WebRTCPlayerHandle, WebRTCPlayerProps>(({
             <>
               <RefreshCw className="w-8 h-8 animate-spin text-warning mb-2" />
               <span className="text-sm text-muted-foreground">
-                Reconnecting... (attempt {reconnectAttempts + 1}/{maxReconnectAttempts})
+                Reconnecting... (attempt {reconnectDisplay + 1}/{MAX_RECONNECT_ATTEMPTS})
               </span>
             </>
           )}
 
-          {connectionState === 'failed' && reconnectAttempts >= maxReconnectAttempts && (
+          {connectionState === 'failed' && reconnectDisplay >= MAX_RECONNECT_ATTEMPTS && (
             <>
               <WifiOff className="w-8 h-8 text-destructive mb-2" />
               <span className="text-sm text-muted-foreground mb-3">Stream unavailable</span>
@@ -230,8 +309,9 @@ export const WebRTCPlayer = forwardRef<WebRTCPlayerHandle, WebRTCPlayerProps>(({
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  setReconnectAttempts(0);
-                  connect();
+                  reconnectCountRef.current = 0;
+                  setReconnectDisplay(0);
+                  void connectOnceRef.current();
                 }}
               >
                 <RefreshCw className="w-4 h-4 mr-2" />

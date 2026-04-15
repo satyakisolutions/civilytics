@@ -1,6 +1,6 @@
-import { 
-  Camera as CameraIcon, 
-  Plus, 
+import {
+  Camera as CameraIcon,
+  Plus,
   Search,
   MoreVertical,
   MapPin,
@@ -11,7 +11,6 @@ import {
   Edit,
   Eye,
 } from 'lucide-react';
-import { mockCameras, mockZones } from '@/data/mockData';
 import { Camera, CameraStatus } from '@/types/monitoring';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -27,24 +26,29 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useState } from 'react';
+import { useCameras } from '@/hooks/useCameras';
+import { AddCameraDialog } from '@/components/camera/AddCameraDialog';
 
 export function CameraManagementView() {
   const [searchQuery, setSearchQuery] = useState('');
+  const [addOpen, setAddOpen] = useState(false);
+  const { cameras, isLoading, addCamera, deleteCamera } = useCameras();
 
-  const filteredCameras = mockCameras.filter(camera =>
+  const filteredCameras = cameras.filter(camera =>
     camera.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     camera.zone.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const statusCounts = {
-    online: mockCameras.filter(c => c.status === 'online').length,
-    offline: mockCameras.filter(c => c.status === 'offline').length,
-    warning: mockCameras.filter(c => c.status === 'warning').length,
-    alert: mockCameras.filter(c => c.status === 'alert').length,
+    online: cameras.filter(c => c.status === 'online').length,
+    offline: cameras.filter(c => c.status === 'offline').length,
+    warning: cameras.filter(c => c.status === 'warning').length,
+    alert: cameras.filter(c => c.status === 'alert').length,
   };
 
   return (
     <div className="flex flex-col h-full">
+      <AddCameraDialog open={addOpen} onOpenChange={setAddOpen} onAdd={addCamera} />
       {/* Header */}
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-4">
@@ -52,7 +56,7 @@ export function CameraManagementView() {
             <h1 className="text-lg font-semibold">Camera Management</h1>
             <p className="text-sm text-muted-foreground">Manage and configure your monitoring cameras</p>
           </div>
-          <Button size="sm" className="gap-2">
+          <Button size="sm" className="gap-2" onClick={() => setAddOpen(true)}>
             <Plus className="w-4 h-4" />
             Add Camera
           </Button>
@@ -80,11 +84,35 @@ export function CameraManagementView() {
 
       {/* Camera Grid */}
       <ScrollArea className="flex-1">
-        <div className="p-4 grid grid-cols-3 gap-4">
-          {filteredCameras.map((camera) => (
-            <CameraCard key={camera.id} camera={camera} />
-          ))}
-        </div>
+        {isLoading ? (
+          <div className="flex items-center justify-center h-40 text-sm text-muted-foreground">
+            Loading cameras…
+          </div>
+        ) : filteredCameras.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-64 gap-3 text-muted-foreground">
+            <CameraIcon className="w-12 h-12 opacity-30" />
+            <div className="text-center">
+              <p className="text-lg">
+                {cameras.length === 0 ? 'No cameras configured' : 'No cameras match your search'}
+              </p>
+              {cameras.length === 0 && (
+                <p className="text-sm mt-1">Click "Add Camera" to register your first camera</p>
+              )}
+            </div>
+            {cameras.length === 0 && (
+              <Button size="sm" className="gap-2 mt-2" onClick={() => setAddOpen(true)}>
+                <Plus className="w-4 h-4" />
+                Add Camera
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="p-4 grid grid-cols-3 gap-4">
+            {filteredCameras.map((camera) => (
+              <CameraCard key={camera.id} camera={camera} onDelete={deleteCamera} />
+            ))}
+          </div>
+        )}
       </ScrollArea>
     </div>
   );
@@ -109,7 +137,7 @@ function StatusCard({ label, count, status }: { label: string; count: number; st
   );
 }
 
-function CameraCard({ camera }: { camera: Camera }) {
+function CameraCard({ camera, onDelete }: { camera: Camera; onDelete: (id: string) => Promise<void> }) {
   const statusConfig: Record<CameraStatus, { color: string; icon: typeof Wifi; label: string }> = {
     online: { color: 'text-success', icon: Wifi, label: 'Online' },
     offline: { color: 'text-muted-foreground', icon: WifiOff, label: 'Offline' },
@@ -165,7 +193,10 @@ function CameraCard({ camera }: { camera: Camera }) {
                 Settings
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-destructive">
+              <DropdownMenuItem
+                className="text-destructive"
+                onClick={() => onDelete(camera.id)}
+              >
                 <Trash2 className="w-4 h-4 mr-2" />
                 Remove
               </DropdownMenuItem>

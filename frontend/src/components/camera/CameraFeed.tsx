@@ -3,8 +3,6 @@ import {
   Camera as CameraIcon, 
   Maximize2, 
   Pin, 
-  Volume2, 
-  VolumeX,
   MoreVertical,
   MapPin,
   AlertTriangle,
@@ -52,7 +50,10 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isStreamActive, setIsStreamActive] = useState(false);
-  const [isMuted, setIsMuted] = useState(true);
+  // LSG live feeds are video-only (no audio track on RTSP publish), so
+  // we hard-mute the <video> element. Browser autoplay policies also
+  // require muted=true for unattended autoplay.
+  const isMuted = true;
   const { metadata } = useDetectionMetadata({ cameraId: camera.id, enabled: camera.status === 'online' });
   const roi = useROIEditor({ cameraId: camera.id });
   const videoContainerRef = useRef<HTMLDivElement>(null);
@@ -78,29 +79,36 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
 
   // Derive WebRTC stream path from camera data
   const basePath = useMemo(() => {
-    if (!camera.streamUrl) return null;
-
-    // If it's already a path (e.g., "cam-zone-a-north"), use it directly.
-    if (!camera.streamUrl.includes('://')) {
-      return camera.streamUrl;
-    }
-
-    // Prefer the last segment of an rtsp://.../<path> URL (keeps the
-    // native publisher path intact — e.g. "cam-01" — so the transcoded
-    // variants "-sm"/"-md" line up with the paths the RTSP streamer
-    // sidecar actually publishes to mediamtx).
-    try {
-      const segments = camera.streamUrl.split('/').filter(Boolean);
-      const last = segments[segments.length - 1];
-      if (last) return last;
-    } catch {
-      // fall through to legacy derivation
-    }
-
-    // Legacy fallback: derive a path from zone + name.
-    const safeName = camera.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const safeZone = camera.zone.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    return `cam-${safeZone}-${safeName}`;
+    // Route every camera feed through DeepStream's annotated output
+    // path (`<cam>-out`) so the operator sees the inference bboxes
+    // + top-right action overlay the pipeline draws on nvdsosd. The
+    // raw ffmpeg publisher path (`cam-01`, `cam-01-md`, `cam-01-sm`)
+    // has no annotations and is never what we want to render here.
+    //
+    // The annotated stream is a single 1280x720 tier, so the quality
+    // toggle becomes a no-op when this is in effect (and the "-sm"
+    // / "-md" suffix logic below is bypassed entirely via the
+    // ANNOTATED_STREAM_HAS_ONE_TIER constant in effectiveQuality).
+    const rawPath = (() => {
+      if (!camera.streamUrl) return null;
+      if (!camera.streamUrl.includes('://')) return camera.streamUrl;
+      try {
+        const segments = camera.streamUrl.split('/').filter(Boolean);
+        const last = segments[segments.length - 1];
+        if (last) return last;
+      } catch {
+        // fall through
+      }
+      const safeName = camera.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const safeZone = camera.zone.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      return `cam-${safeZone}-${safeName}`;
+    })();
+    if (!rawPath) return null;
+    // Strip any transcode suffix the legacy streamUrl might carry,
+    // then append "-out" to route to the annotated feed.
+    const withoutTier = rawPath.replace(/-(sm|md|lg|large|medium|small)$/i, '');
+    if (withoutTier.endsWith('-out')) return withoutTier;
+    return `${withoutTier}-out`;
   }, [camera.streamUrl, camera.name, camera.zone]);
 
   // Stream quality — "auto" drives off the panel's actual rendered
@@ -185,7 +193,7 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
         )}
       >
         {/* WebRTC Stream or Placeholder */}
-        {hasStreamUrl && streamPath && camera.status !== 'offline' ? (
+        {hasStreamUrl && streamPath ? (
           <>
             <WebRTCPlayer
               ref={playerRef}
@@ -247,7 +255,7 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
               PINNED
             </Badge>
           )}
-          {hasStreamUrl && basePath && camera.status !== 'offline' && (
+          {hasStreamUrl && basePath && (
             <StreamQualityToggle
               value={qualitySelection}
               onChange={setQualitySelection}
@@ -262,55 +270,43 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
           </Badge>
         </div>
 
-        {/* Hover overlay with actions */}
+        {/* Inline action icons (top-right of the video panel) — replaces
+            the old centred hover overlay that backdrop-blurred the whole
+            feed and blocked all clicks. Volume controls dropped because
+            the LSG live streams are video-only (no audio track). */}
         <div className={cn(
-          'absolute inset-0 bg-background/40 backdrop-blur-sm transition-opacity duration-200 z-20',
-          isHovered ? 'opacity-100' : 'opacity-0'
+          'absolute top-12 right-2 flex items-center gap-1 z-20 transition-opacity duration-150',
+          isHovered ? 'opacity-100' : 'opacity-0 pointer-events-none'
         )}>
-          <div className="absolute inset-0 flex items-center justify-center gap-2">
+          <Button
+            variant="secondary"
+            size="icon"
+            className="h-7 w-7 bg-background/70 hover:bg-background backdrop-blur-sm"
+            onClick={handleFullscreen}
+            title="Maximise this camera"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+          </Button>
+          {isStreamActive && (
             <Button
               variant="secondary"
-              size="sm"
-              className="h-8"
-              onClick={handleFullscreen}
+              size="icon"
+              className="h-7 w-7 bg-background/70 hover:bg-background backdrop-blur-sm"
+              onClick={handleManualAnalysis}
+              disabled={isAnalyzing}
+              title="Analyse current frame"
             >
-              <Maximize2 className="w-4 h-4 mr-1.5" />
-              Expand
+              {isAnalyzing ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <ScanSearch className="w-3.5 h-3.5" />
+              )}
             </Button>
-            {hasStreamUrl && (
-              <Button
-                variant="secondary"
-                size="sm"
-                className="h-8"
-                onClick={() => setIsMuted(!isMuted)}
-              >
-                {isMuted ? (
-                  <VolumeX className="w-4 h-4" />
-                ) : (
-                  <Volume2 className="w-4 h-4" />
-                )}
-              </Button>
-            )}
-            {isStreamActive && (
-              <Button
-                variant="secondary"
-                size="sm"
-                className="h-8"
-                onClick={handleManualAnalysis}
-                disabled={isAnalyzing}
-              >
-                {isAnalyzing ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <ScanSearch className="w-4 h-4" />
-                )}
-              </Button>
-            )}
-          </div>
+          )}
         </div>
 
         {/* Quality chip (bottom-left) — shows the active transcoded tier */}
-        {hasStreamUrl && basePath && camera.status !== 'offline' && (
+        {hasStreamUrl && basePath && (
           <div
             className="absolute bottom-2 left-2 text-[10px] font-mono text-foreground/80 bg-background/60 px-1.5 py-0.5 rounded z-10 flex items-center gap-1"
             title={`${STREAM_QUALITY_META[effectiveQuality].fullLabel} · ${STREAM_QUALITY_META[effectiveQuality].resolution} · ${STREAM_QUALITY_META[effectiveQuality].bitrateKbps} kbps\nPanel: ${probedWidth}x${probedHeight}${qualitySelection === 'auto' ? ' · auto' : ' · manual'}`}
@@ -364,19 +360,6 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
             <DropdownMenuItem>
               <Pin className="w-4 h-4 mr-2" />
               {camera.isPinned ? 'Unpin' : 'Pin Camera'}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setIsMuted(!isMuted)}>
-              {isMuted ? (
-                <>
-                  <Volume2 className="w-4 h-4 mr-2" />
-                  Unmute Audio
-                </>
-              ) : (
-                <>
-                  <VolumeX className="w-4 h-4 mr-2" />
-                  Mute Audio
-                </>
-              )}
             </DropdownMenuItem>
             {isStreamActive && (
               <DropdownMenuItem onClick={handleManualAnalysis} disabled={isAnalyzing}>

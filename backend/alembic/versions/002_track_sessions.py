@@ -19,19 +19,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # --- track_state enum ---
-    track_state = postgresql.ENUM(
-        "active", "lost", "exited",
-        name="track_state",
+    # --- Idempotent enum creation (asyncpg ENUM.create(checkfirst=True) is broken) ---
+    op.execute(
+        "DO $$ BEGIN CREATE TYPE track_state AS ENUM ('active','lost','exited'); "
+        "EXCEPTION WHEN duplicate_object THEN null; END $$;"
     )
-    track_state.create(op.get_bind(), checkfirst=True)
-
-    # --- event_fsm_state enum (new, distinct from eventfsmstate in migration 001) ---
-    event_fsm_state = postgresql.ENUM(
-        "enter", "observe", "violation", "alerting", "escalated", "exited",
-        name="event_fsm_state",
+    op.execute(
+        "DO $$ BEGIN CREATE TYPE event_fsm_state AS ENUM "
+        "('enter','observe','violation','alerting','escalated','exited'); "
+        "EXCEPTION WHEN duplicate_object THEN null; END $$;"
     )
-    event_fsm_state.create(op.get_bind(), checkfirst=True)
 
     # --- track_sessions table ---
     op.create_table(

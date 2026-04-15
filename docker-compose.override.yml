@@ -18,12 +18,17 @@ services:
     volumes:
       - ./pipeline/models:/app/models:rw
       - ./pipeline/configs:/app/configs:rw
+      - ./pipeline/app:/app/app:rw
       - ./scripts:/scripts:ro
     environment:
       # Comma-separated list of `cam-id=rtsp://...` pairs. cam-01 is
       # the only live camera right now (the other sample clips are fed
       # to the VLM worker as historical footage via history-publisher).
-      WW_SOURCES: "cam-01=rtsp://mediamtx:8554/cam-01"
+      WW_SOURCES: "cam-01=rtsp://mediamtx:8554/cam-01,cam-02=rtsp://mediamtx:8554/cam-02"
+      # Diagnostic: force nvinfer debug to level 5 so we can see parse
+      # function resolution, custom-lib loading, and per-batch object
+      # counts in the container logs.
+      GST_DEBUG: "nvinfer:4"
 
   # One-shot ONNX -> TRT engine converter. Reuses the pipeline image
   # (has CUDA + trtexec + our onnx/onnxsim/onnx_graphsurgeon pins).
@@ -93,6 +98,35 @@ services:
       GST_DEBUG: "2"
     entrypoint: ["python3", "-u", "app/history_publisher.py"]
     restart: "no"
+
+  # ──────────────────────────────────────────────────────────────
+  # Frontend dev server (Vite + React + shadcn/ui)
+  # ──────────────────────────────────────────────────────────────
+  # Runs `npm run dev` inside a node:20-alpine container, binding
+  # the frontend/ source as a read-write mount so HMR picks up
+  # host edits live. Host port 5174 because 8080 (vite's default)
+  # and 5173 are already in use on this workstation. API/WS URLs
+  # point at the LSG API remapped to host 8082; mediamtx stays on
+  # its native 8889 (WebRTC) / 8554 (RTSP).
+  frontend:
+    image: node:20-alpine
+    container_name: lsg-frontend-dev
+    working_dir: /app
+    command: ["sh", "-c", "npm install --legacy-peer-deps --no-audit --no-fund && npm run dev -- --host 0.0.0.0 --port 8080"]
+    ports:
+      - "5174:8080"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      # Intentionally NOT setting VITE_API_URL / VITE_WS_URL /
+      # VITE_MEDIAMTX_URL here. The frontend's src/lib/api-base.ts
+      # auto-derives those from window.location.hostname so that
+      # opening the app at http://localhost:5174 and at
+      # http://192.168.1.8:5174 both resolve to the correct backend
+      # and MediaMTX endpoints without a config edit.
+      CHOKIDAR_USEPOLLING: "true"
+    restart: unless-stopped
 
   rtsp-streamer:
     image: jrottenberg/ffmpeg:6-alpine

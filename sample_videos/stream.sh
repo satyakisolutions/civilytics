@@ -49,14 +49,21 @@ publish_tier() {
     done
 }
 
-# Only cam-01 is a LIVE RTSP source. The other videos (VID-20260131-
-# WA0003..WA0007) are used as historical recorded footage by the VLM
-# worker via history-publisher, NOT streamed live.
-SRC_FILE="VID-20260131-WA0002.mp4"
+# cam-01 — daytime colour feed (1st Cross). Three transcoded tiers
+# for the frontend quality toggle on the raw input path; the
+# DeepStream pipeline's annotated `cam-01-out` stream is separate
+# and always served at the large tier.
+SRC_FILE="${LSG_LIVE_SRC:-VID-20260131-WA0003.mp4}"
 
 publish_tier "cam-01"    "${SRC_FILE}" "large"  "${TIER_LARGE}"  &
 publish_tier "cam-01-md" "${SRC_FILE}" "medium" "${TIER_MEDIUM}" &
 publish_tier "cam-01-sm" "${SRC_FILE}" "small"  "${TIER_SMALL}"  &
 
-echo "[stream.sh] 3 tiers launched for cam-01, waiting"
+# cam-02 — native black-and-white IR CCTV feed (2nd Cross, night
+# mode; WA0002 is already monochrome so no extra ffmpeg filtering
+# needed). Single tier only — quality toggle falls through.
+SRC_FILE_2="${LSG_LIVE_SRC_2:-VID-20260131-WA0002.mp4}"
+publish_tier "cam-02" "${SRC_FILE_2}" "large" "${TIER_LARGE}" &
+
+echo "[stream.sh] tiers launched for cam-01 (3) + cam-02 (1), waiting"
 wait

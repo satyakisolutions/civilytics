@@ -49,32 +49,54 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Relevant COCO classes for waste dumping surveillance.
+# COCO 91-index class mapping. RF-DETR's DeepStream output head
+# (scripts/onnx_to_engine.py::append_rfdetr_deepstream_head) emits
+# class_id in the COCO full index range where 0 = background and
+# person = 1. Previous version of this file used COCO80 indices
+# (person = 0) which silently filtered every real detection.
+# Keep in lock-step with pipeline/configs/labels.txt.
 COCO_CLASS_MAP: dict[int, str] = {
     # Persons
-    0: "person",
+    1: "person",
     # Vehicles
-    1: "bicycle",
-    2: "car",
-    3: "motorcycle",
-    5: "bus",
-    7: "truck",
+    2: "bicycle",
+    3: "car",
+    4: "motorcycle",
+    6: "bus",
+    8: "truck",
     # Carried items (potential waste containers)
-    24: "backpack",
-    26: "handbag",
-    28: "suitcase",
+    27: "backpack",
+    28: "umbrella",
+    31: "handbag",
+    33: "suitcase",
     # Waste objects (evidence of dumping)
-    39: "bottle",
-    56: "chair",
-    57: "couch",
-    58: "potted_plant",
-    59: "bed",
-    60: "dining_table",
-    61: "toilet",
-    62: "tv",
-    68: "microwave",
-    69: "oven",
-    71: "sink",
-    72: "refrigerator",
+    44: "bottle",
+    46: "wine_glass",
+    47: "cup",
+    51: "bowl",
+    62: "chair",
+    63: "couch",
+    64: "potted_plant",
+    65: "bed",
+    67: "dining_table",
+    70: "toilet",
+    72: "tv",
+    78: "microwave",
+    79: "oven",
+    81: "sink",
+    82: "refrigerator",
+}
+
+# Per-category OSD colour (r, g, b, a) used by the pre-nvosd decoration
+# probe. Keeps the rendered bbox colour semantically meaningful so an
+# operator can distinguish people / vehicles / carried items / waste at
+# a glance without reading the label text.
+OSD_CATEGORY_COLOURS: dict[str, tuple[float, float, float, float]] = {
+    "person":       (0.20, 0.85, 1.00, 1.0),  # cyan
+    "vehicle":      (1.00, 0.72, 0.10, 1.0),  # amber (Satyaki brand)
+    "carried_item": (0.95, 0.40, 0.90, 1.0),  # magenta
+    "waste_object": (1.00, 0.25, 0.25, 1.0),  # red
+    "unknown":      (0.75, 0.75, 0.75, 1.0),  # grey
 }
 
 # Category mapping for detection enrichment.
@@ -82,8 +104,11 @@ CLASS_CATEGORIES: dict[str, str] = {
     "person": "person",
     "bicycle": "vehicle", "car": "vehicle", "motorcycle": "vehicle",
     "bus": "vehicle", "truck": "vehicle",
-    "backpack": "carried_item", "handbag": "carried_item", "suitcase": "carried_item",
-    "bottle": "waste_object", "chair": "waste_object", "couch": "waste_object",
+    "backpack": "carried_item", "umbrella": "carried_item",
+    "handbag": "carried_item", "suitcase": "carried_item",
+    "bottle": "waste_object", "wine_glass": "waste_object", "cup": "waste_object",
+    "bowl": "waste_object",
+    "chair": "waste_object", "couch": "waste_object",
     "potted_plant": "waste_object", "bed": "waste_object", "dining_table": "waste_object",
     "toilet": "waste_object", "tv": "waste_object", "microwave": "waste_object",
     "oven": "waste_object", "sink": "waste_object", "refrigerator": "waste_object",
@@ -178,6 +203,157 @@ def _derive_camera_alert(camera_id: str, detections: list[dict]) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Pad probe — OSD decoration (runs BEFORE nvdsosd)
+# ---------------------------------------------------------------------------
+
+
+def decorate_for_osd(
+    pad: Gst.Pad,
+    info: Gst.PadProbeInfo,
+    _user_data: object,
+) -> Gst.PadProbeReturn:
+    """Populate every NvDsObjectMeta with visible bbox + label text.
+
+    The marcoslucianops custom parser leaves `rect_params.border_width = 0`
+    (which makes nvdsosd skip the bbox entirely) and doesn't set any
+    `text_params`, so operators see a clean frame with no overlays even
+    though detections exist in metadata. This probe fills in border
+    width/colour per category and writes a compact `label conf%` into
+    text_params so the output RTSP stream carries visible decoration.
+
+    It also attaches a single top-right status line per frame via
+    `NvDsDisplayMeta` summarising the dominant action observed in the
+    frame (dumping / loitering / vehicle-present / clear), giving the
+    frontend viewer a one-glance state readout without having to
+    subscribe to the metadata topic.
+    """
+    buf = info.get_buffer()
+    if buf is None:
+        return Gst.PadProbeReturn.OK
+    batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(buf))
+    if batch_meta is None:
+        return Gst.PadProbeReturn.OK
+
+    frame_meta_list = batch_meta.frame_meta_list
+    while frame_meta_list is not None:
+        try:
+            frame_meta = pyds.NvDsFrameMeta.cast(frame_meta_list.data)
+        except StopIteration:
+            break
+
+        per_category: dict[str, int] = {}
+        obj_meta_list = frame_meta.obj_meta_list
+        while obj_meta_list is not None:
+            try:
+                obj_meta = pyds.NvDsObjectMeta.cast(obj_meta_list.data)
+            except StopIteration:
+                break
+
+            cid = int(obj_meta.class_id)
+            cname = COCO_CLASS_MAP.get(cid)
+            if cname is None:
+                try:
+                    obj_meta_list = obj_meta_list.next
+                except StopIteration:
+                    break
+                continue
+            category = CLASS_CATEGORIES.get(cname, "unknown")
+            per_category[category] = per_category.get(category, 0) + 1
+
+            r, g, b, a = OSD_CATEGORY_COLOURS.get(
+                category, OSD_CATEGORY_COLOURS["unknown"]
+            )
+            rect = obj_meta.rect_params
+            rect.border_width = 3
+            rect.border_color.red = r
+            rect.border_color.green = g
+            rect.border_color.blue = b
+            rect.border_color.alpha = a
+            rect.has_bg_color = 0
+
+            track_id = int(obj_meta.object_id)
+            conf_pct = max(0, int(round(float(obj_meta.confidence) * 100)))
+            if track_id != 0xFFFFFFFFFFFFFFFF:
+                label = f"{cname} #{track_id} {conf_pct}%"
+            else:
+                label = f"{cname} {conf_pct}%"
+
+            txt = obj_meta.text_params
+            txt.display_text = label
+            txt.x_offset = max(0, int(rect.left))
+            txt.y_offset = max(0, int(rect.top) - 18)
+            txt.font_params.font_name = "Serif"
+            txt.font_params.font_size = 11
+            txt.font_params.font_color.red = 1.0
+            txt.font_params.font_color.green = 1.0
+            txt.font_params.font_color.blue = 1.0
+            txt.font_params.font_color.alpha = 1.0
+            txt.set_bg_clr = 1
+            txt.text_bg_clr.red = 0.0
+            txt.text_bg_clr.green = 0.0
+            txt.text_bg_clr.blue = 0.0
+            txt.text_bg_clr.alpha = 0.55
+
+            try:
+                obj_meta_list = obj_meta_list.next
+            except StopIteration:
+                break
+
+        # --- Top-right action overlay (one NvDsDisplayMeta per frame) -----
+        # Pick the most evidence-heavy category in priority order so the
+        # viewer sees a single, calm status line instead of a constantly
+        # churning count.
+        if per_category:
+            if per_category.get("waste_object", 0) > 0:
+                action = "DUMPING SUSPECTED"
+            elif per_category.get("carried_item", 0) > 0 and per_category.get("person", 0) > 0:
+                action = "CARRYING OBJECT"
+            elif per_category.get("vehicle", 0) > 0 and per_category.get("person", 0) > 0:
+                action = "PERSON + VEHICLE"
+            elif per_category.get("vehicle", 0) > 0:
+                action = "VEHICLE PRESENT"
+            elif per_category.get("person", 0) > 0:
+                action = "PERSON OBSERVED"
+            else:
+                action = "ACTIVITY DETECTED"
+        else:
+            action = "CLEAR"
+
+        frame_w = frame_meta.source_frame_width or pipeline_settings.input_width
+        try:
+            disp_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+            disp_meta.num_labels = 1
+            tp = disp_meta.text_params[0]
+            tp.display_text = f"{action}"
+            tp.x_offset = max(10, int(frame_w) - 360)
+            tp.y_offset = 20
+            tp.font_params.font_name = "Serif"
+            tp.font_params.font_size = 14
+            tp.font_params.font_color.red = 1.0
+            tp.font_params.font_color.green = 1.0
+            tp.font_params.font_color.blue = 1.0
+            tp.font_params.font_color.alpha = 1.0
+            tp.set_bg_clr = 1
+            if action == "CLEAR":
+                tp.text_bg_clr.red, tp.text_bg_clr.green, tp.text_bg_clr.blue = 0.10, 0.45, 0.15
+            elif action == "DUMPING SUSPECTED":
+                tp.text_bg_clr.red, tp.text_bg_clr.green, tp.text_bg_clr.blue = 0.80, 0.10, 0.10
+            else:
+                tp.text_bg_clr.red, tp.text_bg_clr.green, tp.text_bg_clr.blue = 0.10, 0.10, 0.10
+            tp.text_bg_clr.alpha = 0.70
+            pyds.nvds_add_display_meta_to_frame(frame_meta, disp_meta)
+        except Exception:
+            pass
+
+        try:
+            frame_meta_list = frame_meta_list.next
+        except StopIteration:
+            break
+
+    return Gst.PadProbeReturn.OK
+
+
+# ---------------------------------------------------------------------------
 # Pad probe — metadata extraction (Python fallback)
 # ---------------------------------------------------------------------------
 
@@ -221,6 +397,12 @@ def extract_metadata(
         frame_height = frame_meta.source_frame_height or pipeline_settings.input_height
 
         detections: list[dict] = []
+        # Diagnostic: count ALL raw nvinfer objects before any filtering,
+        # so we can tell at a glance whether nvinfer is producing 0 boxes
+        # (parser/threshold problem) vs producing boxes that the Python
+        # COCO_CLASS_MAP is filtering out (class-id mapping problem).
+        raw_obj_count = 0
+        raw_class_histogram: dict[int, int] = {}
         obj_meta_list = frame_meta.obj_meta_list
         while obj_meta_list is not None:
             try:
@@ -229,6 +411,8 @@ def extract_metadata(
                 break
 
             class_id: int = obj_meta.class_id
+            raw_obj_count += 1
+            raw_class_histogram[class_id] = raw_class_histogram.get(class_id, 0) + 1
             if class_id in COCO_CLASS_MAP:
                 rect = obj_meta.rect_params
                 class_name = COCO_CLASS_MAP[class_id]
@@ -332,6 +516,12 @@ def extract_metadata(
             "timestamp_ms": int(time.monotonic() * 1000),
             "detections": detections,
             "camera_alert": camera_alert,
+            # Diagnostic — raw nvinfer object count and per-class histogram
+            # BEFORE the Python COCO_CLASS_MAP filter. Tells us at a glance
+            # whether nvinfer/parser is producing boxes at all vs the
+            # Python probe dropping them on class-id mismatch.
+            "raw_obj_count": raw_obj_count,
+            "raw_class_hist": {str(k): v for k, v in raw_class_histogram.items()},
         }
 
         kafka_producer.send_metadata(camera_id, metadata)
@@ -372,7 +562,23 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     streammux.set_property("batch-size", cfg.batch_size)
     streammux.set_property("width", cfg.muxer_output_width)
     streammux.set_property("height", cfg.muxer_output_height)
-    streammux.set_property("batched-push-timeout", 4_000_000)
+    # batched-push-timeout: force streammux to push a partial batch if
+    # a single camera's frames don't fill the batch within 40ms (25fps
+    # tick). Previous 4-second timeout meant a single-camera pipeline
+    # would wait up to 4s between pushes, leaving the probe dormant
+    # and the video pipeline appearing "frozen".
+    streammux.set_property("batched-push-timeout", 40_000)
+    # live-source hint — streammux adjusts its buffering strategy for
+    # RTSP/live input (no attempt to resample to file-mode timestamps).
+    try:
+        streammux.set_property("live-source", 1)
+    except Exception:
+        pass
+    # Drop frames if downstream falls behind instead of accumulating.
+    try:
+        streammux.set_property("drop-pipeline-eos", 1)
+    except Exception:
+        pass
     pipeline.add(streammux)
 
     # --- Inference (RF-DETR via nvinfer) ------------------------------------
@@ -431,6 +637,20 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
 
     # --- On-screen display --------------------------------------------------
     nvosd = make_element("nvdsosd", "on_screen_display")
+    # display-text/display-bbox default to 1 but set explicitly so a bad
+    # pre-loaded config cache can't hide them. process-mode=1 forces the
+    # hardware rasteriser, which is the only mode that honours the
+    # per-object rect_params we populate in the pre-osd pad probe.
+    try:
+        nvosd.set_property("process-mode", 1)
+    except Exception:
+        pass
+    try:
+        nvosd.set_property("display-bbox", 1)
+        nvosd.set_property("display-text", 1)
+        nvosd.set_property("display-clock", 0)
+    except Exception:
+        pass
     pipeline.add(nvosd)
 
     # --- Tee — splits stream to RTSP output branch and metadata branch ------
@@ -447,10 +667,27 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     )
     demux = output_manager.setup_demux()
     queue_demux = make_element("queue", "queue_demux")
+    # leaky=downstream means: if the output branch (rtspclientsink ->
+    # mediamtx) stalls, the queue drops OLD buffers instead of
+    # backpressuring the tee. Without this, any stall on the output
+    # side propagates up through the tee and blocks the metadata
+    # branch too — which made the pad probe fire exactly once per
+    # pipeline restart and then freeze, producing zero detection
+    # events in Kafka even though nvinfer was running.
+    queue_demux.set_property("leaky", 2)  # 2 = downstream
+    queue_demux.set_property("max-size-buffers", 5)
+    queue_demux.set_property("max-size-bytes", 0)
+    queue_demux.set_property("max-size-time", 0)
     pipeline.add(queue_demux)
 
     # --- Branch 2: metadata extraction (fakesink) ---------------------------
     queue_meta = make_element("queue", "queue_meta")
+    # Same leaky discipline — if the Kafka producer or probe is slow,
+    # drop old frames rather than block the main pipeline.
+    queue_meta.set_property("leaky", 2)
+    queue_meta.set_property("max-size-buffers", 5)
+    queue_meta.set_property("max-size-bytes", 0)
+    queue_meta.set_property("max-size-time", 0)
     fakesink = make_element("fakesink", "fakesink_meta")
     fakesink.set_property("sync", False)
     fakesink.set_property("async", False)
@@ -592,6 +829,23 @@ def main() -> None:
         )
 
         logger.warning("Custom plugin not available — using Python fallback")
+
+    # --- Attach the OSD decoration probe (both paths share it) --------------
+    # Runs on nvdsosd's sink pad so it can populate rect_params + text_params
+    # before the OSD plugin rasterises them into the frame. This is what
+    # turns the invisible (border_width=0) primary detections from the
+    # Yolo custom parser into visible bounding boxes + labels on the
+    # per-camera RTSP/WebRTC output streams.
+    osd_elem = pipeline.get_by_name("on_screen_display")
+    if osd_elem is not None:
+        osd_sink = osd_elem.get_static_pad("sink")
+        if osd_sink is not None:
+            osd_sink.add_probe(
+                Gst.PadProbeType.BUFFER,
+                decorate_for_osd,
+                None,
+            )
+            logger.info("OSD decoration probe attached to nvdsosd.sink")
 
     # Connection monitor — manages both input sources and per-camera output
     # streams, with RTSP probing, health checks, and auto-reconnection.

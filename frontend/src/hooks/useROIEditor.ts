@@ -1,7 +1,6 @@
 import { useState, useCallback } from "react";
 import type { ROIPoint, ROIPolygon } from "@/types/monitoring";
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+import { API_BASE } from "@/lib/api-base";
 
 interface UseROIEditorOptions {
   cameraId: string;

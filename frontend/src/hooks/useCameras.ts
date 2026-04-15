@@ -1,168 +1,128 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { useState, useEffect, useCallback } from 'react';
 import { Camera } from '@/types/monitoring';
 import { useToast } from '@/hooks/use-toast';
+import { API_BASE } from '@/lib/api-base';
+
+type BackendCamera = {
+  id: string;
+  name: string;
+  zone: string;
+  location: string | null;
+  gps_lat: number | null;
+  gps_lng: number | null;
+  status: Camera['status'];
+  stream_url: string | null;
+  source_type: string;
+  thumbnail_url: string | null;
+  is_pinned: boolean;
+  last_event_at: string | null;
+};
+
+export type CameraCreateInput = {
+  name: string;
+  zone: string;
+  location?: string;
+  stream_url?: string;
+  source_type?: string;
+  gps_lat?: number;
+  gps_lng?: number;
+};
+
+function mapCamera(c: BackendCamera): Camera {
+  return {
+    id: c.id,
+    name: c.name,
+    zone: c.zone,
+    location: c.location ?? '',
+    gps: c.gps_lat != null && c.gps_lng != null ? { lat: c.gps_lat, lng: c.gps_lng } : undefined,
+    status: c.status,
+    streamUrl: c.stream_url ?? undefined,
+    thumbnail: c.thumbnail_url ?? undefined,
+    lastEvent: c.last_event_at ? new Date(c.last_event_at) : undefined,
+    isPinned: c.is_pinned,
+  };
+}
 
 export function useCameras() {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchCameras();
-
-    // Subscribe to realtime updates
-    const channel = supabase
-      .channel('cameras-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'cameras'
-        },
-        () => {
-          fetchCameras();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  const fetchCameras = async () => {
+  const fetchCameras = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from('cameras')
-        .select('*')
-        .order('is_pinned', { ascending: false })
-        .order('name');
-
-      if (error) throw error;
-
-      const mappedCameras: Camera[] = (data || []).map(cam => ({
-        id: cam.id,
-        name: cam.name,
-        zone: cam.zone,
-        location: cam.location,
-        gps: cam.gps_lat && cam.gps_lng 
-          ? { lat: Number(cam.gps_lat), lng: Number(cam.gps_lng) }
-          : undefined,
-        status: cam.status as Camera['status'],
-        streamUrl: cam.stream_url || undefined,
-        thumbnail: cam.thumbnail_url || undefined,
-        lastEvent: cam.last_event_at ? new Date(cam.last_event_at) : undefined,
-        isPinned: cam.is_pinned || false
-      }));
-
-      setCameras(mappedCameras);
+      const resp = await fetch(`${API_BASE}/api/cameras`);
+      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+      const data: BackendCamera[] = await resp.json();
+      setCameras(data.map(mapCamera));
     } catch (error) {
       console.error('Failed to fetch cameras:', error);
       toast({
         title: 'Error',
         description: 'Failed to load cameras',
-        variant: 'destructive'
+        variant: 'destructive',
       });
     } finally {
       setIsLoading(false);
     }
+  }, [toast]);
+
+  useEffect(() => {
+    fetchCameras();
+  }, [fetchCameras]);
+
+  const addCamera = async (input: CameraCreateInput) => {
+    const resp = await fetch(`${API_BASE}/api/cameras`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!resp.ok) {
+      const detail = await resp.text();
+      throw new Error(detail || `${resp.status} ${resp.statusText}`);
+    }
+    const created: BackendCamera = await resp.json();
+    toast({ title: 'Camera Added', description: `${created.name} has been added` });
+    await fetchCameras();
+    return mapCamera(created);
   };
 
-  const addCamera = async (camera: Partial<Camera>) => {
-    try {
-      const { data, error } = await supabase
-        .from('cameras')
-        .insert({
-          name: camera.name || 'New Camera',
-          zone: camera.zone || 'Default Zone',
-          location: camera.location || 'Unknown',
-          stream_url: camera.streamUrl,
-          gps_lat: camera.gps?.lat,
-          gps_lng: camera.gps?.lng,
-          status: 'offline'
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      toast({
-        title: 'Camera Added',
-        description: `${data.name} has been added to the system`
-      });
-
-      return data;
-    } catch (error) {
-      console.error('Failed to add camera:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to add camera',
-        variant: 'destructive'
-      });
-      throw error;
+  const updateCamera = async (id: string, updates: Partial<Camera> & { stream_url?: string }) => {
+    const body: Record<string, unknown> = {};
+    if (updates.name !== undefined) body.name = updates.name;
+    if (updates.zone !== undefined) body.zone = updates.zone;
+    if (updates.location !== undefined) body.location = updates.location;
+    if (updates.streamUrl !== undefined) body.stream_url = updates.streamUrl;
+    if (updates.isPinned !== undefined) body.is_pinned = updates.isPinned;
+    if (updates.gps !== undefined) {
+      body.gps_lat = updates.gps?.lat;
+      body.gps_lng = updates.gps?.lng;
     }
-  };
 
-  const updateCamera = async (id: string, updates: Partial<Camera>) => {
-    try {
-      const { error } = await supabase
-        .from('cameras')
-        .update({
-          name: updates.name,
-          zone: updates.zone,
-          location: updates.location,
-          stream_url: updates.streamUrl,
-          is_pinned: updates.isPinned,
-          gps_lat: updates.gps?.lat,
-          gps_lng: updates.gps?.lng
-        })
-        .eq('id', id);
-
-      if (error) throw error;
-
-      toast({
-        title: 'Camera Updated',
-        description: 'Camera settings have been saved'
-      });
-    } catch (error) {
-      console.error('Failed to update camera:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to update camera',
-        variant: 'destructive'
-      });
-      throw error;
+    const resp = await fetch(`${API_BASE}/api/cameras/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      toast({ title: 'Error', description: 'Failed to update camera', variant: 'destructive' });
+      throw new Error(`${resp.status} ${resp.statusText}`);
     }
+    toast({ title: 'Camera Updated', description: 'Camera settings saved' });
+    await fetchCameras();
   };
 
   const deleteCamera = async (id: string) => {
-    try {
-      const { error } = await supabase
-        .from('cameras')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-
-      toast({
-        title: 'Camera Removed',
-        description: 'Camera has been removed from the system'
-      });
-    } catch (error) {
-      console.error('Failed to delete camera:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to remove camera',
-        variant: 'destructive'
-      });
-      throw error;
+    const resp = await fetch(`${API_BASE}/api/cameras/${id}`, { method: 'DELETE' });
+    if (!resp.ok) {
+      toast({ title: 'Error', description: 'Failed to remove camera', variant: 'destructive' });
+      throw new Error(`${resp.status} ${resp.statusText}`);
     }
+    toast({ title: 'Camera Removed', description: 'Camera removed from the system' });
+    await fetchCameras();
   };
 
   const togglePin = async (id: string) => {
-    const camera = cameras.find(c => c.id === id);
+    const camera = cameras.find((c) => c.id === id);
     if (camera) {
       await updateCamera(id, { isPinned: !camera.isPinned });
     }
@@ -175,6 +135,6 @@ export function useCameras() {
     updateCamera,
     deleteCamera,
     togglePin,
-    refetch: fetchCameras
+    refetch: fetchCameras,
   };
 }

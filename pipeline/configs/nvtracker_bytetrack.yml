@@ -1,7 +1,13 @@
 %YAML:1.0
+# ByteTrack via nvtracker — tuned for RF-DETR FP16 sigmoid-head confidences.
+# Keep these in lock-step with pre-cluster-threshold in nvinfer_rfdetr.txt:
+# our RF-DETR FP16 engine emits ~0.15-0.22 on confident real detections and
+# ~0.05-0.08 on background noise queries. Setting minDetectorConfidence
+# higher than 0.22 silently eats every object downstream (nvtracker emits
+# an empty obj_meta_list), which presents as "inference is broken".
 BaseConfig:
-  minDetectorConfidence: 0.3
-  minTrackerConfidence: 0.5
+  minDetectorConfidence: 0.12
+  minTrackerConfidence:  0.10
   trackerMaxShadowTrailingAge: 30
   probationAge: 3
   maxTargetsPerStream: 150
@@ -18,7 +24,7 @@ TargetManagement:
 
 TrackingAlgo:
   tracking_algo: 1
-  track_thresh: 0.5
-  high_thresh: 0.6
-  match_thresh: 0.8
-  track_buffer: 30
+  track_thresh:  0.15
+  high_thresh:   0.22
+  match_thresh:  0.8
+  track_buffer:  30

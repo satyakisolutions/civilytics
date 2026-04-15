@@ -6,6 +6,47 @@ rtsp: yes
 rtspAddress: :8554
 webrtc: yes
 webrtcAddress: :8889
+
+# ---- Authentication ----
+# mediamtx v1.9+ defaults the API + publish/playback to requiring
+# internal-auth entries. We explicitly allow an anonymous "any" user
+# with full permissions so the LSG frontend can call /v3/paths/list,
+# the RTSP streamer sidecar can ANNOUNCE cam-01, and the DeepStream
+# pipeline's rtspclientsink can publish cam-01-out without credentials.
+# Replace with a proper user/pass pair when deploying to an untrusted
+# network — this config is for a single-host LAN demo.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
+      - action: pprof
+
+# WebRTC ICE candidate advertisement. In Docker the container's only
+# default interface is 172.20.0.x, which is unreachable from the
+# browser. We pin a UDP port for the media plane and tell mediamtx
+# to advertise the host IPs (localhost + the LAN IP we expose at)
+# so browsers on both this machine and any other LAN device get
+# working ICE candidates.
+#
+# The matching host-port publish is in docker-compose.yml:
+#   "8189:8189/udp"
+webrtcLocalUDPAddress: :8189
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts:
+  - localhost
+  - 127.0.0.1
+  - 192.168.1.8
+# Public STUN for strict/NAT fallback (optional for LAN use but harmless).
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+
 pathDefaults:
   source: publisher
   sourceOnDemand: no

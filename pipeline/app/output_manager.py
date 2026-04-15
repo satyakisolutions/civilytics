@@ -135,6 +135,16 @@ class OutputStreamManager:
         try:
             # --- Create elements ------------------------------------------
             queue = Gst.ElementFactory.make("queue", f"queue_out_{camera_id}")
+            # leaky=downstream so that any stall in the encoder +
+            # rtspclientsink chain (e.g. first-IDR handshake) drops
+            # frames instead of backpressuring the tee upstream. That
+            # stall otherwise freezes the sibling metadata branch too,
+            # stopping the pad probe after a single batch.
+            if queue is not None:
+                queue.set_property("leaky", 2)
+                queue.set_property("max-size-buffers", 5)
+                queue.set_property("max-size-bytes", 0)
+                queue.set_property("max-size-time", 0)
             nvvidconv = Gst.ElementFactory.make(
                 "nvvideoconvert", f"nvvidconv_out_{camera_id}"
             )

@@ -68,9 +68,14 @@ export const STREAM_QUALITY_META: Record<StreamQuality, StreamQualityMeta> = {
 
 /** Convert a stream path to the transcoded variant path. */
 export function withQualitySuffix(streamPath: string, quality: StreamQuality): string {
+  // Annotated DeepStream output feeds (<cam>-out) are published as a
+  // single 1280x720 tier — the -sm / -md variants don't exist for
+  // them, so any quality request degenerates to "large" and the
+  // toggle becomes a no-op for CameraFeed. The transcoded tiers
+  // still work for the raw input feed when called from elsewhere.
+  if (streamPath.endsWith("-out")) return streamPath;
   if (quality === "large") return streamPath;
   const suffix = quality === "small" ? "-sm" : "-md";
-  // If the path already carries a known tier suffix, swap it.
   if (streamPath.endsWith("-sm") || streamPath.endsWith("-md")) {
     return streamPath.replace(/-(sm|md)$/, suffix);
   }

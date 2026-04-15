@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: wastewatch
+      POSTGRES_USER: wastewatch
+      POSTGRES_PASSWORD: wastewatch_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wastewatch"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   kafka:
     image: apache/kafka:3.7.0
     environment:
@@ -29,7 +47,7 @@ services:
     image: redis:7-alpine
     command: redis-server --requirepass ${REDIS_PASSWORD:-changeme_in_production}
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -42,9 +60,10 @@ services:
   mediamtx:
     image: bluenviron/mediamtx:latest
     ports:
-      - "8554:8554"   # RTSP
-      - "8889:8889"   # WebRTC
-      - "9997:9997"   # API
+      - "8554:8554"       # RTSP
+      - "8889:8889"       # WebRTC HTTP (WHEP)
+      - "8189:8189/udp"   # WebRTC media (ICE/UDP) — matches webrtcLocalUDPAddress
+      - "9997:9997"       # API
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
 
@@ -53,8 +72,8 @@ services:
     command: start-dev
     environment:
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://host.docker.internal:5432/keycloak
-      KC_DB_USERNAME: ${KC_DB_USERNAME:-postgres}
+      KC_DB_URL: jdbc:postgresql://postgres:5432/wastewatch
+      KC_DB_USERNAME: wastewatch
       KC_DB_PASSWORD: ${KC_DB_PASSWORD:?Set KC_DB_PASSWORD in .env}
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
@@ -63,7 +82,7 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:v1.9
+    image: qdrant/qdrant:v1.13.6
     ports:
       - "6333:6333"
     volumes:
@@ -71,11 +90,14 @@ services:
     restart: unless-stopped
 
   # ── API server (REST + WebSocket only, no workers) ──────────────
+  # NOTE: host port 8080 collides with another running container on this
+  # workstation (plant-pulse); using 8082 locally. Change via
+  # docker-compose.override.yml if you want a different host port.
   api:
     build:
       context: ./backend
     ports:
-      - "8080:8080"
+      - "8082:8080"
     env_file:
       - .env
     environment:
@@ -85,6 +107,8 @@ services:
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
       WW_KEYCLOAK_URL: http://keycloak:8080
     depends_on:
+      postgres:
+        condition: service_healthy
       kafka:
         condition: service_healthy
       redis:
@@ -296,11 +320,13 @@ services:
     command: >
       --model Qwen/Qwen2.5-VL-7B-Instruct-AWQ
       --quantization awq
-      --max-model-len 4096
-      --gpu-memory-utilization 0.6
+      --dtype float16
+      --max-model-len 16384
+      --gpu-memory-utilization 0.88
+      --limit-mm-per-prompt '{"image": 8}'
       --port 8000
     ports:
-      - "8000:8000"
+      - "8001:8000"
     deploy:
       resources:
         reservations:
@@ -321,6 +347,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  postgres_data:
   kafka_data:
   redis_data:
   tts_data:

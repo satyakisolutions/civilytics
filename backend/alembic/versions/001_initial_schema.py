@@ -19,42 +19,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # --- Enums (create with checkfirst=True so re-runs are idempotent) ---
-    camera_status = postgresql.ENUM(
-        "online", "offline", "warning", "alert",
-        name="camerastatus",
-    )
-    camera_status.create(op.get_bind(), checkfirst=True)
+    # --- Enums (idempotent via DO block; ENUM.create(checkfirst=True) is broken on asyncpg) ---
+    def _create_enum(name: str, values: tuple[str, ...]) -> None:
+        literals = ",".join(f"'{v}'" for v in values)
+        op.execute(
+            f"DO $$ BEGIN CREATE TYPE {name} AS ENUM ({literals}); "
+            f"EXCEPTION WHEN duplicate_object THEN null; END $$;"
+        )
 
-    alert_severity = postgresql.ENUM(
-        "critical", "warning", "info",
-        name="alertseverity",
-    )
-    alert_severity.create(op.get_bind(), checkfirst=True)
-
-    alert_status = postgresql.ENUM(
-        "active", "acknowledged", "resolved",
-        name="alertstatus",
-    )
-    alert_status.create(op.get_bind(), checkfirst=True)
-
-    event_type = postgresql.ENUM(
-        "dumping_detected", "suspicious_activity", "repeat_offender",
-        name="eventtype",
-    )
-    event_type.create(op.get_bind(), checkfirst=True)
-
-    app_role = postgresql.ENUM(
-        "owner", "admin", "viewer",
-        name="approle",
-    )
-    app_role.create(op.get_bind(), checkfirst=True)
-
-    event_fsm_state = postgresql.ENUM(
-        "idle", "detecting", "tracking", "confirming", "alerting", "cooldown",
-        name="eventfsmstate",
-    )
-    event_fsm_state.create(op.get_bind(), checkfirst=True)
+    _create_enum("camerastatus", ("online", "offline", "warning", "alert"))
+    _create_enum("alertseverity", ("critical", "warning", "info"))
+    _create_enum("alertstatus", ("active", "acknowledged", "resolved"))
+    _create_enum("eventtype", ("dumping_detected", "suspicious_activity", "repeat_offender"))
+    _create_enum("approle", ("owner", "admin", "viewer"))
+    _create_enum("eventfsmstate", ("idle", "detecting", "tracking", "confirming", "alerting", "cooldown"))
 
     # --- cameras ---
     op.create_table(

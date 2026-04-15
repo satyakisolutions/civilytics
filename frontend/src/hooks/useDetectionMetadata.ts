@@ -1,8 +1,7 @@
 // frontend/src/hooks/useDetectionMetadata.ts
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { FrameMetadata } from "@/types/monitoring";
-
-const WS_BASE_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8080/ws";
+import { WS_BASE as WS_BASE_URL } from "@/lib/api-base";
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_ATTEMPTS = 10;
 

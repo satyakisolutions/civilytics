@@ -78,6 +78,15 @@ class ModelSpec:
     # (utils/export_rfdetr.py) so the compiled `NvDsInferParseYolo`
     # C++ parser in pipeline/nvdsinfer_custom_impl_Yolo can decode it.
     rfdetr_deepstream_head: bool = False
+    # Rewrite every Reduce* op from opset-13 axes-as-input-tensor form
+    # back to the legacy axes-attribute form. Needed ONLY for the
+    # action classifier (MobileNet-V2 GAP head) to dodge a TRT 8.6
+    # shape-inference bug. MUST stay OFF for RF-DETR — its decoder's
+    # cross-attention uses ReduceSum inside the attention weights, and
+    # opset-18 ReduceSum forbids the attribute form, so the rewrite
+    # produces an invalid graph that TRT silently accepts but executes
+    # as a no-op, collapsing every detection score to ~0.06.
+    convert_reduce_axes: bool = False
 
 
 MODELS: list[ModelSpec] = [
@@ -99,6 +108,7 @@ MODELS: list[ModelSpec] = [
         min_batch=1, opt_batch=16, max_batch=32,
         workspace_mb=2048,
         fp16=True,
+        convert_reduce_axes=True,
     ),
 ]
 
@@ -228,21 +238,21 @@ def sanitise_onnx(spec: ModelSpec, onnx_path: Path) -> None:
     # `.view(-1, 1280)` Reshape. This is specifically what hits the
     # LSG action classifier.
     reduce_converted = 0
-    for node in list(graph.nodes):
-        if node.op not in ("ReduceMean", "ReduceSum", "ReduceMax", "ReduceMin", "ReduceL2", "ReduceL1"):
-            continue
-        if len(node.inputs) < 2:
-            continue  # already legacy-form (axes is an attribute)
-        axes_input = node.inputs[1]
-        if not isinstance(axes_input, gs.Constant):
-            continue  # dynamic axes — leave alone
-        axes_values = [int(v) for v in axes_input.values.tolist()]
-        # Strip the second input and set axes as an attribute on the node.
-        node.inputs = node.inputs[:1]
-        node.attrs["axes"] = axes_values
-        reduce_converted += 1
-    if reduce_converted:
-        log(f"  graphsurgeon: converted {reduce_converted} Reduce* op(s) to axes-attribute form")
+    if spec.convert_reduce_axes:
+        for node in list(graph.nodes):
+            if node.op not in ("ReduceMean", "ReduceSum", "ReduceMax", "ReduceMin", "ReduceL2", "ReduceL1"):
+                continue
+            if len(node.inputs) < 2:
+                continue  # already legacy-form (axes is an attribute)
+            axes_input = node.inputs[1]
+            if not isinstance(axes_input, gs.Constant):
+                continue  # dynamic axes — leave alone
+            axes_values = [int(v) for v in axes_input.values.tolist()]
+            node.inputs = node.inputs[:1]
+            node.attrs["axes"] = axes_values
+            reduce_converted += 1
+        if reduce_converted:
+            log(f"  graphsurgeon: converted {reduce_converted} Reduce* op(s) to axes-attribute form")
 
     # --- Fallback 3: freeze every Reshape whose target shape tensor can
     # be evaluated to a concrete numpy array. Side-steps residual
