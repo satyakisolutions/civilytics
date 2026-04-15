@@ -39,3 +39,8 @@ rf-detr-base.pth
 # Coverage
 .coverage
 backend/.coverage
+
+# LSG bring-up: local-only artifacts
+sample_videos/*.mp4
+sample_videos/*.MP4
+local-config/

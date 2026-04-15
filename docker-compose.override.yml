@@ -1,0 +1,68 @@
+# Local override: wires up an RTSP file-simulator sidecar that publishes
+# the 6 sample videos from sample_videos/ into the LSG mediamtx service as
+# rtsp://mediamtx:8554/cam-01 ... cam-06. Loops forever.
+#
+# This pattern is borrowed from Satyaki StreamingScripts/rtsp-streamer but
+# adapted to publish INTO the existing LSG mediamtx instead of standing up
+# a separate rtsp-simple-server.
+#
+# Not tracked by git in upstream; feel free to commit or ignore locally.
+
+services:
+  # NOTE: host-port remap for api is done in docker-compose.yml directly
+  # because Compose merge semantics make !reset unreliable across versions.
+
+  # One-shot container that replays recorded clips through a GStreamer
+  # pipeline ending in the custom `wastewatchvlmpublisher` sink, which
+  # publishes one VLMRequest per clip into Kafka for the VLM worker to
+  # consume. Reuses the existing pipeline image so all deps come from
+  # pipeline/requirements.txt — nothing is installed on the host.
+  history-publisher:
+    build:
+      context: ./pipeline
+    image: lsg-wastewatch-pipeline
+    container_name: lsg-history-publisher
+    depends_on:
+      kafka:
+        condition: service_healthy
+      api:
+        condition: service_started
+    volumes:
+      - ./sample_videos:/videos:ro
+      - ./local-config:/config:ro
+      - ./pipeline/plugins/gstwastewatchvlmpublisher:/app/plugins/gstwastewatchvlmpublisher:ro
+      # Mount the harness script so iterating is a container restart,
+      # not an image rebuild.
+      - ./pipeline/app/history_publisher.py:/app/app/history_publisher.py:ro
+    environment:
+      HISTORY_VIDEO_DIR: /videos
+      HISTORY_KAFKA_BOOTSTRAP: kafka:9092
+      HISTORY_VLM_TOPIC: wastewatch.vlm.requests
+      HISTORY_CAMERA_ID: 6c12c568-745c-4875-a1e6-7ef1f7d00fd4
+      HISTORY_ZONE_NAME: Lake Shore Gardens - Block 1
+      HISTORY_SAMPLE_COUNT: "6"
+      HISTORY_FRAME_WIDTH: "512"
+      HISTORY_SESSION_MAP: /config/session-map.json
+      # GStreamer needs to discover our python plugin — set both the
+      # plugin path (libgstpython.so scans $GST_PLUGIN_PATH/python/) and
+      # drop the registry into a writable location.
+      GST_PLUGIN_PATH: /app/plugins/gstwastewatchvlmpublisher
+      GST_REGISTRY: /tmp/gst-registry.bin
+      GST_DEBUG: "2"
+    entrypoint: ["python3", "-u", "app/history_publisher.py"]
+    restart: "no"
+
+  rtsp-streamer:
+    image: jrottenberg/ffmpeg:6-alpine
+    container_name: lsg-rtsp-streamer
+    depends_on:
+      mediamtx:
+        condition: service_started
+    volumes:
+      - ./sample_videos:/videos:ro
+    entrypoint: ["/bin/sh", "/videos/stream.sh"]
+    environment:
+      MEDIAMTX_HOST: mediamtx
+      MEDIAMTX_PORT: "8554"
+      VIDEO_DIR: /videos
+    restart: unless-stopped

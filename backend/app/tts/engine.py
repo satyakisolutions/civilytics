@@ -1,5 +1,12 @@
 # backend/app/tts/engine.py
-"""Piper TTS engine wrapper for generating warning audio."""
+"""Piper TTS engine wrapper for generating warning audio.
+
+Tone is configurable via environment so the same engine serves both
+"neutral" announcements and "aggressive" deterrent broadcasts that go
+out over the SIP / IP-speaker loop at Lake Shore Gardens. Aggressive
+mode uses a forceful voice model, faster cadence, and an all-caps
+warning prefix so the output sounds like a command, not a notification.
+"""
 import hashlib
 import logging
 import os
@@ -9,6 +16,38 @@ logger = logging.getLogger(__name__)
 
 AUDIO_DIR = Path("/tmp/wastewatch/tts")
 
+# Configuration (env-driven, safe defaults)
+TTS_TONE = os.environ.get("WW_TTS_TONE", "neutral").lower()
+TTS_VOICE = os.environ.get(
+    "WW_TTS_VOICE",
+    "en_US-ryan-high" if TTS_TONE == "aggressive" else "en_US-lessac-medium",
+)
+TTS_LENGTH_SCALE = float(
+    os.environ.get("WW_TTS_LENGTH_SCALE", "0.78" if TTS_TONE == "aggressive" else "1.0")
+)
+TTS_NOISE_SCALE = float(os.environ.get("WW_TTS_NOISE_SCALE", "0.667"))
+TTS_SENTENCE_SILENCE = float(
+    os.environ.get("WW_TTS_SENTENCE_SILENCE", "0.15" if TTS_TONE == "aggressive" else "0.4")
+)
+TTS_TONE_PREFIX = os.environ.get(
+    "WW_TTS_TONE_PREFIX",
+    "ATTENTION. WARNING. " if TTS_TONE == "aggressive" else "",
+)
+TTS_TONE_SUFFIX = os.environ.get(
+    "WW_TTS_TONE_SUFFIX",
+    " STOP IMMEDIATELY. THIS AREA IS UNDER ACTIVE SURVEILLANCE." if TTS_TONE == "aggressive" else "",
+)
+
+
+def _apply_tone(text: str) -> str:
+    """Shape text for the active tone. Aggressive mode UPPER-CASES the body
+    and brackets it with a hard warning prefix + suffix so Piper renders it
+    with more emphasis and the listener hears it as a command."""
+    if TTS_TONE == "aggressive":
+        body = text.strip().rstrip(".!?") + "."
+        return f"{TTS_TONE_PREFIX}{body.upper()}{TTS_TONE_SUFFIX}".strip()
+    return text
+
 
 class TTSEngine:
     """Wraps Piper TTS (ONNX) for WAV generation. Falls back to placeholder if Piper unavailable."""
@@ -17,37 +56,49 @@ class TTSEngine:
         AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         self._available = False
         try:
-            import piper
+            import piper  # noqa: F401
             self._available = True
         except ImportError:
             logger.warning("Piper TTS not available — TTS will generate placeholder files")
+        logger.info(
+            "TTS engine initialised (tone=%s voice=%s length_scale=%.2f)",
+            TTS_TONE, TTS_VOICE, TTS_LENGTH_SCALE,
+        )
 
     def generate(self, text: str) -> dict:
         """Generate WAV audio from text. Returns {path, text_hash, duration_ms}."""
-        text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
+        shaped = _apply_tone(text)
+        text_hash = hashlib.sha256(shaped.encode()).hexdigest()[:16]
         filename = f"tts_{text_hash}.wav"
         filepath = AUDIO_DIR / filename
 
         if filepath.exists():
-            return {"path": str(filepath), "text_hash": text_hash, "duration_ms": self._estimate_duration(text)}
+            return {"path": str(filepath), "text_hash": text_hash, "duration_ms": self._estimate_duration(shaped)}
 
         if self._available:
-            self._generate_piper(text, filepath)
+            self._generate_piper(shaped, filepath)
         else:
-            self._generate_placeholder(text, filepath)
+            self._generate_placeholder(shaped, filepath)
 
-        return {"path": str(filepath), "text_hash": text_hash, "duration_ms": self._estimate_duration(text)}
+        return {"path": str(filepath), "text_hash": text_hash, "duration_ms": self._estimate_duration(shaped)}
 
     def _generate_piper(self, text: str, filepath: Path):
-        """Generate using Piper TTS."""
+        """Generate using Piper TTS with tone-shaped prosody."""
         import subprocess
         try:
             subprocess.run(
-                ["piper", "--model", "en_US-lessac-medium", "--output_file", str(filepath)],
+                [
+                    "piper",
+                    "--model", TTS_VOICE,
+                    "--length_scale", str(TTS_LENGTH_SCALE),
+                    "--noise_scale", str(TTS_NOISE_SCALE),
+                    "--sentence_silence", str(TTS_SENTENCE_SILENCE),
+                    "--output_file", str(filepath),
+                ],
                 input=text.encode(), check=True, capture_output=True, timeout=30,
             )
         except Exception:
-            logger.exception("Piper TTS generation failed")
+            logger.exception("Piper TTS generation failed — falling back to placeholder")
             self._generate_placeholder(text, filepath)
 
     def _generate_placeholder(self, text: str, filepath: Path):
