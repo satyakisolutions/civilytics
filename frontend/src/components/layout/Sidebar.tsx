@@ -19,6 +19,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { API_BASE } from '@/lib/api-base';
 import { useMonitoring } from '@/context/MonitoringContext';
 import { mockSystemStatus } from '@/data/mockData';
 import { Badge } from '@/components/ui/badge';
@@ -181,17 +182,16 @@ export function Sidebar({ className }: SidebarProps) {
                   onClick={async (e) => {
                     e.stopPropagation();
                     try {
-                      const { API_BASE } = await import('@/lib/api-base');
-                      // Resolve all active alerts
                       const resp = await fetch(`${API_BASE}/api/alerts?status=active&limit=200`);
+                      if (!resp.ok) return;
                       const activeList = await resp.json();
-                      await Promise.all(activeList.map((a: any) =>
-                        fetch(`${API_BASE}/api/alerts/${a.id}`, {
+                      for (const a of activeList) {
+                        await fetch(`${API_BASE}/api/alerts/${a.id}`, {
                           method: 'PATCH',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ status: 'resolved' }),
-                        })
-                      ));
+                        });
+                      }
                     } catch { /* best effort */ }
                   }}
                 >

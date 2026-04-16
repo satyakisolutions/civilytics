@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useMonitoring } from '@/context/MonitoringContext';
 import { Alert as AlertType } from '@/types/monitoring';
+import { API_BASE } from '@/lib/api-base';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,21 +29,23 @@ export function AlertPanel() {
 
   const clearAll = async () => {
     try {
-      const { API_BASE } = await import('@/lib/api-base');
       const resp = await fetch(`${API_BASE}/api/alerts?status=active&limit=200`);
+      if (!resp.ok) return;
       const activeList = await resp.json();
-      await Promise.all(activeList.map((a: any) =>
-        fetch(`${API_BASE}/api/alerts/${a.id}`, {
+      for (const a of activeList) {
+        await fetch(`${API_BASE}/api/alerts/${a.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: 'resolved' }),
-        })
-      ));
-    } catch { /* best effort */ }
+        });
+      }
+    } catch (e) {
+      console.error('Clear all failed:', e);
+    }
   };
 
   return (
-    <div className="flex flex-col h-full w-80 max-w-[320px] overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden" style={{ width: 320, maxWidth: '100%' }}>
       {/* Header */}
       <div className="flex items-center justify-between p-3 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -63,8 +66,8 @@ export function AlertPanel() {
       </div>
 
       {/* Alert List */}
-      <ScrollArea className="flex-1">
-        <div className="p-2 space-y-2 w-full">
+      <ScrollArea className="flex-1" style={{ overflow: 'hidden' }}>
+        <div className="p-2 space-y-2" style={{ width: '100%', maxWidth: 320, display: 'block' }}>
           {sortedAlerts.map((alert) => (
             <AlertCard 
               key={alert.id} 
