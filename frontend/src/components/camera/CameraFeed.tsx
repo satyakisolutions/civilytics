@@ -238,12 +238,13 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
         <div className="absolute top-2 left-2 flex items-center gap-2 z-10">
           <div className={cn(
             'flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-semibold uppercase',
-            camera.status === 'online' && 'bg-success/20 text-success',
-            camera.status === 'alert' && 'bg-destructive/20 text-destructive',
-            camera.status === 'warning' && 'bg-warning/20 text-warning',
-            camera.status === 'offline' && 'bg-muted text-muted-foreground'
+            isStreamActive ? 'bg-success/20 text-success' :
+            camera.status === 'online' ? 'bg-success/20 text-success' :
+            camera.status === 'alert' ? 'bg-destructive/20 text-destructive' :
+            camera.status === 'warning' ? 'bg-warning/20 text-warning' :
+            'bg-muted text-muted-foreground'
           )}>
-            <span className={cn('status-dot', status.dotClass)} />
+            <span className={cn('status-dot', isStreamActive ? 'status-dot-online' : status.dotClass)} />
             {isStreamActive ? 'LIVE' : status.label}
           </div>
 
