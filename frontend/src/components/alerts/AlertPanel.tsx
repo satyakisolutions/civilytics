@@ -18,7 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 export function AlertPanel() {
-  const { alerts, acknowledgeAlert, setIsAlertPanelOpen } = useMonitoring();
+  const { alerts, acknowledgeAlert, clearAlerts, setIsAlertPanelOpen, setCurrentView } = useMonitoring();
 
   const sortedAlerts = [...alerts].sort((a, b) => {
     // Sort by status (active first) then by timestamp
@@ -27,22 +27,7 @@ export function AlertPanel() {
     return b.timestamp.getTime() - a.timestamp.getTime();
   });
 
-  const clearAll = async () => {
-    try {
-      const resp = await fetch(`${API_BASE}/api/alerts?status=active&limit=200`);
-      if (!resp.ok) return;
-      const activeList = await resp.json();
-      for (const a of activeList) {
-        await fetch(`${API_BASE}/api/alerts/${a.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'resolved' }),
-        });
-      }
-    } catch (e) {
-      console.error('Clear all failed:', e);
-    }
-  };
+  const handleClearAll = () => clearAlerts();
 
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ width: 320, maxWidth: '100%' }}>
@@ -56,7 +41,7 @@ export function AlertPanel() {
           </Badge>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[10px]" onClick={clearAll}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-[10px]" onClick={handleClearAll}>
             Clear All
           </Button>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsAlertPanelOpen(false)}>
@@ -80,7 +65,12 @@ export function AlertPanel() {
 
       {/* Footer */}
       <div className="p-3 border-t border-border">
-        <Button variant="outline" size="sm" className="w-full text-xs">
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full text-xs"
+          onClick={() => { setCurrentView('history'); setIsAlertPanelOpen(false); }}
+        >
           View All History
           <ChevronRight className="w-3.5 h-3.5 ml-1" />
         </Button>

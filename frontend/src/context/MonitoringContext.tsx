@@ -11,6 +11,7 @@ interface MonitoringContextType {
   alerts: Alert[];
   events: ViolationEvent[];
   acknowledgeAlert: (id: string) => void;
+  clearAlerts: () => void;
   isAlertPanelOpen: boolean;
   setIsAlertPanelOpen: (open: boolean) => void;
   isSoundEnabled: boolean;
@@ -57,13 +58,17 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
   const [currentView, setCurrentView] = useState<'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline'>('monitoring');
 
   const acknowledgeAlert = (id: string) => {
-    setAlerts(prev => 
-      prev.map(alert => 
-        alert.id === id 
+    setAlerts(prev =>
+      prev.map(alert =>
+        alert.id === id
           ? { ...alert, status: 'acknowledged' as const }
           : alert
       )
     );
+  };
+
+  const clearAlerts = () => {
+    setAlerts([]);
   };
 
   return (
@@ -76,6 +81,7 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
         alerts,
         events,
         acknowledgeAlert,
+        clearAlerts,
         isAlertPanelOpen,
         setIsAlertPanelOpen,
         isSoundEnabled,

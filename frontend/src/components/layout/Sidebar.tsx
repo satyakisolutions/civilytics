@@ -44,8 +44,9 @@ export function Sidebar({ className }: SidebarProps) {
   const { 
     currentView, 
     setCurrentView, 
-    alerts, 
-    isSoundEnabled, 
+    alerts,
+    clearAlerts,
+    isSoundEnabled,
     setIsSoundEnabled,
     isAlertPanelOpen,
     setIsAlertPanelOpen,
@@ -179,20 +180,9 @@ export function Sidebar({ className }: SidebarProps) {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 flex-shrink-0 text-muted-foreground hover:text-destructive"
-                  onClick={async (e) => {
+                  onClick={(e) => {
                     e.stopPropagation();
-                    try {
-                      const resp = await fetch(`${API_BASE}/api/alerts?status=active&limit=200`);
-                      if (!resp.ok) return;
-                      const activeList = await resp.json();
-                      for (const a of activeList) {
-                        await fetch(`${API_BASE}/api/alerts/${a.id}`, {
-                          method: 'PATCH',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ status: 'resolved' }),
-                        });
-                      }
-                    } catch { /* best effort */ }
+                    clearAlerts();
                   }}
                 >
                   <XCircle className="w-4 h-4" />

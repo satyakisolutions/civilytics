@@ -1,6 +1,6 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_viewer, require_admin
@@ -42,3 +42,16 @@ async def acknowledge_alert(
     await db.commit()
     await db.refresh(alert)
     return alert
+
+
+@router.post("/clear", status_code=200)
+async def clear_all_alerts(
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_viewer),
+):
+    """Resolve all active alerts in one bulk UPDATE."""
+    result = await db.execute(
+        update(Alert).where(Alert.status == "active").values(status="resolved")
+    )
+    await db.commit()
+    return {"cleared": result.rowcount}
