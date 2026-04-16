@@ -99,6 +99,32 @@ class VLMWorker:
             logger.exception("VLMWorker consume loop error")
 
     @staticmethod
+    def _crop_to_bbox(jpeg_b64: str, bbox: dict, padding: float = 0.15) -> str:
+        """Crop a base64 JPEG to the trigger bbox with padding.
+
+        This ensures the VLM only sees the object that triggered the alert,
+        not bystanders elsewhere in the frame.
+        """
+        try:
+            from PIL import Image
+            import io
+            img_bytes = base64.b64decode(jpeg_b64)
+            img = Image.open(io.BytesIO(img_bytes))
+            w, h = img.size
+            # bbox is normalized 0-1
+            x1 = max(0, bbox.get("x", 0) - padding) * w
+            y1 = max(0, bbox.get("y", 0) - padding) * h
+            x2 = min(1, bbox.get("x", 0) + bbox.get("w", 0) + padding) * w
+            y2 = min(1, bbox.get("y", 0) + bbox.get("h", 0) + padding) * h
+            cropped = img.crop((int(x1), int(y1), int(x2), int(y2)))
+            buf = io.BytesIO()
+            cropped.save(buf, format="JPEG", quality=80)
+            return base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception as exc:
+            logger.debug("Crop failed: %s — using full frame", exc)
+            return jpeg_b64
+
+    @staticmethod
     def _grab_rtsp_frame(camera_id: str) -> str | None:
         """Grab a single JPEG frame from the camera's RTSP input stream.
 
@@ -156,9 +182,14 @@ class VLMWorker:
                     None, self._grab_rtsp_frame, request.camera_id
                 )
                 if frame:
+                    # Crop to trigger bbox so VLM only sees the alert object
+                    if request.trigger_bbox:
+                        frame = self._crop_to_bbox(frame, request.trigger_bbox)
+                        logger.info("Cropped frame to trigger bbox for %s (%d KB)", request.camera_id, len(frame) * 3 // 4 // 1024)
+                    else:
+                        logger.info("Grabbed full RTSP frame for %s (%d KB)", request.camera_id, len(frame) * 3 // 4 // 1024)
                     request.frames_base64 = [frame]
                     request.frame_timestamps = [0.0]
-                    logger.info("Grabbed RTSP frame for %s (%d KB)", request.camera_id, len(frame) * 3 // 4 // 1024)
                 else:
                     logger.warning("Could not grab frame for %s — VLM will analyze without image", request.camera_id)
 
