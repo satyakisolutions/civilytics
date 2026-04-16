@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -12,6 +12,88 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { CameraCreateInput } from '@/hooks/useCameras';
 import { useToast } from '@/hooks/use-toast';
+
+// ---------------------------------------------------------------------------
+// Lightweight map picker — click on the map to set GPS coordinates.
+// Uses a single <div> with Leaflet loaded from CDN (no npm dep).
+// ---------------------------------------------------------------------------
+
+function MapPicker({ lat, lng, onSelect }: {
+  lat: number | null;
+  lng: number | null;
+  onSelect: (lat: number, lng: number) => void;
+}) {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<any>(null);
+  const markerRef = useRef<any>(null);
+
+  const initMap = useCallback(() => {
+    if (!mapRef.current || mapInstanceRef.current) return;
+    const L = (window as any).L;
+    if (!L) return;
+
+    const center: [number, number] = [lat ?? 12.9716, lng ?? 77.5946]; // Default: Bangalore
+    const map = L.map(mapRef.current).setView(center, 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OSM',
+      maxZoom: 19,
+    }).addTo(map);
+
+    if (lat != null && lng != null) {
+      markerRef.current = L.marker(center).addTo(map);
+    }
+
+    map.on('click', (e: any) => {
+      const { lat: newLat, lng: newLng } = e.latlng;
+      onSelect(parseFloat(newLat.toFixed(6)), parseFloat(newLng.toFixed(6)));
+      if (markerRef.current) {
+        markerRef.current.setLatLng(e.latlng);
+      } else {
+        markerRef.current = L.marker(e.latlng).addTo(map);
+      }
+    });
+
+    mapInstanceRef.current = map;
+  }, [lat, lng, onSelect]);
+
+  useEffect(() => {
+    // Load Leaflet CSS + JS from CDN if not already loaded
+    if ((window as any).L) {
+      initMap();
+      return;
+    }
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(link);
+
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.onload = () => initMap();
+    document.head.appendChild(script);
+
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+        markerRef.current = null;
+      }
+    };
+  }, [initMap]);
+
+  return (
+    <div
+      ref={mapRef}
+      style={{
+        width: '100%',
+        height: 200,
+        borderRadius: 6,
+        border: '1px solid hsl(var(--border))',
+        cursor: 'crosshair',
+      }}
+    />
+  );
+}
 
 interface Props {
   open: boolean;
@@ -141,27 +223,29 @@ export function AddCameraDialog({ open, onOpenChange, onAdd }: Props) {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-2">
-                <Label htmlFor="cam-lat">GPS Latitude</Label>
+            <div className="grid gap-2">
+              <Label>GPS Location <span className="text-muted-foreground text-xs">(click on map to set)</span></Label>
+              <MapPicker
+                lat={gpsLat ? parseFloat(gpsLat) : null}
+                lng={gpsLng ? parseFloat(gpsLng) : null}
+                onSelect={(lat, lng) => { setGpsLat(String(lat)); setGpsLng(String(lng)); }}
+              />
+              <div className="grid grid-cols-2 gap-3">
                 <Input
-                  id="cam-lat"
                   type="number"
                   step="any"
-                  placeholder="12.9716"
+                  placeholder="Latitude"
                   value={gpsLat}
                   onChange={(e) => setGpsLat(e.target.value)}
+                  className="text-xs h-7"
                 />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="cam-lng">GPS Longitude</Label>
                 <Input
-                  id="cam-lng"
                   type="number"
                   step="any"
-                  placeholder="77.5946"
+                  placeholder="Longitude"
                   value={gpsLng}
                   onChange={(e) => setGpsLng(e.target.value)}
+                  className="text-xs h-7"
                 />
               </div>
             </div>

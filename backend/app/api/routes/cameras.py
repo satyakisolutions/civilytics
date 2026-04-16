@@ -19,7 +19,7 @@ router = APIRouter(prefix="/cameras", tags=["cameras"])
 # Module-level singleton — reused across all requests.
 _notifier = PipelineNotifier(settings.redis_url)
 
-_ALLOWED_UPDATE_FIELDS = {"name", "zone", "status", "stream_url", "is_pinned", "location", "gps", "roi_polygons", "recording_config"}
+_ALLOWED_UPDATE_FIELDS = {"name", "zone", "status", "stream_url", "is_pinned", "location", "gps_lat", "gps_lng", "roi_polygons", "recording_config"}
 
 
 @router.get("", response_model=list[CameraResponse])
