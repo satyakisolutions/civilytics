@@ -212,11 +212,13 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
             />
             <ROIOverlay
               polygons={roi.polygons}
-              width={containerDimensions.width}
-              height={containerDimensions.height}
               isEditing={roi.isEditing}
               currentPoints={roi.currentPoints}
               onCanvasClick={roi.addPoint}
+              onUndoPoint={roi.undoPoint}
+              onFinish={roi.finishPolygon}
+              onCancel={roi.cancelEditing}
+              onRemovePolygon={roi.removePolygon}
             />
           </>
         ) : (
