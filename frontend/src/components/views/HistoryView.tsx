@@ -15,8 +15,9 @@ import {
   ChevronDown,
   MoreHorizontal,
 } from 'lucide-react';
-import { mockViolationEvents } from '@/data/mockData';
+import { useViolationEvents } from '@/hooks/useViolationEvents';
 import { ViolationEvent } from '@/types/monitoring';
+import { API_BASE } from '@/lib/api-base';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,20 +41,23 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 export function HistoryView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'active' | 'resolved'>('all');
+  const statusFilter = selectedFilter === 'all' ? undefined : selectedFilter;
+  const { events: allEvents, isLoading } = useViolationEvents({ status: statusFilter });
 
-  const filteredEvents = mockViolationEvents.filter(event => {
-    const matchesSearch = 
-      event.cameraName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      event.zone.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      event.location.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesFilter = 
-      selectedFilter === 'all' ||
-      (selectedFilter === 'active' && event.status === 'active') ||
-      (selectedFilter === 'resolved' && event.status === 'resolved');
-
-    return matchesSearch && matchesFilter;
+  const filteredEvents = allEvents.filter(event => {
+    const matchesSearch = !searchQuery ||
+      (event.cameraName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (event.zone || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (event.location || '').toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesSearch;
   });
+
+  const handleExportCsv = () => {
+    const params = new URLSearchParams();
+    if (statusFilter) params.set('status', statusFilter);
+    params.set('limit', '1000');
+    window.open(`${API_BASE}/api/events/export/csv?${params.toString()}`, '_blank');
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -69,9 +73,9 @@ export function HistoryView() {
               <Calendar className="w-4 h-4" />
               Date Range
             </Button>
-            <Button variant="outline" size="sm" className="gap-2">
+            <Button variant="outline" size="sm" className="gap-2" onClick={handleExportCsv}>
               <Download className="w-4 h-4" />
-              Export
+              Export CSV
             </Button>
           </div>
         </div>
@@ -147,7 +151,7 @@ export function HistoryView() {
       {/* Footer */}
       <div className="p-4 border-t border-border flex items-center justify-between">
         <span className="text-sm text-muted-foreground">
-          Showing {filteredEvents.length} of {mockViolationEvents.length} events
+          Showing {filteredEvents.length} of {allEvents.length} events
         </span>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" disabled>Previous</Button>
