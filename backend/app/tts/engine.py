@@ -65,27 +65,30 @@ class TTSEngine:
             logger.warning("Piper TTS not available — TTS will generate placeholder files")
 
     def _ensure_voice_model(self):
-        """Download the Piper voice model if not already present."""
-        import urllib.request
+        """Check voice model exists. Download from HuggingFace if missing."""
         model_path = Path(TTS_VOICE)
         if model_path.exists():
+            logger.info("Piper voice model found: %s", model_path)
             return
+        # Try to download
+        import urllib.request
         model_dir = model_path.parent
         model_dir.mkdir(parents=True, exist_ok=True)
-        model_name = model_path.stem  # e.g. "en_US-lessac-medium"
-        if model_name.endswith(".onnx"):
-            model_name = model_name[:-5]
-        base_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium"
-        for ext in [".onnx", ".onnx.json"]:
-            fpath = model_dir / f"{model_name}{ext}"
-            if not fpath.exists():
-                url = f"{base_url}/{model_name}{ext}"
-                logger.info("Downloading Piper voice: %s", url)
-                try:
-                    urllib.request.urlretrieve(url, str(fpath))
-                    logger.info("Downloaded: %s (%.1f MB)", fpath, fpath.stat().st_size / 1e6)
-                except Exception:
-                    logger.exception("Failed to download voice model")
+        # Extract model name: /tmp/piper_voices/en_US-lessac-medium.onnx → en_US-lessac-medium
+        model_name = model_path.name.replace(".onnx", "")
+        base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium"
+        for fname in [f"{model_name}.onnx", f"{model_name}.onnx.json"]:
+            fpath = model_dir / fname
+            if fpath.exists():
+                continue
+            url = f"{base_url}/{fname}"
+            logger.info("Downloading Piper voice: %s", url)
+            try:
+                urllib.request.urlretrieve(url, str(fpath))
+                logger.info("Downloaded: %s (%.1f MB)", fpath, fpath.stat().st_size / 1e6)
+            except Exception:
+                logger.exception("Failed to download voice model %s", url)
+                self._available = False
         logger.info(
             "TTS engine initialised (tone=%s voice=%s length_scale=%.2f)",
             TTS_TONE, TTS_VOICE, TTS_LENGTH_SCALE,
