@@ -108,7 +108,7 @@ class VLMClient:
                     "image_url": {"url": f"data:image/jpeg;base64,{frame}"},
                 }
             )
-        content.append({"type": "text", "text": "Analyse the frames above."})
+        content.append({"type": "text", "text": "Analyse the frames above. The image has bounding boxes drawn on detected objects — focus on the object with the RED or AMBER colored box and label showing ROI/ALERT/OBSERVE. That is the suspect object in the restricted zone. Describe THAT specific object/person, not others in the scene."})
 
         payload = {
             "model": settings.vlm_model,

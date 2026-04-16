@@ -106,7 +106,8 @@ class VLMWorker:
         annotated output — we want clean frames for VLM analysis).
         Returns base64-encoded JPEG or None on failure.
         """
-        rtsp_url = f"rtsp://mediamtx:8554/{camera_id}"
+        # Use annotated output stream — has bboxes showing the object in ROI
+        rtsp_url = f"rtsp://mediamtx:8554/{camera_id}-out"
         try:
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 tmp_path = tmp.name
