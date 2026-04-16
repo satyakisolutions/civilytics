@@ -61,7 +61,9 @@ RUN make -C nvdsinfer_custom_impl_Yolo CUDA_VER=12.2 \
  && ls -la nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so
 
 # SECURITY: Run as non-root user (GPU access via device mapping, not root)
-RUN useradd --no-create-home --shell /bin/false appuser
+RUN useradd --no-create-home --shell /bin/false appuser \
+ && mkdir -p /app/evidence /tmp/wastewatch \
+ && chown -R appuser:appuser /app/evidence /tmp/wastewatch
 USER appuser
 
 CMD ["python3", "-u", "entrypoint.py"]
