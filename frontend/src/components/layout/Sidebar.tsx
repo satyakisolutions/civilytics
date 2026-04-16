@@ -16,6 +16,7 @@ import {
   Activity,
   Map,
   PlayCircle,
+  XCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useMonitoring } from '@/context/MonitoringContext';
@@ -142,33 +143,65 @@ export function Sidebar({ className }: SidebarProps) {
       {/* Quick Actions */}
       <div className="p-3 border-t border-sidebar-border space-y-2">
         {/* Alert Toggle */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsAlertPanelOpen(!isAlertPanelOpen)}
-              className={cn(
-                'w-full justify-start gap-3 h-10',
-                isAlertPanelOpen && 'bg-sidebar-accent'
-              )}
-            >
-              <div className="relative">
-                <Bell className="w-4 h-4" />
-                {activeAlerts > 0 && (
-                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-destructive rounded-full status-dot-critical" />
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsAlertPanelOpen(!isAlertPanelOpen)}
+                className={cn(
+                  'flex-1 justify-start gap-3 h-10',
+                  isAlertPanelOpen && 'bg-sidebar-accent'
                 )}
-              </div>
-              <span className="text-sm">Notifications</span>
-              {activeAlerts > 0 && (
-                <Badge variant="destructive" className="ml-auto h-5 px-1.5 text-[10px]">
-                  {activeAlerts}
-                </Badge>
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="right">Toggle Notification Panel</TooltipContent>
-        </Tooltip>
+              >
+                <div className="relative">
+                  <Bell className="w-4 h-4" />
+                  {activeAlerts > 0 && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 bg-destructive rounded-full status-dot-critical" />
+                  )}
+                </div>
+                <span className="text-sm">Notifications</span>
+                {activeAlerts > 0 && (
+                  <Badge variant="destructive" className="ml-auto h-5 px-1.5 text-[10px]">
+                    {activeAlerts}
+                  </Badge>
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Toggle Notification Panel</TooltipContent>
+          </Tooltip>
+          {activeAlerts > 0 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 flex-shrink-0 text-muted-foreground hover:text-destructive"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const { API_BASE } = await import('@/lib/api-base');
+                      // Resolve all active alerts
+                      const resp = await fetch(`${API_BASE}/api/alerts?status=active&limit=200`);
+                      const activeList = await resp.json();
+                      await Promise.all(activeList.map((a: any) =>
+                        fetch(`${API_BASE}/api/alerts/${a.id}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ status: 'resolved' }),
+                        })
+                      ));
+                    } catch { /* best effort */ }
+                  }}
+                >
+                  <XCircle className="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Clear all notifications</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
 
         {/* Sound Toggle */}
         <Tooltip>

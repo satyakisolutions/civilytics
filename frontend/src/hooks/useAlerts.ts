@@ -43,6 +43,8 @@ export function useAlerts() {
 
   // Track known alert IDs to detect new ones on poll
   const knownAlertIds = useRef<Set<string>>(new Set());
+  const initialLoadDone = useRef(false);
+  const lastNotifyTime = useRef(0);
 
   // Fetch from backend API (works without Supabase realtime)
   const fetchFromApi = useCallback(async () => {
@@ -63,32 +65,36 @@ export function useAlerts() {
         ttsAudioUrl: a.tts_audio_url,
       }));
 
-      // Detect NEW alerts (not seen before)
-      for (const alert of mapped) {
-        if (!knownAlertIds.current.has(alert.id) && alert.status === 'active') {
+      if (!initialLoadDone.current) {
+        // First load — seed known IDs, don't notify
+        for (const a of mapped) knownAlertIds.current.add(a.id);
+        initialLoadDone.current = true;
+      } else {
+        // Subsequent polls — only notify for genuinely new CRITICAL alerts
+        // Throttle: max 1 notification per 10 seconds
+        const now = Date.now();
+        for (const alert of mapped) {
+          if (knownAlertIds.current.has(alert.id)) continue;
           knownAlertIds.current.add(alert.id);
-          // Only notify if this is genuinely new (not from initial load)
-          if (knownAlertIds.current.size > mapped.length) {
-            continue; // Skip — this is the initial load
-          }
+          if (alert.status !== 'active') continue;
+          if (alert.severity !== 'critical') continue; // Only notify critical
+          if (now - lastNotifyTime.current < 10_000) continue; // Throttle
+
+          lastNotifyTime.current = now;
           notifyViolation(
             alert.title,
             alert.message || '',
-            alert.severity as 'critical' | 'warning' | 'info',
+            alert.severity,
             `alert-${alert.id}`,
             (alert as any).ttsAudioUrl || undefined
           );
           toast({
             title: alert.title,
             description: alert.message,
-            variant: alert.severity === 'critical' ? 'destructive' : 'default'
+            variant: 'destructive',
           });
+          break; // Only 1 notification per poll cycle
         }
-      }
-
-      // Seed known IDs on first load
-      if (knownAlertIds.current.size === 0) {
-        for (const a of mapped) knownAlertIds.current.add(a.id);
       }
 
       setAlerts(mapped);
