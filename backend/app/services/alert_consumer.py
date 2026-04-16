@@ -15,7 +15,8 @@ import orjson
 from aiokafka import AIOKafkaConsumer
 from sqlalchemy import insert, select
 
-from app.config.kafka import GROUP_ALERT_DISPATCHER as GROUP_ALERT_DISPATCH
+# Use a SEPARATE group from the escalation worker so both receive messages
+GROUP_ALERT_DISPATCH = "wastewatch.group.api-alert-consumer"
 from app.db.engine import async_session
 from app.db.models import Camera
 from app.ws.alerts import broadcast_alert
