@@ -6,8 +6,10 @@ microservices.  See ``backend/services/`` for their entrypoints.
 """
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.api.routes import cameras, health, config_routes, events, roi, alerts, evidence, lpr, analytics, system, devices, reports
 from app.api.routes import logs as log_routes
 from app.config.settings import settings
@@ -70,6 +72,17 @@ def create_app() -> FastAPI:
     app.include_router(ws_metadata.router, prefix="/ws")
     app.include_router(ws_events.router, prefix="/ws")
     app.include_router(ws_alerts.router, prefix="/ws")
+
+    # Serve TTS audio files so the browser can fetch and play them
+    tts_dir = Path("/tmp/wastewatch/tts")
+    tts_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/tts", StaticFiles(directory=str(tts_dir)), name="tts")
+
+    # Serve evidence files (keyframes, video clips)
+    evidence_dir = Path("/app/evidence")
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/evidence", StaticFiles(directory=str(evidence_dir)), name="evidence")
+
     return app
 
 

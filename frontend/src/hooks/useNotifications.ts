@@ -87,15 +87,32 @@ export function useNotifications() {
     }
   }, []);
 
+  const playTTSAudio = useCallback(async (audioUrl: string) => {
+    if (!isSoundEnabled) return;
+    try {
+      const audio = new Audio(audioUrl);
+      audio.volume = 0.8;
+      await audio.play();
+    } catch (e) {
+      console.warn('TTS audio playback failed, falling back to tone:', e);
+      playAlertSound('critical');
+    }
+  }, [isSoundEnabled, playAlertSound]);
+
   const notifyViolation = useCallback((
     title: string,
     message: string,
     severity: 'critical' | 'warning' | 'info',
-    tag?: string
+    tag?: string,
+    ttsAudioUrl?: string
   ) => {
-    playAlertSound(severity);
+    if (ttsAudioUrl) {
+      playTTSAudio(ttsAudioUrl);
+    } else {
+      playAlertSound(severity);
+    }
     sendPushNotification(title, message, severity, tag);
-  }, [playAlertSound, sendPushNotification]);
+  }, [playAlertSound, playTTSAudio, sendPushNotification]);
 
   // Request permission on mount
   useEffect(() => {
@@ -105,6 +122,7 @@ export function useNotifications() {
   return {
     notifyViolation,
     playAlertSound,
+    playTTSAudio,
     sendPushNotification,
     requestPermission,
   };

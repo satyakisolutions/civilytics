@@ -56,12 +56,13 @@ export function useAlerts() {
         (payload) => {
           const newAlert = payload.new as any;
           
-          // Play sound + browser push notification
+          // Play TTS voice alert if available, otherwise fall back to tone
           notifyViolation(
             newAlert.title,
             newAlert.message,
             newAlert.severity as 'critical' | 'warning' | 'info',
-            `alert-${newAlert.id}`
+            `alert-${newAlert.id}`,
+            newAlert.tts_audio_url || undefined
           );
 
           // Show toast notification
