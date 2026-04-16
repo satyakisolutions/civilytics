@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useMonitoring } from '@/context/MonitoringContext';
+import { API_BASE } from '@/lib/api-base';
 
 export function useNotifications() {
   const { isSoundEnabled } = useMonitoring();
@@ -99,6 +100,34 @@ export function useNotifications() {
     }
   }, [isSoundEnabled, playAlertSound]);
 
+  // Try to play TTS audio by computing the hash of the TTS text
+  // TTS worker generates: /tts/tts_{sha256(text)[:16]}.wav
+  const tryPlayTTS = useCallback(async (text: string, severity: 'critical' | 'warning' | 'info') => {
+    if (!isSoundEnabled || !text) { playAlertSound(severity); return; }
+    try {
+      // Build the TTS text the pipeline sends (matches kafka_producer.send_tts_request)
+      const ttsText = severity === 'critical'
+        ? `Alert. Violation confirmed at camera ${text}`
+        : `Warning. Suspicious activity detected at camera ${text}`;
+      // SHA256 hash (first 16 chars) — same as backend TTSEngine
+      const encoder = new TextEncoder();
+      const data = encoder.encode(text);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+      const ttsUrl = `${API_BASE}/tts/tts_${hashHex}.wav`;
+      // Try to fetch — if 404, fall back to beep
+      const resp = await fetch(ttsUrl, { method: 'HEAD' });
+      if (resp.ok) {
+        playTTSAudio(ttsUrl);
+      } else {
+        playAlertSound(severity);
+      }
+    } catch {
+      playAlertSound(severity);
+    }
+  }, [isSoundEnabled, playAlertSound, playTTSAudio]);
+
   const notifyViolation = useCallback((
     title: string,
     message: string,
@@ -109,7 +138,8 @@ export function useNotifications() {
     if (ttsAudioUrl) {
       playTTSAudio(ttsAudioUrl);
     } else {
-      playAlertSound(severity);
+      // Try to find TTS audio by message hash, fall back to beep
+      tryPlayTTS(message, severity);
     }
     sendPushNotification(title, message, severity, tag);
   }, [playAlertSound, playTTSAudio, sendPushNotification]);
