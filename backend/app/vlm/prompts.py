@@ -14,23 +14,26 @@ Analyse the provided image frames and determine whether illegal waste dumping is
 
 Respond with ONLY a valid JSON object in this exact format:
 {{
-  "person_description": "<appearance of person if visible, else empty string>",
+  "person_description": "<appearance of person if visible — clothing, gender, distinguishing features>",
   "action": "<brief description of the observed action>",
   "is_dumping": <true | false>,
   "waste_type": "<plastic_bag | construction_debris | household_waste | organic | unknown | none>",
   "severity": "<critical | warning | info>",
   "confidence": <0.0 to 1.0>,
-  "reasoning": "<short explanation of your decision>",
-  "command": "<operator instruction, e.g. dispatch patrol | monitor | no action>"
+  "reasoning": "<short explanation of your decision for the operator>",
+  "command": "<operator instruction, e.g. dispatch patrol | monitor | no action>",
+  "deterrent_message": "<direct spoken warning to the person at the scene — specific to what you see, addressing them by description, telling them to stop and what they did wrong. Example: 'Lady in saree carrying plastic cover, put it back. Dumping waste here is illegal. You are being recorded.' Keep it under 30 words, firm but not threatening.>"
 }}
 
 Rules:
-- Set is_dumping=true only when you have clear visual evidence of waste being deposited.
-- severity=critical if waste is being actively dumped and poses an immediate risk.
+- Set is_dumping=true only when you have clear visual evidence of waste being deposited or something being removed/stolen.
+- Also set is_dumping=true if an object is missing that was present in earlier frames (theft/removal).
+- severity=critical if waste is being actively dumped or property is being stolen.
 - severity=warning if suspicious activity but not conclusive.
 - severity=info for normal behaviour or insufficient evidence.
 - confidence must be between 0.0 and 1.0.
 - waste_type=none if no waste is visible.
+- deterrent_message must describe the specific person and their specific action — never use generic warnings.
 """
 
 CONTEXT_TEMPLATE = """Additional context:

@@ -168,38 +168,41 @@ class AlertConsumer:
         is_dumping = response.get("is_dumping", False)
         waste_type = response.get("waste_type", "none")
         confidence = response.get("confidence", 0)
+        person_desc = response.get("person_description", "")
+        deterrent = response.get("deterrent_message", "")
         severity = "critical" if is_dumping else "info"
 
-        # Build notification text from VLM analysis
-        if is_dumping:
-            vlm_text = f"VLM Analysis at camera {camera_id}. {reasoning}. Waste type: {waste_type}."
-        elif reasoning:
-            vlm_text = f"VLM Analysis at camera {camera_id}. {reasoning}."
-        else:
-            vlm_text = f"VLM Analysis at camera {camera_id}. {action}."
-
-        # Compute TTS hash for the VLM text
-        tts_hash = hashlib.sha256(vlm_text.encode()).hexdigest()[:16]
-        tts_audio_url = f"/tts/tts_{tts_hash}.wav"
-
-        # Send TTS request via Kafka so the TTS worker generates the audio
-        try:
-            from aiokafka import AIOKafkaProducer
-            if self._tts_producer is None:
-                self._tts_producer = AIOKafkaProducer(
-                    bootstrap_servers=self._bootstrap_servers,
-                    value_serializer=lambda v: orjson.dumps(v),
+        # --- Deterrent TTS (spoken on IP speakers to the person) ---
+        # Uses the VLM's specific, contextual scolding message
+        speaker_text = deterrent or reasoning or action
+        if speaker_text:
+            speaker_hash = hashlib.sha256(speaker_text.encode()).hexdigest()[:16]
+            try:
+                from aiokafka import AIOKafkaProducer
+                if self._tts_producer is None:
+                    self._tts_producer = AIOKafkaProducer(
+                        bootstrap_servers=self._bootstrap_servers,
+                        value_serializer=lambda v: orjson.dumps(v),
+                    )
+                    await self._tts_producer.start()
+                await self._tts_producer.send_and_wait(
+                    TOPIC_TTS,
+                    value={"camera_id": camera_id, "track_id": track_id,
+                           "text": speaker_text, "priority": "high" if is_dumping else "normal"},
                 )
-                await self._tts_producer.start()
-            await self._tts_producer.send_and_wait(
-                TOPIC_TTS,
-                value={"camera_id": camera_id, "track_id": track_id,
-                       "text": vlm_text, "priority": "high" if is_dumping else "normal"},
-            )
-        except Exception:
-            logger.exception("Failed to send TTS for VLM result")
+            except Exception:
+                logger.exception("Failed to send deterrent TTS")
 
-        # Broadcast VLM result + TTS URL to frontend via WebSocket
+        # --- Operator notification (UI — reasoning + deterrent) ---
+        # Build a notification text for the operator dashboard
+        operator_text = reasoning
+        if person_desc:
+            operator_text = f"{person_desc}. {reasoning}"
+
+        tts_audio_url = None
+        if speaker_text:
+            tts_audio_url = f"/tts/tts_{hashlib.sha256(speaker_text.encode()).hexdigest()[:16]}.wav"
+
         ws_payload = {
             "type": "vlm_result",
             "camera_id": camera_id,
@@ -208,14 +211,17 @@ class AlertConsumer:
             "waste_type": waste_type,
             "confidence": confidence,
             "reasoning": reasoning,
+            "person_description": person_desc,
+            "deterrent_message": deterrent,
             "action": action,
             "tts_audio_url": tts_audio_url,
             "severity": severity,
-            "title": f"VLM: {action}" if action else "VLM Analysis",
-            "message": reasoning,
+            "title": f"VLM: {person_desc or action}" if (person_desc or action) else "VLM Analysis",
+            "message": operator_text,
         }
         await broadcast_alert(ws_payload)
-        logger.info("VLM result broadcast: cam=%s dumping=%s — %s", camera_id, is_dumping, reasoning[:80])
+        logger.info("VLM result: cam=%s dumping=%s deterrent='%s' reasoning='%s'",
+                     camera_id, is_dumping, deterrent[:60], reasoning[:60])
 
     @staticmethod
     def _get_alert_table():
