@@ -10,6 +10,12 @@ logger = logging.getLogger(__name__)
 _MAX_BBOX_HISTORY = 50
 
 
+# Number of consecutive frames outside ROI before we consider the object
+# truly exited. Prevents jittery detections (bbox flicker, tracker miss)
+# from resetting dwell time on a single missed frame.
+_ROI_EXIT_HYSTERESIS = 5
+
+
 @dataclass
 class TrackInfo:
     track_id: int
@@ -19,6 +25,7 @@ class TrackInfo:
     last_seen: float
     in_roi: bool = False
     roi_entered_at: float | None = None
+    _outside_roi_count: int = 0  # hysteresis counter
     bbox_history: deque = field(default_factory=lambda: deque(maxlen=_MAX_BBOX_HISTORY))
 
     @property
@@ -37,13 +44,17 @@ class TrackInfo:
         # Sample bbox history every ~0.5s (deque auto-evicts oldest when full)
         if not self.bbox_history or (now - self.bbox_history[-1].get("t", 0)) > 0.5:
             self.bbox_history.append({"t": round(now, 2), **bbox})
-        # ROI transitions
-        if in_roi and not self.in_roi:
-            self.roi_entered_at = now
-            self.in_roi = True
-        elif not in_roi and self.in_roi:
-            self.in_roi = False
-            self.roi_entered_at = None  # Reset — dwell only counts time IN roi
+        # ROI transitions with hysteresis — don't exit on a single missed frame
+        if in_roi:
+            self._outside_roi_count = 0
+            if not self.in_roi:
+                self.roi_entered_at = now
+                self.in_roi = True
+        else:
+            self._outside_roi_count += 1
+            if self.in_roi and self._outside_roi_count >= _ROI_EXIT_HYSTERESIS:
+                self.in_roi = False
+                self.roi_entered_at = None
 
 
 class TrackStateManager:

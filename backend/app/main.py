@@ -18,6 +18,7 @@ from app.ws import events as ws_events
 from app.ws import alerts as ws_alerts
 from app.services.kafka_consumer import MetadataConsumer
 from app.services.event_consumer import EventConsumer
+from app.services.alert_consumer import AlertConsumer
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,17 @@ async def lifespan(app: FastAPI):
         logger.warning("EventConsumer failed to start: %s", e)
         event_consumer = None
 
+    alert_consumer = AlertConsumer(settings.kafka_bootstrap_servers)
+    try:
+        await alert_consumer.start()
+    except Exception as e:
+        logger.warning("AlertConsumer failed to start: %s", e)
+        alert_consumer = None
+
     yield
 
+    if alert_consumer:
+        await alert_consumer.stop()
     if metadata_consumer:
         await metadata_consumer.stop()
     if event_consumer:
