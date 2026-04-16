@@ -18,9 +18,17 @@ MEDIAMTX_PORT="${MEDIAMTX_PORT:-8554}"
 VIDEO_DIR="${VIDEO_DIR:-/videos}"
 
 # ffmpeg params per tier: "width:height fps v_bitrate v_bufsize"
-TIER_LARGE="1280:720 25 3500k 7000k"
-TIER_MEDIUM="854:480 20 1200k 2400k"
-TIER_SMALL="426:240 15 500k 1000k"
+#
+# IMPORTANT — fps note: the LSG RF-DETR FP16 engine runs at ~16 fps on
+# the deployment 3060. With multiple cameras competing for that single
+# inference slot (engine batch=1 today, capped by Roboflow's static-
+# batch ONNX export), each camera should publish at ~8 fps to keep
+# inference 1:1 with frames. Going higher just queues frames that
+# never get fresh detections — perceived as bbox flicker on the
+# annotated cam-XX-out streams.
+TIER_LARGE="1280:720 8 3500k 7000k"
+TIER_MEDIUM="854:480 8 1200k 2400k"
+TIER_SMALL="426:240 8 500k 1000k"
 
 publish_tier() {
     cam="$1"
@@ -53,7 +61,7 @@ publish_tier() {
 # for the frontend quality toggle on the raw input path; the
 # DeepStream pipeline's annotated `cam-01-out` stream is separate
 # and always served at the large tier.
-SRC_FILE="${LSG_LIVE_SRC:-VID-20260131-WA0003.mp4}"
+SRC_FILE="${LSG_LIVE_SRC:-VID-20260131-WA0007.mp4}"
 
 publish_tier "cam-01"    "${SRC_FILE}" "large"  "${TIER_LARGE}"  &
 publish_tier "cam-01-md" "${SRC_FILE}" "medium" "${TIER_MEDIUM}" &

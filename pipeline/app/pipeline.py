@@ -533,32 +533,11 @@ def decorate_for_osd(
 # ---------------------------------------------------------------------------
 
 
-def _capture_frame_base64(gst_buffer, frame_meta) -> str | None:
-    """Capture frame by mapping NV12 buffer → convert via numpy → PPM base64.
 
-    The fakesink buffer is NV12 format. pyds.get_nvds_buf_surface requires
-    RGBA. We use unmap_nvds_buf_surface + manual NV12→RGB conversion.
-    Falls back to None if conversion fails (VLM worker handles missing frames).
-    """
-    import base64
-    try:
-        import numpy as np
-
-        # Get NV12 surface info
-        surface = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-        if surface is not None:
-            h, w = surface.shape[0], surface.shape[1]
-            rgb = surface[:, :, :3]
-            header = f"P6\n{w} {h}\n255\n".encode('ascii')
-            return base64.b64encode(header + rgb.tobytes()).decode('ascii')
-
-        # If get_nvds_buf_surface fails (NV12), try the batch approach
-        # The osd branch has RGBA — but we're on fakesink (NV12)
-        # Skip frame capture for now — VLM will use metadata only
-        return None
-    except Exception as exc:
-        logger.warning("Frame capture failed: %s", exc)
-        return None
+# Frame capture removed — DeepStream fakesink buffer is NV12 which
+# can't be mapped via get_nvds_buf_surface (requires RGBA). Adding
+# nvvideoconvert causes segfaults. Instead, the VLM worker grabs
+# the frame directly from the RTSP stream when it needs one.
 
 
 def extract_metadata(
@@ -981,16 +960,11 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     queue_meta.set_property("max-size-buffers", 5)
     queue_meta.set_property("max-size-bytes", 0)
     queue_meta.set_property("max-size-time", 0)
-    # Convert to RGBA so get_nvds_buf_surface works for frame capture
-    nvvidconv_meta = make_element("nvvideoconvert", "nvvidconv_meta")
-    caps_meta = make_element("capsfilter", "caps_meta")
-    caps_meta.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM), format=RGBA"))
-
     fakesink = make_element("fakesink", "fakesink_meta")
     fakesink.set_property("sync", False)
     fakesink.set_property("async", False)
 
-    for elem in (queue_meta, nvvidconv_meta, caps_meta, fakesink):
+    for elem in (queue_meta, fakesink):
         pipeline.add(elem)
 
     # --- Link main chain ----------------------------------------------------
@@ -1043,14 +1017,8 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
         logger.critical("Failed to link tee -> queue_meta")
         sys.exit(1)
 
-    if not queue_meta.link(nvvidconv_meta):
-        logger.critical("Failed to link queue_meta -> nvvidconv_meta")
-        sys.exit(1)
-    if not nvvidconv_meta.link(caps_meta):
-        logger.critical("Failed to link nvvidconv_meta -> caps_meta")
-        sys.exit(1)
-    if not caps_meta.link(fakesink):
-        logger.critical("Failed to link caps_meta -> fakesink")
+    if not queue_meta.link(fakesink):
+        logger.critical("Failed to link queue_meta -> fakesink")
         sys.exit(1)
 
     return pipeline, streammux, fakesink, nvdsanalytics, use_native_meta, ww_meta_elem, output_manager

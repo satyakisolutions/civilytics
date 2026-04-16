@@ -1,30 +1,63 @@
 %YAML:1.0
-# ByteTrack via nvtracker — tuned for RF-DETR FP16 sigmoid-head confidences.
-# Keep these in lock-step with pre-cluster-threshold in nvinfer_rfdetr.txt:
-# our RF-DETR FP16 engine emits ~0.15-0.22 on confident real detections and
-# ~0.05-0.08 on background noise queries. Setting minDetectorConfidence
-# higher than 0.22 silently eats every object downstream (nvtracker emits
-# an empty obj_meta_list), which presents as "inference is broken".
+####################################################################################################
+# WasteWatch tracker — NvSORT (NVIDIA-optimised SORT) tuned for RF-DETR FP16 sigmoid scores.
+#
+# Section names + key names below MUST match the DeepStream 7.0 schema exactly.
+# The previous version of this file used keys from a 3rd-party ByteTrack
+# implementation (TrackingAlgo, tracking_algo, track_thresh, etc.) — every
+# one of those was ignored at load time with
+#   [WARNING][NvTrackerParamsBase] Unknown param found: ...
+# which left the tracker running on built-in defaults that assume YOLO-era
+# 0.5+ detector confidence. RF-DETR FP16 emits 0.05–0.20 on real targets,
+# so the default minDetectorConfidence ≈ 0.13 was eating roughly half our
+# detections and producing the on/off "flicker" the operator sees.
+#
+# Reference: /opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvSORT.yml
+####################################################################################################
+
 BaseConfig:
-  minDetectorConfidence: 0.12
-  minTrackerConfidence:  0.10
-  trackerMaxShadowTrailingAge: 30
-  probationAge: 3
-  maxTargetsPerStream: 150
-  enableBatchProcess: 1
+  # If a detection's score is below this, it is NOT considered for tracking.
+  # Calibrated for FP32 engine where real targets score 0.25+.
+  minDetectorConfidence: 0.15
 
 TargetManagement:
-  enableTargetManagement: 1
-  maxTargetsPerStream: 150
-  minIouDiff4NewTarget: 0.7
-  preserveStreamUpdateOrder: 0
-  maxShadowTrackingAge: 30
-  probationAge: 3
+  enableBboxUnClipping: 1     # Keep the bbox visible when it touches the image border.
+  maxTargetsPerStream: 200
+
+  # Creation & termination policy
+  minIouDiff4NewTarget: 0.5   # New detection only spawns a target if IOU vs all existing tracks is below this.
+  minTrackerConfidence: 0.10  # Below this, the track goes into shadow mode (Kalman-only).
+  probationAge: 1             # 1 frame confirmation — objects appear immediately. False positives die after earlyTerminationAge anyway.
+  maxShadowTrackingAge: 120   # ~4s @ 30fps / ~15s @ 8fps — survives extended occlusion and detector misses across multiple inference cycles.
   earlyTerminationAge: 1
 
-TrackingAlgo:
-  tracking_algo: 1
-  track_thresh:  0.15
-  high_thresh:   0.22
-  match_thresh:  0.8
-  track_buffer:  30
+TrajectoryManagement:
+  useUniqueID: 1              # 64-bit unique IDs across the run — needed for our FSM dwell counters.
+
+DataAssociator:
+  dataAssociatorType: 0
+  associationMatcherType: 1   # CASCADED — better when many similar-class targets share the frame.
+  checkClassMatch: 1
+
+  # Thresholds for valid candidates (keep loose for sigmoid-low DETR scores).
+  minMatchingScore4Overall:        0.20
+  minMatchingScore4SizeSimilarity: 0.40
+  minMatchingScore4Iou:            0.20
+  matchingScoreWeight4SizeSimilarity: 0.15
+  matchingScoreWeight4Iou:            0.40
+
+  # Tentative detections — anything between minDetectorConfidence (0.04)
+  # and this threshold is treated as "weak" and only IOU-matched against
+  # existing tracks (no new track spawns). This is the key anti-flicker
+  # mechanism: when RF-DETR's score dips from 0.12 to 0.06 for one frame,
+  # the detection still matches the existing track instead of being dropped.
+  tentativeDetectorConfidence: 0.25
+  minMatchingScore4TentativeIou: 0.25
+  usePrediction4Assoc: 1
+
+StateEstimator:
+  stateEstimatorType: 2       # REGULAR (full Kalman with size/aspect terms — best for shadow mode).
+
+  noiseWeightVar4Loc: 0.0301
+  noiseWeightVar4Vel: 0.0017
+  useAspectRatio: 1

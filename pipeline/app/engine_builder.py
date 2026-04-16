@@ -62,20 +62,18 @@ class EngineSpec:
 ENGINES: list[EngineSpec] = [
     EngineSpec(
         # RF-DETR base exports ONNX at 560x560 with a static batch of 1.
-        # (This is the default from `rfdetr.RFDETRBase().export()`.) The
-        # ONNX was previously written as if it were a 640x640 dynamic-
-        # batch export, which the TRT 8.6 builder then rejected on the
-        # first Shape/ScatterND it hit. Keep the engine matched to the
-        # shape the model was actually trained for — also update
-        # configs/nvinfer_rfdetr.txt so DeepStream feeds 560x560 crops.
+        # FP16 destroys the DETR transformer decoder — attention layers
+        # lose precision and all scores collapse to 0.06-0.12 noise.
+        # FP32 produces correct scores (0.3-0.8 on real targets).
         name="RF-DETR (PGIE)",
         onnx_path=MODELS_DIR / "rfdetr" / "rfdetr.onnx",
-        engine_path=MODELS_DIR / "rfdetr" / "rfdetr_fp16.engine",
+        engine_path=MODELS_DIR / "rfdetr" / "rfdetr_fp32.engine",
         export_script="export_rfdetr_onnx.py",
         min_shapes="input:1x3x560x560",
         opt_shapes="input:1x3x560x560",
         max_shapes="input:1x3x560x560",
         workspace_mb=4096,
+        fp16=False,
     ),
     EngineSpec(
         name="Action Classifier (SGIE)",

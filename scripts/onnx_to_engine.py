@@ -95,6 +95,11 @@ MODELS: list[ModelSpec] = [
         display_name="RF-DETR (PGIE)",
         onnx_rel="rfdetr/rfdetr.onnx",
         engine_rel="rfdetr/rfdetr_fp16.engine",
+        # The RF-DETR ONNX from Roboflow is exported with a STATIC
+        # batch axis (dets [1,300,4], labels [1,300,91]), so trtexec
+        # cannot stretch the engine past batch=1 here. The multi-
+        # camera fan-out is handled at the pipeline level by pinning
+        # streammux batch-size=1 — see pipeline/app/config.py.
         min_batch=1, opt_batch=1, max_batch=1,
         workspace_mb=4096,
         fp16=True,

@@ -8,14 +8,17 @@ VIOLATION → keep everything).
 import json
 import logging
 import os
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 EVIDENCE_BASE = Path(os.environ.get("WW_EVIDENCE_DIR", "/app/evidence"))
+RETENTION_DAYS = int(os.environ.get("WW_EVIDENCE_RETENTION_DAYS", "7"))
 
 
 @dataclass
@@ -158,3 +161,56 @@ class EvidenceWriter:
         logger.info("Evidence finalized: %s outcome=%s → %s", event_id, outcome, json_path)
 
         return record
+
+    def rotate(self, retention_days: int | None = None) -> int:
+        """Delete evidence directories older than retention_days.
+
+        Scans both evidence/suspicious/ and evidence/violations/ for
+        date-stamped subdirectories (YYYY-MM-DD). Any directory whose
+        date is older than the cutoff is removed entirely.
+
+        Called periodically from the pipeline's health_check_cb (every
+        10s is fine — the scan is cheap since it only reads directory
+        names, not file contents).
+
+        Returns the number of directories removed.
+        """
+        days = retention_days if retention_days is not None else RETENTION_DAYS
+        cutoff = datetime.utcnow().date() - timedelta(days=days)
+        removed = 0
+
+        for category in ("suspicious", "violations"):
+            category_dir = self._base / category
+            if not category_dir.exists():
+                continue
+            # Structure: evidence/{category}/{camera_id}/{YYYY-MM-DD}/
+            for camera_dir in category_dir.iterdir():
+                if not camera_dir.is_dir():
+                    continue
+                for date_dir in camera_dir.iterdir():
+                    if not date_dir.is_dir():
+                        continue
+                    try:
+                        dir_date = datetime.strptime(date_dir.name, "%Y-%m-%d").date()
+                    except ValueError:
+                        continue  # Not a date directory
+                    if dir_date < cutoff:
+                        try:
+                            shutil.rmtree(date_dir)
+                            removed += 1
+                            logger.info(
+                                "Rotated evidence: %s (%s, %d days old)",
+                                date_dir, category, (datetime.utcnow().date() - dir_date).days,
+                            )
+                        except OSError:
+                            logger.exception("Failed to rotate %s", date_dir)
+                # Clean up empty camera directories
+                try:
+                    if camera_dir.exists() and not any(camera_dir.iterdir()):
+                        camera_dir.rmdir()
+                except OSError:
+                    pass
+
+        if removed:
+            logger.info("Evidence rotation complete: removed %d directories (retention=%d days)", removed, days)
+        return removed

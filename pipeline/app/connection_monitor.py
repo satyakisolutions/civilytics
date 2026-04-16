@@ -465,6 +465,10 @@ class ConnectionMonitor:
                 conn.camera_id,
             )
 
+        # Clear stale health state so check_health() stops returning this
+        # camera as timed-out while it's already DOWN awaiting reconnection.
+        self._health.clear(conn.camera_id)
+
         conn.state = ConnectionState.DOWN
         conn.last_state_change = time.monotonic()
         conn.last_attempt = time.monotonic()

@@ -14,6 +14,11 @@ class CameraHealth:
         self._last_frame[camera_id] = time.monotonic()
         self._retry_count[camera_id] = 0
 
+    def clear(self, camera_id: str) -> None:
+        """Remove tracking state for a camera that has been taken offline."""
+        self._last_frame.pop(camera_id, None)
+        self._retry_count.pop(camera_id, None)
+
     def check_health(self) -> list[str]:
         """Return a list of camera IDs that have timed out and should be retried.
 
