@@ -662,23 +662,24 @@ def extract_metadata(
                     if fsm_event:
                         kafka_producer.send_event(fsm_event)
 
-                        # --- OBSERVE triggers: start evidence gathering ---
-                        if fsm_event.state == FSMState.OBSERVE:
-                            # Send VLM analysis request
+                        # --- OBSERVE triggers: one-shot per track ---
+                        # Get the FSM object to check/set one-shot guards
+                        _fsm_obj = fsm_manager._fsms.get((camera_id, track_id))
+
+                        if fsm_event.state == FSMState.OBSERVE and _fsm_obj and not _fsm_obj.observe_triggered:
+                            _fsm_obj.observe_triggered = True
                             kafka_producer.send_vlm_request(
                                 camera_id=camera_id, track_id=track_id,
                                 zone_name=camera_id, dwell_time_s=track_info.dwell_time_s,
                                 class_name=class_name,
                                 path_summary=f"observe_trigger:{track_info.dwell_time_s:.0f}s",
                             )
-                            # Send TTS warning (not confirmed alert yet)
                             kafka_producer.send_tts_request(
                                 camera_id=camera_id,
                                 track_id=track_id,
                                 text=f"Warning. Suspicious activity detected at camera {camera_id}. A {class_name} has been in the restricted zone for {int(track_info.dwell_time_s)} seconds. Please investigate.",
                                 priority="normal",
                             )
-                            # Send warning alert to UI (shows in alert panel + triggers amber border)
                             kafka_producer.send_alert(
                                 camera_id=camera_id,
                                 track_id=track_id,
@@ -687,9 +688,9 @@ def extract_metadata(
                                 message=f"A {class_name} has been in the restricted zone for {int(track_info.dwell_time_s)} seconds. Monitoring.",
                             )
 
-                        # --- VIOLATION triggers: confirmed alert ---
-                        elif fsm_event.state == FSMState.VIOLATION:
-                            # Send confirmed alert to UI (shows in alert panel + triggers red border)
+                        # --- VIOLATION triggers: one-shot per track ---
+                        elif fsm_event.state == FSMState.VIOLATION and _fsm_obj and not _fsm_obj.violation_triggered:
+                            _fsm_obj.violation_triggered = True
                             kafka_producer.send_alert(
                                 camera_id=camera_id,
                                 track_id=track_id,
@@ -697,7 +698,6 @@ def extract_metadata(
                                 title=f"Violation confirmed — {class_name} at {camera_id}",
                                 message=f"A {class_name} has been in the restricted zone for {int(track_info.dwell_time_s)} seconds. Immediate attention required.",
                             )
-                            # Escalation TTS
                             kafka_producer.send_tts_request(
                                 camera_id=camera_id,
                                 track_id=track_id,

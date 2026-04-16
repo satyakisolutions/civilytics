@@ -43,6 +43,9 @@ class TrackFSM:
     observe_threshold_s: float = 10.0
     violation_threshold_s: float = 15.0
     exit_timeout_s: float = 300.0
+    # One-shot guards: each trigger fires exactly once per track lifecycle
+    observe_triggered: bool = False
+    violation_triggered: bool = False
 
 
 class EventFSMManager:
