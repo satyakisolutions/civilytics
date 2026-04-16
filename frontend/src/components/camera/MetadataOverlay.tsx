@@ -101,12 +101,19 @@ function formatTrackId(trackId: number | null | undefined): string {
   return `#${String(trackId % 1000).padStart(3, "0")}`;
 }
 
-function buildEnrichedLabel(det: BBoxDetection, allDetections: BBoxDetection[]): string {
+function buildEnrichedLabel(det: BBoxDetection, allDetections: BBoxDetection[]): { label: string; isSuspect: boolean } {
   const fsmState = det.fsm_state ?? "idle";
   const trackTag = formatTrackId(det.track_id);
+  const isSuspect = (det as any).is_suspect === true;
+
+  // Suspect highlight — escalated person now outside ROI
+  if (isSuspect && (fsmState === "idle" || fsmState === "exited")) {
+    return { label: `${trackTag} ${det.class_name} | SUSPECT`, isSuspect: true };
+  }
+
   const isMinimal = !det.in_roi && fsmState === "idle";
   if (isMinimal || !trackTag) {
-    return trackTag ? `${trackTag} ${det.class_name}` : det.class_name;
+    return { label: trackTag ? `${trackTag} ${det.class_name}` : det.class_name, isSuspect: false };
   }
   const carriedItem = det.category === "person" ? findCarriedItem(det, allDetections) : null;
   const action = deriveActionText(det, carriedItem);
@@ -117,7 +124,7 @@ function buildEnrichedLabel(det: BBoxDetection, allDetections: BBoxDetection[]):
   parts.push(action);
   if (dwell) parts.push(dwell);
   if (stateTag) parts.push(stateTag);
-  return parts.join(" | ");
+  return { label: parts.join(" | "), isSuspect };
 }
 
 const FSM_BORDER_WIDTHS: Record<string, number> = {
@@ -150,11 +157,10 @@ function DetectionBox({ detection, width, height, allDetections }: { detection: 
   const boxWidth = (x2 - x1) * width;
   const boxHeight = (y2 - y1) * height;
 
-  const isViolation = fsmState === "violation" || fsmState === "alerting" || fsmState === "escalated";
-
-  // --- Primary label: enriched inline format ---
-  const enrichedLabel = buildEnrichedLabel(detection, allDetections);
-  const borderWidth = FSM_BORDER_WIDTHS[fsmState] ?? 2;
+  const { label: enrichedLabel, isSuspect } = buildEnrichedLabel(detection, allDetections);
+  const isViolation = isSuspect || fsmState === "violation" || fsmState === "alerting" || fsmState === "escalated";
+  const effectiveBorderColor = isSuspect ? "#f97316" : borderColor; // Orange for suspects
+  const borderWidth = isSuspect ? 3 : (FSM_BORDER_WIDTHS[fsmState] ?? 2);
 
   // --- Secondary label: dwell time only ---
   const secondaryParts = [
@@ -171,7 +177,7 @@ function DetectionBox({ detection, width, height, allDetections }: { detection: 
           top: `${top}px`,
           width: `${boxWidth}px`,
           height: `${boxHeight}px`,
-          border: `${borderWidth}px solid ${borderColor}`,
+          border: `${borderWidth}px solid ${effectiveBorderColor}`,
           borderRadius: "2px",
           pointerEvents: "none",
           animation,

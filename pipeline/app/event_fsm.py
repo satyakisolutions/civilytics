@@ -55,6 +55,13 @@ class EventFSMManager:
         self._observe_threshold = observe_threshold_s
         self._violation_threshold = violation_threshold_s
         self._exit_timeout = exit_timeout_s
+        # Track IDs that reached VIOLATION — persists after FSM cleanup
+        # so the OSD/frontend can highlight the suspect even outside ROI
+        self._escalated_tracks: set[tuple[str, int]] = set()
+
+    def is_escalated(self, camera_id: str, track_id: int) -> bool:
+        """Check if a track was ever escalated to VIOLATION in this session."""
+        return (camera_id, track_id) in self._escalated_tracks
 
     def update(self, camera_id: str, track_id: int, class_name: str, in_roi: bool, dwell_time_s: float, bbox: dict | None = None, has_carried_item: bool = False) -> FSMEvent | None:
         key = (camera_id, track_id)
@@ -100,6 +107,7 @@ class EventFSMManager:
                 fsm.state = FSMState.EXITED
             elif dwell_time_s >= self._violation_threshold:
                 fsm.state = FSMState.VIOLATION
+                self._escalated_tracks.add(key)
         elif fsm.state == FSMState.VIOLATION:
             if not in_roi:
                 fsm.state = FSMState.EXITED
@@ -144,6 +152,10 @@ class EventFSMManager:
         """Get the current FSM state for a camera/track pair, or None if not tracked."""
         fsm = self._fsms.get((camera_id, track_id))
         return fsm.state.value if fsm else None
+
+    def clear_escalated(self, camera_id: str, track_id: int) -> None:
+        """Clear escalated flag when tracker fully loses the track (object left video)."""
+        self._escalated_tracks.discard((camera_id, track_id))
 
     def get_active_fsms(self, camera_id: str | None = None) -> list[TrackFSM]:
         if camera_id:

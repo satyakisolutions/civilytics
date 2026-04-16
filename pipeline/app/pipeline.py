@@ -378,9 +378,18 @@ def decorate_for_osd(
             if fsm_state in ("escalated", "alerting"):
                 escalated_count += 1
 
+            # --- Check suspect flag (escalated track outside ROI) ---
+            is_suspect = False
+            if fsm_mgr and track_id != 0xFFFFFFFFFFFFFFFF:
+                is_suspect = fsm_mgr.is_escalated(camera_id, track_id)
+
             # --- Build label text ---
             if track_id == 0xFFFFFFFFFFFFFFFF:
                 label = cname
+            elif is_suspect and fsm_state in ("idle", "exited", None):
+                # Suspect highlight — person was escalated, still visible
+                label = f"#{track_id_short:03d} {cname} | SUSPECT"
+                fsm_state = "violation"  # Force red styling
             elif fsm_state == "idle" and not in_roi:
                 # Minimal label for idle objects outside ROI
                 label = f"#{track_id_short:03d} {cname}"
@@ -730,6 +739,8 @@ def extract_metadata(
                     detection_dict["dwell_time_s"] = round(track_info.dwell_time_s, 1)
                     detection_dict["in_roi"] = in_roi
                     detection_dict["fsm_state"] = fsm_manager.get_fsm_state(camera_id, track_id)
+                    # Suspect flag — persists after leaving ROI until track lost
+                    detection_dict["is_suspect"] = fsm_manager.is_escalated(camera_id, track_id)
 
                     # --- Conditional frame batching for VLM ---
                     # Instead of sending every violation frame to VLM immediately,
@@ -1205,7 +1216,10 @@ def main() -> None:
             stale_events = fsm_manager.prune_stale()
             for evt in stale_events:
                 kafka_producer.send_event(evt)
-            track_manager.prune_lost()
+            lost_tracks = track_manager.prune_lost()
+            # Clear suspect highlight when tracker fully loses the object
+            for lost in lost_tracks:
+                fsm_manager.clear_escalated(lost.camera_id, lost.track_id)
 
         # Prune stale frame batchers and send partial batches to VLM
         stale_batches = frame_batcher.prune_stale()
