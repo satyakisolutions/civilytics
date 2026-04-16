@@ -206,26 +206,92 @@ def _derive_camera_alert(camera_id: str, detections: list[dict]) -> dict | None:
 # Pad probe — OSD decoration (runs BEFORE nvdsosd)
 # ---------------------------------------------------------------------------
 
+# FSM state -> OSD label suffix
+_STATE_LABEL: dict[str, str] = {
+    "enter": "ENTER",
+    "observe": "OBSERVE",
+    "violation": "ALERT",
+    "alerting": "ALERT",
+    "escalated": "ESCALATED",
+}
+
+# FSM state -> border width
+_STATE_BORDER_WIDTH: dict[str, int] = {
+    "idle": 2, "enter": 2, "observe": 3,
+    "violation": 4, "alerting": 4, "escalated": 4,
+}
+
+# FSM state -> border colour (r, g, b, a)
+_STATE_BORDER_COLOUR: dict[str, tuple[float, float, float, float]] = {
+    "idle":      (0.55, 0.55, 0.55, 1.0),  # grey
+    "enter":     (0.20, 0.50, 1.00, 1.0),  # blue
+    "observe":   (1.00, 0.72, 0.10, 1.0),  # amber
+    "violation": (1.00, 0.20, 0.20, 1.0),  # red
+    "alerting":  (1.00, 0.20, 0.20, 1.0),  # red
+    "escalated": (1.00, 0.20, 0.20, 1.0),  # red
+}
+
+# FSM state -> text background colour (r, g, b, a)
+_STATE_TEXT_BG: dict[str, tuple[float, float, float, float]] = {
+    "idle":      (0.0, 0.0, 0.0, 0.55),
+    "enter":     (0.0, 0.0, 0.0, 0.55),
+    "observe":   (0.80, 0.58, 0.08, 0.80),   # amber bg
+    "violation": (0.80, 0.10, 0.10, 0.80),   # red bg
+    "alerting":  (0.80, 0.10, 0.10, 0.80),
+    "escalated": (0.80, 0.10, 0.10, 0.80),
+}
+
+
+def _derive_action_text(class_name: str, category: str, dwell_time_s: float, carried_item: str | None) -> str:
+    """Return a short human-readable action string for the OSD label."""
+    if carried_item:
+        return f"carrying {carried_item}"
+    if category == "waste_object":
+        return f"dumped {class_name}"
+    if category == "vehicle":
+        return "stopped" if dwell_time_s >= 3.0 else "passing"
+    if category == "person":
+        return "waiting" if dwell_time_s >= 3.0 else "moving"
+    return class_name
+
+
+def _find_carried_item(person_rect, carried_items: list[tuple]) -> str | None:
+    """Return the name of any carried item whose bbox overlaps >50% with person_rect."""
+    if not carried_items:
+        return None
+    px1, py1 = person_rect.left, person_rect.top
+    px2, py2 = px1 + person_rect.width, py1 + person_rect.height
+    p_area = person_rect.width * person_rect.height
+    if p_area <= 0:
+        return None
+    for item_name, item_rect in carried_items:
+        ix1, iy1 = item_rect.left, item_rect.top
+        ix2, iy2 = ix1 + item_rect.width, iy1 + item_rect.height
+        ox1, oy1 = max(px1, ix1), max(py1, iy1)
+        ox2, oy2 = min(px2, ix2), min(py2, iy2)
+        if ox2 <= ox1 or oy2 <= oy1:
+            continue
+        overlap = (ox2 - ox1) * (oy2 - oy1)
+        item_area = item_rect.width * item_rect.height
+        if item_area > 0 and overlap / item_area > 0.5:
+            return item_name
+    return None
+
 
 def decorate_for_osd(
     pad: Gst.Pad,
     info: Gst.PadProbeInfo,
-    _user_data: object,
+    ctx: dict,
 ) -> Gst.PadProbeReturn:
-    """Populate every NvDsObjectMeta with visible bbox + label text.
+    """Populate every NvDsObjectMeta with enriched bbox + label text.
 
-    The marcoslucianops custom parser leaves `rect_params.border_width = 0`
-    (which makes nvdsosd skip the bbox entirely) and doesn't set any
-    `text_params`, so operators see a clean frame with no overlays even
-    though detections exist in metadata. This probe fills in border
-    width/colour per category and writes a compact `label conf%` into
-    text_params so the output RTSP stream carries visible decoration.
+    Labels show FSM-aware enriched format when fsm_manager/track_manager
+    are available:  ``#042 ROI | waiting | 12s OBSERVE``
+    Falls back to minimal ``#042 person`` when managers are None (native
+    C plugin path).
 
-    It also attaches a single top-right status line per frame via
-    `NvDsDisplayMeta` summarising the dominant action observed in the
-    frame (dumping / loitering / vehicle-present / clear), giving the
-    frontend viewer a one-glance state readout without having to
-    subscribe to the metadata topic.
+    Also renders a top-right stats overlay: ``Objects: N | Escalated: M``
+    with green background when escalated == 0, red when > 0.
     """
     buf = info.get_buffer()
     if buf is None:
@@ -234,6 +300,11 @@ def decorate_for_osd(
     if batch_meta is None:
         return Gst.PadProbeReturn.OK
 
+    # Extract managers from context (may be None for native C plugin path)
+    ctx = ctx or {}
+    fsm_mgr = ctx.get("fsm_manager")
+    track_mgr = ctx.get("track_manager")
+
     frame_meta_list = batch_meta.frame_meta_list
     while frame_meta_list is not None:
         try:
@@ -241,7 +312,28 @@ def decorate_for_osd(
         except StopIteration:
             break
 
-        per_category: dict[str, int] = {}
+        camera_id = f"cam-{frame_meta.source_id:02d}"
+
+        # --- First pass: collect carried items ---------------------------------
+        carried_items: list[tuple[str, object]] = []
+        obj_meta_list = frame_meta.obj_meta_list
+        while obj_meta_list is not None:
+            try:
+                obj_meta = pyds.NvDsObjectMeta.cast(obj_meta_list.data)
+            except StopIteration:
+                break
+            cid = int(obj_meta.class_id)
+            cname = COCO_CLASS_MAP.get(cid)
+            if cname is not None and CLASS_CATEGORIES.get(cname) == "carried_item":
+                carried_items.append((cname, obj_meta.rect_params))
+            try:
+                obj_meta_list = obj_meta_list.next
+            except StopIteration:
+                break
+
+        # --- Second pass: decorate each object ---------------------------------
+        total_objects = 0
+        escalated_count = 0
         obj_meta_list = frame_meta.obj_meta_list
         while obj_meta_list is not None:
             try:
@@ -257,27 +349,62 @@ def decorate_for_osd(
                 except StopIteration:
                     break
                 continue
-            category = CLASS_CATEGORIES.get(cname, "unknown")
-            per_category[category] = per_category.get(category, 0) + 1
 
-            r, g, b, a = OSD_CATEGORY_COLOURS.get(
-                category, OSD_CATEGORY_COLOURS["unknown"]
-            )
-            rect = obj_meta.rect_params
-            rect.border_width = 3
-            rect.border_color.red = r
-            rect.border_color.green = g
-            rect.border_color.blue = b
-            rect.border_color.alpha = a
-            rect.has_bg_color = 0
+            category = CLASS_CATEGORIES.get(cname, "unknown")
+            total_objects += 1
 
             track_id = int(obj_meta.object_id)
-            conf_pct = max(0, int(round(float(obj_meta.confidence) * 100)))
-            if track_id != 0xFFFFFFFFFFFFFFFF:
-                label = f"{cname} #{track_id} {conf_pct}%"
-            else:
-                label = f"{cname} {conf_pct}%"
+            track_id_short = track_id % 1000
+            rect = obj_meta.rect_params
 
+            # Look up FSM / track state (graceful when managers are None)
+            fsm_state = "idle"
+            dwell_time_s = 0.0
+            in_roi = False
+            if fsm_mgr is not None and track_id != 0xFFFFFFFFFFFFFFFF:
+                fsm_state = fsm_mgr.get_fsm_state(camera_id, track_id) or "idle"
+            if track_mgr is not None and track_id != 0xFFFFFFFFFFFFFFFF:
+                track_info = track_mgr.get_track(camera_id, track_id)
+                if track_info is not None:
+                    dwell_time_s = track_info.dwell_time_s
+                    in_roi = track_info.in_roi
+
+            if fsm_state in ("escalated", "alerting"):
+                escalated_count += 1
+
+            # --- Build label text ---
+            if track_id == 0xFFFFFFFFFFFFFFFF:
+                label = cname
+            elif fsm_state == "idle" and not in_roi:
+                # Minimal label for idle objects outside ROI
+                label = f"#{track_id_short:03d} {cname}"
+            else:
+                # Enriched label: #042 ROI | waiting | 12s OBSERVE
+                carried = _find_carried_item(rect, carried_items) if category == "person" else None
+                action = _derive_action_text(cname, category, dwell_time_s, carried)
+                state_label = _STATE_LABEL.get(fsm_state, "")
+                dwell_int = int(dwell_time_s)
+                parts = [f"#{track_id_short:03d}"]
+                if in_roi:
+                    parts.append("ROI")
+                parts.append(action)
+                if dwell_int > 0:
+                    parts.append(f"{dwell_int}s")
+                if state_label:
+                    parts.append(state_label)
+                label = " | ".join(parts[:2]) + " | " + " | ".join(parts[2:]) if len(parts) > 2 else " | ".join(parts)
+
+            # --- Border ---
+            border_w = _STATE_BORDER_WIDTH.get(fsm_state, 2)
+            br, bg, bb, ba = _STATE_BORDER_COLOUR.get(fsm_state, _STATE_BORDER_COLOUR["idle"])
+            rect.border_width = border_w
+            rect.border_color.red = br
+            rect.border_color.green = bg
+            rect.border_color.blue = bb
+            rect.border_color.alpha = ba
+            rect.has_bg_color = 0
+
+            # --- Text params ---
             txt = obj_meta.text_params
             txt.display_text = label
             txt.x_offset = max(0, int(rect.left))
@@ -289,42 +416,25 @@ def decorate_for_osd(
             txt.font_params.font_color.blue = 1.0
             txt.font_params.font_color.alpha = 1.0
             txt.set_bg_clr = 1
-            txt.text_bg_clr.red = 0.0
-            txt.text_bg_clr.green = 0.0
-            txt.text_bg_clr.blue = 0.0
-            txt.text_bg_clr.alpha = 0.55
+            tbr, tbg, tbb, tba = _STATE_TEXT_BG.get(fsm_state, _STATE_TEXT_BG["idle"])
+            txt.text_bg_clr.red = tbr
+            txt.text_bg_clr.green = tbg
+            txt.text_bg_clr.blue = tbb
+            txt.text_bg_clr.alpha = tba
 
             try:
                 obj_meta_list = obj_meta_list.next
             except StopIteration:
                 break
 
-        # --- Top-right action overlay (one NvDsDisplayMeta per frame) -----
-        # Pick the most evidence-heavy category in priority order so the
-        # viewer sees a single, calm status line instead of a constantly
-        # churning count.
-        if per_category:
-            if per_category.get("waste_object", 0) > 0:
-                action = "DUMPING SUSPECTED"
-            elif per_category.get("carried_item", 0) > 0 and per_category.get("person", 0) > 0:
-                action = "CARRYING OBJECT"
-            elif per_category.get("vehicle", 0) > 0 and per_category.get("person", 0) > 0:
-                action = "PERSON + VEHICLE"
-            elif per_category.get("vehicle", 0) > 0:
-                action = "VEHICLE PRESENT"
-            elif per_category.get("person", 0) > 0:
-                action = "PERSON OBSERVED"
-            else:
-                action = "ACTIVITY DETECTED"
-        else:
-            action = "CLEAR"
-
+        # --- Top-right stats overlay -------------------------------------------
         frame_w = frame_meta.source_frame_width or pipeline_settings.input_width
+        stats_text = f"Objects: {total_objects} | Escalated: {escalated_count}"
         try:
             disp_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
             disp_meta.num_labels = 1
             tp = disp_meta.text_params[0]
-            tp.display_text = f"{action}"
+            tp.display_text = stats_text
             tp.x_offset = max(10, int(frame_w) - 360)
             tp.y_offset = 20
             tp.font_params.font_name = "Serif"
@@ -334,12 +444,10 @@ def decorate_for_osd(
             tp.font_params.font_color.blue = 1.0
             tp.font_params.font_color.alpha = 1.0
             tp.set_bg_clr = 1
-            if action == "CLEAR":
+            if escalated_count == 0:
                 tp.text_bg_clr.red, tp.text_bg_clr.green, tp.text_bg_clr.blue = 0.10, 0.45, 0.15
-            elif action == "DUMPING SUSPECTED":
-                tp.text_bg_clr.red, tp.text_bg_clr.green, tp.text_bg_clr.blue = 0.80, 0.10, 0.10
             else:
-                tp.text_bg_clr.red, tp.text_bg_clr.green, tp.text_bg_clr.blue = 0.10, 0.10, 0.10
+                tp.text_bg_clr.red, tp.text_bg_clr.green, tp.text_bg_clr.blue = 0.80, 0.10, 0.10
             tp.text_bg_clr.alpha = 0.70
             pyds.nvds_add_display_meta_to_frame(frame_meta, disp_meta)
         except Exception:
@@ -855,7 +963,7 @@ def main() -> None:
             osd_sink.add_probe(
                 Gst.PadProbeType.BUFFER,
                 decorate_for_osd,
-                None,
+                {"fsm_manager": fsm_manager, "track_manager": track_manager},
             )
             logger.info("OSD decoration probe attached to nvdsosd.sink")
 
