@@ -173,13 +173,12 @@ class AlertConsumer:
         severity = "critical" if is_dumping else "warning"
 
         # --- Deterrent TTS (spoken on IP speakers + Play button in UI) ---
-        # Use deterrent if VLM generated one, otherwise build from VLM description
-        if deterrent:
-            speaker_text = deterrent
-        elif person_desc:
-            speaker_text = f"{person_desc}. This is a no-dumping zone under surveillance. Illegal waste dumping here is a punishable offence. Move away now. You are being recorded."
-        else:
-            speaker_text = ""
+        # VLM prompt requires deterrent_message to always be populated.
+        # Use it directly — it addresses the specific person/vehicle by description.
+        speaker_text = deterrent or ""
+        if not speaker_text and person_desc:
+            # Fallback only if VLM somehow left it empty
+            speaker_text = f"{person_desc}. This is a no-dumping zone. You are being recorded."
         if speaker_text:
             speaker_hash = hashlib.sha256(speaker_text.encode()).hexdigest()[:16]
             try:
