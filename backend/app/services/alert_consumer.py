@@ -170,11 +170,11 @@ class AlertConsumer:
         confidence = response.get("confidence", 0)
         person_desc = response.get("person_description", "")
         deterrent = response.get("deterrent_message", "")
-        severity = "critical" if is_dumping else "info"
+        severity = "critical" if is_dumping else "warning"
 
-        # --- Deterrent TTS (spoken on IP speakers to the person) ---
-        # Uses the VLM's specific, contextual scolding message
-        speaker_text = deterrent or reasoning or action
+        # --- Deterrent TTS (spoken on IP speakers) ---
+        # Only send TTS for actual dumping/theft — not for normal activity
+        speaker_text = deterrent if is_dumping else ""
         if speaker_text:
             speaker_hash = hashlib.sha256(speaker_text.encode()).hexdigest()[:16]
             try:
@@ -193,10 +193,14 @@ class AlertConsumer:
             except Exception:
                 logger.exception("Failed to send deterrent TTS")
 
-        # --- Operator notification (UI — person description + deterrent) ---
-        operator_text = deterrent or reasoning
-        if person_desc and person_desc not in operator_text:
-            operator_text = f"{person_desc}. {operator_text}"
+        # --- Operator notification (UI) ---
+        # Show deterrent if available (aggressive scolding), otherwise person + reasoning
+        if deterrent:
+            operator_text = deterrent
+        elif person_desc and reasoning:
+            operator_text = f"{person_desc}. {reasoning}"
+        else:
+            operator_text = reasoning or action or "Activity detected"
 
         # Compute TTS audio URL from the aggressive deterrent text
         # (matches what the TTS engine will generate with _apply_tone)
@@ -207,7 +211,11 @@ class AlertConsumer:
             shaped = _apply_tone(speaker_text)
             tts_audio_url = f"/tts/tts_{hashlib.sha256(shaped.encode()).hexdigest()[:16]}.wav"
 
-        # Write VLM alert to DB so Event History shows the description
+        # Write VLM alert to DB — skip if no useful description
+        if not person_desc and not deterrent and not reasoning:
+            logger.debug("Skipping VLM alert — no useful content for %s", camera_id)
+            return
+
         camera_uuid = await self._resolve_camera_uuid(camera_id)
         if camera_uuid:
             try:
