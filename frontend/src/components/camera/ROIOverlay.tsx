@@ -133,11 +133,18 @@ export function ROIOverlay({
         )}
       </svg>
 
-      {/* Floating control strip — only when editing. Sits above the
-          camera badges so the user can always reach finish/cancel. */}
+      {/* Editing mode border indicator */}
       {isEditing && (
         <div
-          className="absolute left-2 right-2 bottom-12 flex items-center gap-2 px-2 py-1.5 rounded bg-background/85 backdrop-blur-sm border border-orange-500/40 z-30 text-[11px]"
+          className="absolute inset-0 border-2 border-orange-500 rounded pointer-events-none z-30"
+          style={{ boxShadow: 'inset 0 0 20px rgba(249, 115, 22, 0.15)' }}
+        />
+      )}
+
+      {/* Floating control strip — top of video when editing */}
+      {isEditing && (
+        <div
+          className="absolute left-2 right-2 top-2 flex flex-wrap items-center gap-2 px-2 py-1.5 rounded bg-background/90 backdrop-blur-sm border border-orange-500/60 z-40 text-[11px]"
           onClick={e => e.stopPropagation()}
         >
           <span className="text-orange-400 font-semibold">ROI</span>
