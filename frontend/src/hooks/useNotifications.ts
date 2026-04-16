@@ -91,14 +91,31 @@ export function useNotifications() {
   const playTTSAudio = useCallback(async (audioUrl: string) => {
     if (!isSoundEnabled) return;
     try {
-      const audio = new Audio(audioUrl);
-      audio.volume = 0.8;
-      await audio.play();
-    } catch (e) {
-      console.warn('TTS audio playback failed, falling back to tone:', e);
-      playAlertSound('critical');
-    }
+      const resp = await fetch(audioUrl, { method: 'HEAD' });
+      if (resp.ok) {
+        const audio = new Audio(audioUrl);
+        audio.volume = 0.8;
+        await audio.play();
+        return;
+      }
+    } catch { /* fall through to browser TTS */ }
+    // Fallback: browser's built-in speech synthesis
+    playAlertSound('critical');
   }, [isSoundEnabled, playAlertSound]);
+
+  // Browser-native speech synthesis — works without Piper TTS server
+  const speakText = useCallback((text: string) => {
+    if (!isSoundEnabled || !('speechSynthesis' in window)) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.volume = 0.9;
+    // Prefer an English voice
+    const voices = speechSynthesis.getVoices();
+    const enVoice = voices.find(v => v.lang.startsWith('en'));
+    if (enVoice) utterance.voice = enVoice;
+    speechSynthesis.speak(utterance);
+  }, [isSoundEnabled]);
 
   // Try to play TTS audio by computing the hash of the TTS text
   // TTS worker generates: /tts/tts_{sha256(text)[:16]}.wav
@@ -135,11 +152,11 @@ export function useNotifications() {
     tag?: string,
     ttsAudioUrl?: string
   ) => {
-    if (ttsAudioUrl) {
-      playTTSAudio(ttsAudioUrl);
-    } else {
-      // Try to find TTS audio by message hash, fall back to beep
-      tryPlayTTS(message, severity);
+    // Play alert sound first (beep)
+    playAlertSound(severity);
+    // Then speak the message using browser's speech synthesis
+    if (message) {
+      speakText(`${severity === 'critical' ? 'Alert.' : 'Warning.'} ${title}. ${message}`);
     }
     sendPushNotification(title, message, severity, tag);
   }, [playAlertSound, playTTSAudio, sendPushNotification]);
@@ -153,6 +170,7 @@ export function useNotifications() {
     notifyViolation,
     playAlertSound,
     playTTSAudio,
+    speakText,
     sendPushNotification,
     requestPermission,
   };
