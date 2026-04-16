@@ -26,30 +26,45 @@ export function AlertPanel() {
     return b.timestamp.getTime() - a.timestamp.getTime();
   });
 
+  const clearAll = async () => {
+    try {
+      const { API_BASE } = await import('@/lib/api-base');
+      const resp = await fetch(`${API_BASE}/api/alerts?status=active&limit=200`);
+      const activeList = await resp.json();
+      await Promise.all(activeList.map((a: any) =>
+        fetch(`${API_BASE}/api/alerts/${a.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'resolved' }),
+        })
+      ));
+    } catch { /* best effort */ }
+  };
+
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full w-80 max-w-[320px] overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border">
-        <div className="flex items-center gap-2">
-          <Bell className="w-4 h-4 text-primary" />
-          <h2 className="font-semibold text-sm">Notifications</h2>
+      <div className="flex items-center justify-between p-3 border-b border-border flex-shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Bell className="w-4 h-4 text-primary flex-shrink-0" />
+          <h2 className="font-semibold text-sm">Alerts</h2>
           <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-            {alerts.filter(a => a.status === 'active').length} active
+            {alerts.filter(a => a.status === 'active').length}
           </Badge>
         </div>
-        <Button 
-          variant="ghost" 
-          size="icon" 
-          className="h-7 w-7"
-          onClick={() => setIsAlertPanelOpen(false)}
-        >
-          <X className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-[10px]" onClick={clearAll}>
+            Clear All
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsAlertPanelOpen(false)}>
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
 
       {/* Alert List */}
       <ScrollArea className="flex-1">
-        <div className="p-2 space-y-2">
+        <div className="p-2 space-y-2 w-full">
           {sortedAlerts.map((alert) => (
             <AlertCard 
               key={alert.id} 
