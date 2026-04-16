@@ -43,6 +43,7 @@ class VLMRequest(BaseModel):
     dwell_time_s: float
     class_name: str
     path_summary: str
+    trigger_bbox: dict | None = None
     frame_timestamps: list[float]
     frames_base64: list[str]
 

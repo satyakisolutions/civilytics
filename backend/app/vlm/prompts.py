@@ -8,6 +8,9 @@ Zone: {zone_name}
 Track ID: {track_id}
 Detected class: {class_name}
 Path summary: {path_summary}
+Trigger object location: {trigger_bbox}
+
+IMPORTANT: The alert was triggered by a "{class_name}" detected in the ROI zone at the location shown above. Focus ONLY on that specific object/person — not on bystanders or other objects in the frame. If you cannot see a {class_name} at that location, describe what you DO see there.
 
 Analyse the provided image frames carefully. Look for:
 - Illegal waste dumping (person/vehicle leaving objects on the road)
@@ -61,12 +64,18 @@ def build_prompt(
     dwell_time: float | str,
     class_name: str,
     path_summary: str,
+    trigger_bbox: dict | None = None,
 ) -> str:
     """Return the formatted system prompt."""
+    bbox_str = "not available"
+    if trigger_bbox:
+        x, y, w, h = trigger_bbox.get("x", 0), trigger_bbox.get("y", 0), trigger_bbox.get("w", 0), trigger_bbox.get("h", 0)
+        bbox_str = f"x={x:.0%} y={y:.0%} width={w:.0%} height={h:.0%} of frame (center at {x+w/2:.0%}, {y+h/2:.0%})"
     return SYSTEM_PROMPT.format(
         camera_id=camera_id,
         zone_name=zone_name,
         track_id=track_id,
         class_name=class_name,
         path_summary=path_summary,
+        trigger_bbox=bbox_str,
     )

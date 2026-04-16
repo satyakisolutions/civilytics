@@ -697,6 +697,7 @@ def extract_metadata(
                                 class_name=class_name,
                                 path_summary=f"observe_trigger:{track_info.dwell_time_s:.0f}s",
                                 frames_base64=_frames,
+                                trigger_bbox=bbox_dict,
                             )
 
                             # Start evidence collection

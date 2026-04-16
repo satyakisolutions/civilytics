@@ -44,6 +44,7 @@ class VLMClient:
             dwell_time=request.dwell_time_s,
             class_name=request.class_name,
             path_summary=request.path_summary,
+            trigger_bbox=getattr(request, 'trigger_bbox', None),
         )
 
         # First attempt
