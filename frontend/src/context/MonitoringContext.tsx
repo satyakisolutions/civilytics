@@ -1,6 +1,7 @@
-import { useState, createContext, useContext, ReactNode } from 'react';
+import { useState, useEffect, useCallback, createContext, useContext, ReactNode } from 'react';
 import { GridLayout, Alert, ViolationEvent } from '@/types/monitoring';
-import { mockAlerts, mockViolationEvents } from '@/data/mockData';
+import { mockViolationEvents } from '@/data/mockData';
+import { API_BASE } from '@/lib/api-base';
 
 interface MonitoringContextType {
   gridLayout: GridLayout;
@@ -23,9 +24,35 @@ const MonitoringContext = createContext<MonitoringContextType | undefined>(undef
 export function MonitoringProvider({ children }: { children: ReactNode }) {
   const [gridLayout, setGridLayout] = useState<GridLayout>('3x3');
   const [selectedCamera, setSelectedCamera] = useState<string | null>(null);
-  const [alerts, setAlerts] = useState<Alert[]>(mockAlerts);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
   const [events] = useState<ViolationEvent[]>(mockViolationEvents);
   const [isAlertPanelOpen, setIsAlertPanelOpen] = useState(false);
+
+  // Poll real alerts from backend API every 5s
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/api/alerts?limit=50`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      setAlerts((data || []).map((a: any) => ({
+        id: a.id,
+        eventId: a.event_id || '',
+        severity: a.severity,
+        title: a.title,
+        message: a.message,
+        timestamp: new Date(a.timestamp),
+        status: a.status,
+        cameraId: a.camera_id,
+        zone: a.zone,
+      })));
+    } catch { /* API may not be available */ }
+  }, []);
+
+  useEffect(() => {
+    fetchAlerts();
+    const interval = setInterval(fetchAlerts, 5000);
+    return () => clearInterval(interval);
+  }, [fetchAlerts]);
   const [isSoundEnabled, setIsSoundEnabled] = useState(true);
   const [currentView, setCurrentView] = useState<'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline'>('monitoring');
 
