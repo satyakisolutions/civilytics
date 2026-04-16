@@ -16,7 +16,7 @@ from aiokafka import AIOKafkaConsumer
 from sqlalchemy import insert
 
 from app.config.kafka import GROUP_ALERT_DISPATCHER as GROUP_ALERT_DISPATCH
-from app.db.session import async_session_factory
+from app.db.engine import async_session
 from app.ws.alerts import broadcast_alert
 
 logger = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ class AlertConsumer:
 
         # Write to DB — triggers Supabase realtime subscription in frontend
         try:
-            async with async_session_factory() as session:
+            async with async_session() as session:
                 await session.execute(
                     insert(self._get_alert_table()).values(
                         id=alert_id,
