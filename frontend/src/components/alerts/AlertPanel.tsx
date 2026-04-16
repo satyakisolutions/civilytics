@@ -170,19 +170,14 @@ function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
             size="sm"
             className="h-7 text-xs"
             onClick={() => {
-              const ttsUrl = (alert as any).ttsAudioUrl;
-              if (ttsUrl) {
-                const audio = new Audio(`${API_BASE}${ttsUrl}`);
-                audio.volume = 0.9;
-                audio.play().catch(() => {
-                  if ('speechSynthesis' in window) {
-                    speechSynthesis.cancel();
-                    speechSynthesis.speak(new SpeechSynthesisUtterance(`${alert.title}. ${alert.message}`));
-                  }
-                });
-              } else if ('speechSynthesis' in window) {
+              if ('speechSynthesis' in window) {
                 speechSynthesis.cancel();
-                speechSynthesis.speak(new SpeechSynthesisUtterance(`${alert.title}. ${alert.message}`));
+                const scolding = `ATTENTION. WARNING. ${alert.title}. ${alert.message}. STOP IMMEDIATELY. THIS AREA IS UNDER ACTIVE SURVEILLANCE. YOU ARE BEING RECORDED.`;
+                const u = new SpeechSynthesisUtterance(scolding);
+                u.rate = 1.1;
+                u.pitch = 0.9;
+                u.volume = 1.0;
+                speechSynthesis.speak(u);
               }
             }}
           >

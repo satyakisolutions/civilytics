@@ -292,21 +292,14 @@ function EventRow({ event }: { event: ViolationEvent }) {
             className="h-7 w-7"
             title="Play alert audio"
             onClick={() => {
-              const ttsUrl = (event as any).ttsAudioUrl;
-              if (ttsUrl) {
-                // Play real Piper TTS audio
-                const audio = new Audio(`${API_BASE}${ttsUrl}`);
-                audio.volume = 0.9;
-                audio.play().catch(() => {
-                  // Fallback to browser speech if audio fails
-                  if ('speechSynthesis' in window) {
-                    speechSynthesis.cancel();
-                    speechSynthesis.speak(new SpeechSynthesisUtterance(`${event.title}. ${event.message}`));
-                  }
-                });
-              } else if ('speechSynthesis' in window) {
+              if ('speechSynthesis' in window) {
                 speechSynthesis.cancel();
-                speechSynthesis.speak(new SpeechSynthesisUtterance(`${event.title}. ${event.message}`));
+                const scolding = `ATTENTION. WARNING. ${event.title}. ${event.message}. STOP IMMEDIATELY. THIS AREA IS UNDER ACTIVE SURVEILLANCE. YOU ARE BEING RECORDED.`;
+                const u = new SpeechSynthesisUtterance(scolding);
+                u.rate = 1.1;
+                u.pitch = 0.9;
+                u.volume = 1.0;
+                speechSynthesis.speak(u);
               }
             }}
           >
