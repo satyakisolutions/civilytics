@@ -63,7 +63,8 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
   const [isSoundEnabled, setIsSoundEnabled] = useState(true);
   const [currentView, setCurrentView] = useState<'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline'>('monitoring');
 
-  const acknowledgeAlert = (id: string) => {
+  const acknowledgeAlert = async (id: string) => {
+    // Update locally first (instant UI feedback)
     setAlerts(prev =>
       prev.map(alert =>
         alert.id === id
@@ -71,6 +72,14 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
           : alert
       )
     );
+    // Persist to backend
+    try {
+      await fetch(`${API_BASE}/api/alerts/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'acknowledged' }),
+      });
+    } catch { /* best effort */ }
   };
 
   const clearAlerts = () => {
