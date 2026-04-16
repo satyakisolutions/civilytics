@@ -14,6 +14,7 @@ import {
   User,
   ChevronDown,
   MoreHorizontal,
+  Volume2,
 } from 'lucide-react';
 import { Alert } from '@/types/monitoring';
 import { API_BASE } from '@/lib/api-base';
@@ -65,6 +66,7 @@ export function HistoryView() {
             status: a.status,
             title: a.title,
             message: a.message,
+            ttsAudioUrl: a.tts_audio_url,
           })));
         }
       } catch { /* ignore */ }
@@ -284,6 +286,24 @@ function EventRow({ event }: { event: ViolationEvent }) {
       </TableCell>
       <TableCell>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            title="Play alert audio"
+            onClick={() => {
+              if ('speechSynthesis' in window) {
+                speechSynthesis.cancel();
+                const text = `${event.title || ''}. ${event.message || ''}`;
+                const u = new SpeechSynthesisUtterance(text);
+                u.rate = 1.0;
+                u.volume = 0.9;
+                speechSynthesis.speak(u);
+              }
+            }}
+          >
+            <Volume2 className="w-4 h-4" />
+          </Button>
           <Button variant="ghost" size="icon" className="h-7 w-7">
             <Eye className="w-4 h-4" />
           </Button>
