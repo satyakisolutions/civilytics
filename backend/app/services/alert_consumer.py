@@ -13,10 +13,11 @@ from pathlib import Path
 
 import orjson
 from aiokafka import AIOKafkaConsumer
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 
 from app.config.kafka import GROUP_ALERT_DISPATCHER as GROUP_ALERT_DISPATCH
 from app.db.engine import async_session
+from app.db.models import Camera
 from app.ws.alerts import broadcast_alert
 
 logger = logging.getLogger(__name__)
@@ -66,12 +67,38 @@ class AlertConsumer:
         except Exception:
             logger.exception("AlertConsumer loop error")
 
+    async def _resolve_camera_uuid(self, camera_name: str) -> str | None:
+        """Resolve pipeline camera name (e.g. 'cam-01') to database UUID."""
+        try:
+            # Check if already a UUID
+            uuid.UUID(camera_name)
+            return camera_name
+        except ValueError:
+            pass
+        # Look up by name
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(Camera.id).where(Camera.name == camera_name)
+                )
+                row = result.scalar_one_or_none()
+                if row:
+                    return str(row)
+        except Exception:
+            logger.debug("Failed to resolve camera UUID for %s", camera_name)
+        return None
+
     async def _handle_alert(self, payload: dict):
-        camera_id = payload.get("camera_id", "")
+        camera_name = payload.get("camera_id", "")
         severity = payload.get("severity", "warning")
         title = payload.get("title", "Alert")
         message = payload.get("message", "")
         track_id = payload.get("track_id")
+
+        # Resolve pipeline camera name to DB UUID
+        camera_uuid = await self._resolve_camera_uuid(camera_name)
+        if not camera_uuid:
+            logger.warning("AlertConsumer: unknown camera %s — broadcasting WS only", camera_name)
 
         # Check for TTS audio file
         tts_audio_url = None
@@ -85,31 +112,32 @@ class AlertConsumer:
         now = datetime.utcnow()
 
         # Write to DB — triggers Supabase realtime subscription in frontend
-        try:
-            async with async_session() as session:
-                await session.execute(
-                    insert(self._get_alert_table()).values(
-                        id=alert_id,
-                        camera_id=camera_id,
-                        severity=severity,
-                        title=title,
-                        message=message,
-                        tts_audio_url=tts_audio_url,
-                        status="active",
-                        timestamp=now,
-                        created_at=now,
+        if camera_uuid:
+            try:
+                async with async_session() as session:
+                    await session.execute(
+                        insert(self._get_alert_table()).values(
+                            id=alert_id,
+                            camera_id=camera_uuid,
+                            severity=severity,
+                            title=title,
+                            message=message,
+                            tts_audio_url=tts_audio_url,
+                            status="active",
+                            timestamp=now,
+                            created_at=now,
+                        )
                     )
-                )
-                await session.commit()
-            logger.info("Alert saved to DB: %s [%s] %s", alert_id, severity, title[:60])
-        except Exception:
-            logger.exception("Failed to save alert to DB")
+                    await session.commit()
+                logger.info("Alert saved to DB: %s [%s] %s", alert_id, severity, title[:60])
+            except Exception:
+                logger.exception("Failed to save alert to DB")
 
         # Broadcast via WebSocket (for clients not using Supabase realtime)
         ws_payload = {
             "type": "alert",
             "id": alert_id,
-            "camera_id": camera_id,
+            "camera_id": camera_uuid or camera_name,
             "severity": severity,
             "title": title,
             "message": message,
