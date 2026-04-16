@@ -48,3 +48,6 @@ local-config/
 # LSG bring-up: TRT engines + onnx originals (rebuild via scripts/onnx_to_engine.py)
 pipeline/models/**/*.engine
 pipeline/models/**/*.orig.onnx
+graphify-out/
+backend/models/piper/*.onnx
+backend/models/piper/*.json
