@@ -173,11 +173,14 @@ class AlertConsumer:
         severity = "critical" if is_dumping else "warning"
 
         # --- Deterrent TTS (spoken on IP speakers + Play button in UI) ---
-        # Use deterrent if VLM generated one, otherwise build from person desc
+        # Use deterrent if VLM generated one, otherwise build from VLM description
         if deterrent:
             speaker_text = deterrent
+        elif person_desc and action:
+            # Address the specific object/person that triggered the alert
+            speaker_text = f"{person_desc}. You are {action} in a restricted zone. This is not allowed. Move away immediately. You are being recorded."
         elif person_desc:
-            speaker_text = f"{person_desc}, you are in a restricted zone. Leave immediately. You are being recorded."
+            speaker_text = f"{person_desc}. You are in a restricted zone. Move away immediately. You are being recorded."
         else:
             speaker_text = ""
         if speaker_text:
