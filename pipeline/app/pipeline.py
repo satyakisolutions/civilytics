@@ -803,9 +803,21 @@ def main() -> None:
         # --- Python fallback path: full Python managers ----------------------
         track_manager = TrackStateManager(lost_timeout_s=pipeline_settings.dwell_observe_threshold_s * 2)
         roi_manager = ROIManager()
+        # Hydrate the ROI manager from the FastAPI backend so the polygons
+        # the operator drew in the UI actually gate FSM transitions. Without
+        # this the in_roi flag is False forever and dumping events never
+        # fire even when a person dwells in a marked zone.
+        from app.roi_sync import ROISyncer
+        roi_syncer = ROISyncer(
+            roi_manager=roi_manager,
+            api_base=os.environ.get("WW_API_BASE", "http://api:8080"),
+            interval_s=10.0,
+        )
+        roi_syncer.start()
         fsm_manager = EventFSMManager(
             enter_threshold_s=pipeline_settings.dwell_enter_threshold_s,
             observe_threshold_s=pipeline_settings.dwell_observe_threshold_s,
+            violation_threshold_s=pipeline_settings.dwell_violation_threshold_s,
         )
         roi_preprocessor = ROIPreprocessor(
             roi_manager,

@@ -39,16 +39,18 @@ class TrackFSM:
     dwell_time_s: float = 0.0
     last_bbox: dict | None = None
     last_update: float = field(default_factory=time.monotonic)
-    enter_threshold_s: float = 5.0
-    observe_threshold_s: float = 15.0
+    enter_threshold_s: float = 3.0
+    observe_threshold_s: float = 10.0
+    violation_threshold_s: float = 15.0
     exit_timeout_s: float = 300.0
 
 
 class EventFSMManager:
-    def __init__(self, enter_threshold_s: float = 5.0, observe_threshold_s: float = 15.0, exit_timeout_s: float = 300.0):
+    def __init__(self, enter_threshold_s: float = 3.0, observe_threshold_s: float = 10.0, violation_threshold_s: float = 15.0, exit_timeout_s: float = 300.0):
         self._fsms: dict[tuple[str, int], TrackFSM] = {}
         self._enter_threshold = enter_threshold_s
         self._observe_threshold = observe_threshold_s
+        self._violation_threshold = violation_threshold_s
         self._exit_timeout = exit_timeout_s
 
     def update(self, camera_id: str, track_id: int, class_name: str, in_roi: bool, dwell_time_s: float, bbox: dict | None = None) -> FSMEvent | None:
@@ -60,6 +62,7 @@ class EventFSMManager:
                 camera_id=camera_id, track_id=track_id, class_name=class_name,
                 enter_threshold_s=self._enter_threshold,
                 observe_threshold_s=self._observe_threshold,
+                violation_threshold_s=self._violation_threshold,
                 exit_timeout_s=self._exit_timeout,
             )
 
@@ -83,7 +86,7 @@ class EventFSMManager:
         elif fsm.state == FSMState.OBSERVE:
             if not in_roi:
                 fsm.state = FSMState.EXITED
-            elif dwell_time_s >= self._observe_threshold:
+            elif dwell_time_s >= self._violation_threshold:
                 fsm.state = FSMState.VIOLATION
         elif fsm.state == FSMState.VIOLATION:
             if not in_roi:

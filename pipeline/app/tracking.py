@@ -43,6 +43,7 @@ class TrackInfo:
             self.in_roi = True
         elif not in_roi and self.in_roi:
             self.in_roi = False
+            self.roi_entered_at = None  # Reset — dwell only counts time IN roi
 
 
 class TrackStateManager:
