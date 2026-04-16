@@ -159,6 +159,8 @@ class AlertConsumer:
 
     async def _handle_vlm_result(self, payload: dict):
         """Handle VLM analysis result — broadcast to UI and trigger TTS with VLM reasoning."""
+        import sys
+        print(f"[AlertConsumer] _handle_vlm_result called for {payload.get('camera_id')}", file=sys.stderr, flush=True)
         camera_id = payload.get("camera_id", "")
         track_id = payload.get("track_id")
         response = payload.get("response", {})
