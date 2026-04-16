@@ -533,6 +533,39 @@ def decorate_for_osd(
 # ---------------------------------------------------------------------------
 
 
+def _capture_frame_base64(gst_buffer, frame_meta) -> str | None:
+    """Capture a single frame from the GStreamer buffer as base64 JPEG.
+
+    Uses pyds.get_nvds_buf_surface() to get a numpy array from the GPU
+    buffer, then encodes to JPEG via cv2 or raw encoding.
+    """
+    import base64
+    try:
+        frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+        if frame is None:
+            return None
+        # frame is numpy array (H, W, 4) in RGBA format
+        # Convert to JPEG bytes
+        import cv2
+        rgb = frame[:, :, :3]  # Drop alpha
+        _, jpeg = cv2.imencode('.jpg', rgb, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        return base64.b64encode(jpeg.tobytes()).decode('ascii')
+    except ImportError:
+        # cv2 not available — try raw encoding
+        try:
+            frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+            if frame is None:
+                return None
+            import base64 as b64
+            # Send raw RGB as base64 (VLM worker will handle decoding)
+            return b64.b64encode(frame[:, :, :3].tobytes()).decode('ascii')
+        except Exception:
+            return None
+    except Exception:
+        logger.debug("Frame capture failed", exc_info=True)
+        return None
+
+
 def extract_metadata(
     pad: Gst.Pad,
     info: Gst.PadProbeInfo,
@@ -679,14 +712,18 @@ def extract_metadata(
                             _fsm_obj.observe_triggered = True
                             _category = CLASS_CATEGORIES.get(class_name, "unknown")
 
-                            # Send VLM request — VLM will generate the contextual
-                            # deterrent message with person description + scolding.
-                            # TTS is triggered ONLY from VLM result (not here).
+                            # Capture current frame for VLM analysis
+                            _frame_b64 = _capture_frame_base64(gst_buffer, frame_meta)
+                            _frames = [_frame_b64] if _frame_b64 else []
+
+                            # Send VLM request WITH frame data — VLM will see the
+                            # person and generate contextual deterrent with description.
                             kafka_producer.send_vlm_request(
                                 camera_id=camera_id, track_id=track_id,
                                 zone_name=camera_id, dwell_time_s=track_info.dwell_time_s,
                                 class_name=class_name,
                                 path_summary=f"observe_trigger:{track_info.dwell_time_s:.0f}s",
+                                frames_base64=_frames,
                             )
 
                             # Alert UI (no TTS — wait for VLM)

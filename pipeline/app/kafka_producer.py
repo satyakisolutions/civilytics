@@ -50,7 +50,7 @@ class PipelineKafkaProducer:
         except Exception:
             logger.exception("Failed to send event for track %d", event.track_id)
 
-    def send_vlm_request(self, camera_id, track_id, zone_name, dwell_time_s, class_name, path_summary):
+    def send_vlm_request(self, camera_id, track_id, zone_name, dwell_time_s, class_name, path_summary, frames_base64: list[str] | None = None):
         try:
             self._producer.produce(
                 topic="wastewatch.vlm.requests",
@@ -60,7 +60,8 @@ class PipelineKafkaProducer:
                     "track_session_id": f"{camera_id}_{track_id}",
                     "zone_name": zone_name, "dwell_time_s": round(dwell_time_s, 1),
                     "class_name": class_name, "path_summary": path_summary,
-                    "frame_timestamps": [], "frames_base64": [],
+                    "frame_timestamps": [time.time()] if frames_base64 else [],
+                    "frames_base64": frames_base64 or [],
                 }),
             )
         except Exception:
