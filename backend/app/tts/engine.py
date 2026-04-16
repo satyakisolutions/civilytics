@@ -16,28 +16,21 @@ logger = logging.getLogger(__name__)
 
 AUDIO_DIR = Path("/tmp/wastewatch/tts")
 
-# Configuration (env-driven, safe defaults)
-TTS_TONE = os.environ.get("WW_TTS_TONE", "neutral").lower()
+# Configuration — always aggressive tone for deterrent scolding
+TTS_TONE = "aggressive"
 _VOICE_DIR = "/tmp/piper_voices"
 TTS_VOICE = os.environ.get(
     "WW_TTS_VOICE",
     f"{_VOICE_DIR}/en_US-lessac-medium.onnx",
 )
-TTS_LENGTH_SCALE = float(
-    os.environ.get("WW_TTS_LENGTH_SCALE", "0.78" if TTS_TONE == "aggressive" else "1.0")
-)
+# Fast cadence — sounds commanding, not conversational
+TTS_LENGTH_SCALE = float(os.environ.get("WW_TTS_LENGTH_SCALE", "0.78"))
 TTS_NOISE_SCALE = float(os.environ.get("WW_TTS_NOISE_SCALE", "0.667"))
-TTS_SENTENCE_SILENCE = float(
-    os.environ.get("WW_TTS_SENTENCE_SILENCE", "0.15" if TTS_TONE == "aggressive" else "0.4")
-)
-TTS_TONE_PREFIX = os.environ.get(
-    "WW_TTS_TONE_PREFIX",
-    "ATTENTION. WARNING. " if TTS_TONE == "aggressive" else "",
-)
-TTS_TONE_SUFFIX = os.environ.get(
-    "WW_TTS_TONE_SUFFIX",
-    " STOP IMMEDIATELY. THIS AREA IS UNDER ACTIVE SURVEILLANCE." if TTS_TONE == "aggressive" else "",
-)
+# Short pauses between sentences — keeps pressure on
+TTS_SENTENCE_SILENCE = float(os.environ.get("WW_TTS_SENTENCE_SILENCE", "0.12"))
+# Aggressive prefix/suffix wraps every message
+TTS_TONE_PREFIX = "ATTENTION. WARNING. "
+TTS_TONE_SUFFIX = " STOP IMMEDIATELY. THIS AREA IS UNDER ACTIVE SURVEILLANCE. YOU ARE BEING RECORDED."
 
 
 def _apply_tone(text: str) -> str:
