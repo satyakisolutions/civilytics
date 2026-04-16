@@ -242,15 +242,19 @@ _STATE_TEXT_BG: dict[str, tuple[float, float, float, float]] = {
 }
 
 
-def _derive_action_text(class_name: str, category: str, dwell_time_s: float, carried_item: str | None) -> str:
+def _derive_action_text(class_name: str, category: str, dwell_time_s: float, carried_item: str | None, fsm_state: str = "idle") -> str:
     """Return a short human-readable action string for the OSD label."""
     if carried_item:
         return f"carrying {carried_item}"
     if category == "waste_object":
         return f"dumped {class_name}"
     if category == "vehicle":
+        if dwell_time_s >= 10.0:
+            return "suspicious stop"
         return "stopped" if dwell_time_s >= 3.0 else "passing"
     if category == "person":
+        if dwell_time_s >= 10.0:
+            return "loitering"
         return "waiting" if dwell_time_s >= 3.0 else "moving"
     return class_name
 

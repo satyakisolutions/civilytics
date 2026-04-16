@@ -71,7 +71,11 @@ function deriveActionText(det: BBoxDetection, carriedItem: string | null): strin
   if (carriedItem) return `carrying ${carriedItem}`;
   if (det.category === "waste_object") return `dumped ${det.class_name}`;
   const dwell = det.dwell_time_s ?? 0;
-  if (det.category === "vehicle") return dwell >= 3 ? "stopped" : "passing";
+  if (det.category === "vehicle") {
+    if (dwell >= 10) return "suspicious stop";
+    return dwell >= 3 ? "stopped" : "passing";
+  }
+  if (dwell >= 10) return "loitering";
   return dwell >= 3 ? "waiting" : "moving";
 }
 
