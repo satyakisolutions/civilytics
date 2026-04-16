@@ -63,6 +63,63 @@ const CLASS_LABEL_COLORS: Record<string, string> = {
   toilet:     "#f43f5e",
 };
 
+// ---------------------------------------------------------------------------
+// Action text derivation + carried-item association
+// ---------------------------------------------------------------------------
+
+function deriveActionText(det: BBoxDetection, carriedItem: string | null): string {
+  if (carriedItem) return `carrying ${carriedItem}`;
+  if (det.category === "waste_object") return `dumped ${det.class_name}`;
+  const dwell = det.dwell_time_s ?? 0;
+  if (det.category === "vehicle") return dwell >= 3 ? "stopped" : "passing";
+  return dwell >= 3 ? "waiting" : "moving";
+}
+
+function findCarriedItem(person: BBoxDetection, detections: BBoxDetection[]): string | null {
+  const [px1, py1, px2, py2] = person.bbox;
+  const pArea = (px2 - px1) * (py2 - py1);
+  if (pArea <= 0) return null;
+  for (const det of detections) {
+    if (det.category !== "carried_item") continue;
+    const [ix1, iy1, ix2, iy2] = det.bbox;
+    const ox1 = Math.max(px1, ix1), oy1 = Math.max(py1, iy1);
+    const ox2 = Math.min(px2, ix2), oy2 = Math.min(py2, iy2);
+    if (ox2 <= ox1 || oy2 <= oy1) continue;
+    const overlap = (ox2 - ox1) * (oy2 - oy1);
+    const itemArea = (ix2 - ix1) * (iy2 - iy1);
+    if (itemArea > 0 && overlap / itemArea > 0.5) return det.class_name;
+  }
+  return null;
+}
+
+function formatTrackId(trackId: number | null | undefined): string {
+  if (trackId == null) return "";
+  return `#${String(trackId % 1000).padStart(3, "0")}`;
+}
+
+function buildEnrichedLabel(det: BBoxDetection, allDetections: BBoxDetection[]): string {
+  const fsmState = det.fsm_state ?? "idle";
+  const trackTag = formatTrackId(det.track_id);
+  const isMinimal = !det.in_roi && fsmState === "idle";
+  if (isMinimal || !trackTag) {
+    return trackTag ? `${trackTag} ${det.class_name}` : det.class_name;
+  }
+  const carriedItem = det.category === "person" ? findCarriedItem(det, allDetections) : null;
+  const action = deriveActionText(det, carriedItem);
+  const dwell = det.dwell_time_s != null && det.dwell_time_s > 0 ? `${det.dwell_time_s.toFixed(0)}s` : "";
+  const stateTag = FSM_LABELS[fsmState] || "";
+  const parts = [trackTag];
+  if (det.in_roi) parts.push("ROI");
+  parts.push(action);
+  if (dwell) parts.push(dwell);
+  if (stateTag) parts.push(stateTag);
+  return parts.join(" | ");
+}
+
+const FSM_BORDER_WIDTHS: Record<string, number> = {
+  idle: 1, enter: 2, observe: 3, violation: 4, alerting: 4, escalated: 4, exited: 1,
+};
+
 function getBboxColor(detection: BBoxDetection): string {
   const fsmState = detection.fsm_state ?? "idle";
   return FSM_COLORS[fsmState] ?? "#101010";
@@ -77,7 +134,7 @@ function getAnimation(detection: BBoxDetection): string | undefined {
 // Detection Box
 // ---------------------------------------------------------------------------
 
-function DetectionBox({ detection, width, height }: { detection: BBoxDetection; width: number; height: number }) {
+function DetectionBox({ detection, width, height, allDetections }: { detection: BBoxDetection; width: number; height: number; allDetections: BBoxDetection[] }) {
   const [x1, y1, x2, y2] = detection.bbox;
   const borderColor = getBboxColor(detection);
   const animation = getAnimation(detection);
@@ -91,17 +148,9 @@ function DetectionBox({ detection, width, height }: { detection: BBoxDetection; 
 
   const isViolation = fsmState === "violation" || fsmState === "alerting" || fsmState === "escalated";
 
-  // --- Primary label: action or class + track ---
-  const actionText = detection.action_label
-    ? (detection.action_fast_alert
-        ? `\u26a0 ${detection.action_label.toUpperCase()}`
-        : detection.action_label)
-    : null;
-
-  const primaryLabel = [
-    actionText ?? detection.class_name,
-    detection.track_id != null ? `#${detection.track_id}` : null,
-  ].filter(Boolean).join(" ");
+  // --- Primary label: enriched inline format ---
+  const enrichedLabel = buildEnrichedLabel(detection, allDetections);
+  const borderWidth = FSM_BORDER_WIDTHS[fsmState] ?? 2;
 
   // --- Secondary label: dwell time only ---
   const secondaryParts = [
@@ -118,7 +167,7 @@ function DetectionBox({ detection, width, height }: { detection: BBoxDetection; 
           top: `${top}px`,
           width: `${boxWidth}px`,
           height: `${boxHeight}px`,
-          border: `2px solid ${borderColor}`,
+          border: `${borderWidth}px solid ${borderColor}`,
           borderRadius: "2px",
           pointerEvents: "none",
           animation,
@@ -154,40 +203,7 @@ function DetectionBox({ detection, width, height }: { detection: BBoxDetection; 
             borderRadius: "2px 2px 0 0",
           }}
         >
-          {primaryLabel}
-
-          {/* FSM state badge */}
-          {fsmLabel && (
-            <span
-              style={{
-                backgroundColor: "rgba(0,0,0,0.3)",
-                color: "#fff",
-                fontSize: "9px",
-                fontWeight: 700,
-                padding: "0 4px",
-                borderRadius: "2px",
-                letterSpacing: "0.05em",
-              }}
-            >
-              {fsmLabel}
-            </span>
-          )}
-
-          {/* IN ROI badge */}
-          {detection.in_roi && (
-            <span
-              style={{
-                backgroundColor: "#3b82f6",
-                color: "#fff",
-                fontSize: "9px",
-                fontWeight: 700,
-                padding: "0 4px",
-                borderRadius: "2px",
-              }}
-            >
-              ROI
-            </span>
-          )}
+          {enrichedLabel}
 
           {/* Recording indicator */}
           {detection.recording && (
@@ -357,10 +373,16 @@ function CameraAlertBanner({ alert, width }: { alert: CameraAlertFlag; width: nu
 export function MetadataOverlay({ metadata, width, height }: MetadataOverlayProps) {
   if (!metadata || width === 0 || height === 0) return null;
 
-  const violations = metadata.detections.filter(
+  const detections = metadata.detections ?? [];
+  const totalObjects = detections.length;
+  const escalatedCount = detections.filter(
+    (d) => d.fsm_state === "violation" || d.fsm_state === "alerting" || d.fsm_state === "escalated"
+  ).length;
+
+  const violations = detections.filter(
     d => d.fsm_state === "violation" || d.fsm_state === "alerting" || d.fsm_state === "escalated"
   );
-  const inRoi = metadata.detections.filter(d => d.in_roi);
+  const inRoi = detections.filter(d => d.in_roi);
 
   return (
     <div
@@ -384,14 +406,35 @@ export function MetadataOverlay({ metadata, width, height }: MetadataOverlayProp
         }
       `}</style>
 
+      {/* Stats pills — top-right */}
+      <div style={{
+        position: "absolute", top: 8, right: 8, display: "flex", gap: 6, zIndex: 20,
+      }}>
+        <span style={{
+          padding: "2px 8px", borderRadius: 12, fontSize: 11,
+          fontFamily: "monospace", backgroundColor: "rgba(0,0,0,0.7)", color: "#fff",
+        }}>
+          Objects: {totalObjects}
+        </span>
+        <span style={{
+          padding: "2px 8px", borderRadius: 12, fontSize: 11,
+          fontFamily: "monospace",
+          backgroundColor: escalatedCount > 0 ? "rgba(220,38,38,0.9)" : "rgba(21,128,61,0.8)",
+          color: "#fff",
+          animation: escalatedCount > 0 ? "violationPulse 1s ease-in-out infinite alternate" : undefined,
+        }}>
+          Escalated: {escalatedCount}
+        </span>
+      </div>
+
       {/* Per-camera alert flag banner (top of frame) */}
       {metadata.camera_alert && metadata.camera_alert.level !== "none" && (
         <CameraAlertBanner alert={metadata.camera_alert} width={width} />
       )}
 
       {/* Detection boxes */}
-      {metadata.detections.map((det, i) => (
-        <DetectionBox key={`${det.class_id}-${det.track_id ?? i}`} detection={det} width={width} height={height} />
+      {detections.map((det, i) => (
+        <DetectionBox key={`${det.class_id}-${det.track_id ?? i}`} detection={det} width={width} height={height} allDetections={detections} />
       ))}
 
       {/* Frame status bar (bottom) */}
@@ -411,7 +454,7 @@ export function MetadataOverlay({ metadata, width, height }: MetadataOverlayProp
           fontWeight: 500,
         }}
       >
-        <span>{metadata.detections.length} detections | {inRoi.length} in ROI</span>
+        <span>{totalObjects} detections | {inRoi.length} in ROI</span>
         {violations.length > 0 && (
           <span style={{ color: "#ef4444", fontWeight: 700, animation: "violationPulse 1s ease-in-out infinite alternate" }}>
             {violations.length} VIOLATION{violations.length > 1 ? "S" : ""}
