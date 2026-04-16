@@ -38,9 +38,10 @@ from app.roi import ROIManager, ROIPolygon
 
 logger = logging.getLogger(__name__)
 
-# nvdsanalytics config path — written dynamically when ROIs change
+# nvdsanalytics config path — written dynamically when ROIs change.
+# Use /tmp so we always have write permission inside the container.
 _ANALYTICS_CONFIG_PATH = Path(os.environ.get(
-    "WW_ANALYTICS_CONFIG", "configs/nvdsanalytics_config.txt"
+    "WW_ANALYTICS_CONFIG", "/tmp/nvdsanalytics_config.txt"
 ))
 
 
