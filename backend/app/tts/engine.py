@@ -18,9 +18,10 @@ AUDIO_DIR = Path("/tmp/wastewatch/tts")
 
 # Configuration (env-driven, safe defaults)
 TTS_TONE = os.environ.get("WW_TTS_TONE", "neutral").lower()
+_VOICE_DIR = "/tmp/piper_voices"
 TTS_VOICE = os.environ.get(
     "WW_TTS_VOICE",
-    "en_US-ryan-high" if TTS_TONE == "aggressive" else "en_US-lessac-medium",
+    f"{_VOICE_DIR}/en_US-lessac-medium.onnx",
 )
 TTS_LENGTH_SCALE = float(
     os.environ.get("WW_TTS_LENGTH_SCALE", "0.78" if TTS_TONE == "aggressive" else "1.0")
@@ -58,8 +59,33 @@ class TTSEngine:
         try:
             import piper  # noqa: F401
             self._available = True
+            # Auto-download voice model if not present
+            self._ensure_voice_model()
         except ImportError:
             logger.warning("Piper TTS not available — TTS will generate placeholder files")
+
+    def _ensure_voice_model(self):
+        """Download the Piper voice model if not already present."""
+        import urllib.request
+        model_path = Path(TTS_VOICE)
+        if model_path.exists():
+            return
+        model_dir = model_path.parent
+        model_dir.mkdir(parents=True, exist_ok=True)
+        model_name = model_path.stem  # e.g. "en_US-lessac-medium"
+        if model_name.endswith(".onnx"):
+            model_name = model_name[:-5]
+        base_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium"
+        for ext in [".onnx", ".onnx.json"]:
+            fpath = model_dir / f"{model_name}{ext}"
+            if not fpath.exists():
+                url = f"{base_url}/{model_name}{ext}"
+                logger.info("Downloading Piper voice: %s", url)
+                try:
+                    urllib.request.urlretrieve(url, str(fpath))
+                    logger.info("Downloaded: %s (%.1f MB)", fpath, fpath.stat().st_size / 1e6)
+                except Exception:
+                    logger.exception("Failed to download voice model")
         logger.info(
             "TTS engine initialised (tone=%s voice=%s length_scale=%.2f)",
             TTS_TONE, TTS_VOICE, TTS_LENGTH_SCALE,
