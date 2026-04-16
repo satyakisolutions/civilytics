@@ -216,12 +216,12 @@
 
   /* Live indicator */
   .live-indicator {
-    @apply inline-flex items-center gap-1.5 px-2 py-0.5 bg-destructive/20 text-destructive text-xs font-semibold rounded;
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 bg-success/20 text-success text-xs font-semibold rounded;
   }
 
   .live-indicator::before {
     content: '';
-    @apply w-2 h-2 bg-destructive rounded-full;
+    @apply w-2 h-2 bg-success rounded-full;
     animation: pulse-glow-critical 1s ease-in-out infinite;
   }
 
