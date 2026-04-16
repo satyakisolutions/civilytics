@@ -15,8 +15,7 @@ import {
   ChevronDown,
   MoreHorizontal,
 } from 'lucide-react';
-import { useViolationEvents } from '@/hooks/useViolationEvents';
-import { ViolationEvent } from '@/types/monitoring';
+import { Alert } from '@/types/monitoring';
 import { API_BASE } from '@/lib/api-base';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -41,20 +40,52 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 export function HistoryView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'active' | 'resolved'>('all');
-  const statusFilter = selectedFilter === 'all' ? undefined : selectedFilter;
-  const { events: allEvents, isLoading } = useViolationEvents({ status: statusFilter });
+  const [allEvents, setAllEvents] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Fetch alerts from backend API (alerts table has the real data)
+  useState(() => {
+    const fetchData = async () => {
+      try {
+        const params = new URLSearchParams({ limit: '100' });
+        if (selectedFilter !== 'all') params.set('status', selectedFilter);
+        const resp = await fetch(`${API_BASE}/api/alerts?${params}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          setAllEvents(data.map((a: any) => ({
+            id: a.id,
+            cameraId: a.camera_id,
+            cameraName: a.title?.match(/at (cam-\d+)/)?.[1] || a.camera_id?.slice(0, 8) || 'Unknown',
+            zone: a.zone || '',
+            location: '',
+            timestamp: new Date(a.timestamp),
+            eventType: a.severity === 'critical' ? 'dumping_detected' : 'suspicious_activity',
+            severity: a.severity,
+            confidence: a.severity === 'critical' ? 95 : 60,
+            status: a.status,
+            title: a.title,
+            message: a.message,
+          })));
+        }
+      } catch { /* ignore */ }
+      setIsLoading(false);
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 30_000);
+    return () => clearInterval(interval);
+  });
 
   const filteredEvents = allEvents.filter(event => {
     const matchesSearch = !searchQuery ||
+      (event.title || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (event.cameraName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (event.zone || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (event.location || '').toLowerCase().includes(searchQuery.toLowerCase());
+      (event.message || '').toLowerCase().includes(searchQuery.toLowerCase());
     return matchesSearch;
   });
 
   const handleExportCsv = () => {
     const params = new URLSearchParams();
-    if (statusFilter) params.set('status', statusFilter);
+    if (selectedFilter !== 'all') params.set('status', selectedFilter);
     params.set('limit', '1000');
     window.open(`${API_BASE}/api/events/export/csv?${params.toString()}`, '_blank');
   };
