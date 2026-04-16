@@ -26,7 +26,7 @@ export function useViolationEvents(filters?: ViolationFilters) {
           cameras!inner(name, zone, location)
         `)
         .order('timestamp', { ascending: false })
-        .limit(200);
+        .limit(50);
 
       if (filters?.dateFrom) {
         query = query.gte('timestamp', filters.dateFrom.toISOString());
@@ -90,26 +90,9 @@ export function useViolationEvents(filters?: ViolationFilters) {
 
   useEffect(() => {
     fetchEvents();
-
-    // Subscribe to realtime updates
-    const channel = supabase
-      .channel('violation-events-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'violation_events'
-        },
-        () => {
-          fetchEvents();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    // Poll every 30s instead of realtime subscription (prevents overload)
+    const interval = setInterval(fetchEvents, 30_000);
+    return () => clearInterval(interval);
   }, [fetchEvents]);
 
   const markAsValid = async (id: string, isValid: boolean, notes?: string) => {
