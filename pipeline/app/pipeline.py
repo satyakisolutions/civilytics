@@ -701,6 +701,11 @@ def extract_metadata(
                                 frames_base64=_frames,
                             )
 
+                            # Start evidence collection
+                            _ew = ctx.get("evidence_writer")
+                            if _ew:
+                                _ew.start_evidence(camera_id, track_id, class_name)
+
                             # Alert UI (no TTS — wait for VLM)
                             if _category == "vehicle":
                                 kafka_producer.send_alert(
@@ -740,13 +745,30 @@ def extract_metadata(
                                     class_name=class_name,
                                     path_summary=f"exit_batch:{len(exit_batch)}frames",
                                 )
+                            # Finalize evidence — determine outcome based on whether violation was triggered
+                            _ew = ctx.get("evidence_writer")
+                            if _ew:
+                                _was_violation = _fsm_obj.violation_triggered if _fsm_obj else False
+                                _outcome = "violation" if _was_violation else "clear"
+                                _ew.finalize(
+                                    camera_id=camera_id, track_id=track_id,
+                                    outcome=_outcome,
+                                    dwell_time_s=track_info.dwell_time_s,
+                                    action=class_name,
+                                )
 
                     # Enrich detection with tracking data
                     detection_dict["dwell_time_s"] = round(track_info.dwell_time_s, 1)
                     detection_dict["in_roi"] = in_roi
-                    detection_dict["fsm_state"] = fsm_manager.get_fsm_state(camera_id, track_id)
+                    _current_fsm = fsm_manager.get_fsm_state(camera_id, track_id)
+                    detection_dict["fsm_state"] = _current_fsm
                     # Suspect flag — persists after leaving ROI until track lost
                     detection_dict["is_suspect"] = fsm_manager.is_escalated(camera_id, track_id)
+
+                    # Track evidence bbox path for active events
+                    _ew = ctx.get("evidence_writer")
+                    if _ew and _current_fsm in ("observe", "violation", "alerting", "escalated"):
+                        _ew.add_frame(camera_id, track_id, bbox_dict, float(obj_meta.confidence), _current_fsm)
 
                     # --- Conditional frame batching for VLM ---
                     # Instead of sending every violation frame to VLM immediately,
@@ -1115,6 +1137,7 @@ def main() -> None:
             "roi_preprocessor": roi_preprocessor,
             "frame_batcher": frame_batcher,
             "pad_to_camera": source_manager.pad_to_camera,
+            "evidence_writer": evidence_writer,
         }
         fakesink_sink_pad.add_probe(
             Gst.PadProbeType.BUFFER,
