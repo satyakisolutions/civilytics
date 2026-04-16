@@ -166,10 +166,16 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
     [videoContainerRef, qualityProbeRef]
   );
 
+  // Alert border — react to both camera.status AND real-time FSM escalations
+  const hasEscalation = metadata?.detections?.some(
+    (d) => d.fsm_state === 'violation' || d.fsm_state === 'alerting' || d.fsm_state === 'escalated'
+  ) ?? false;
+  const hasObserve = metadata?.detections?.some((d) => d.fsm_state === 'observe') ?? false;
+
   const alertBorderClass =
-    camera.status === 'alert'
+    camera.status === 'alert' || hasEscalation
       ? 'animate-alert-border'
-      : camera.status === 'warning'
+      : camera.status === 'warning' || hasObserve
         ? 'animate-alert-border-warning'
         : '';
 
