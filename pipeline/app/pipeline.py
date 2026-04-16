@@ -308,6 +308,7 @@ def decorate_for_osd(
     ctx = ctx or {}
     fsm_mgr = ctx.get("fsm_manager")
     track_mgr = ctx.get("track_manager")
+    roi_mgr = ctx.get("roi_manager")
     _osd_pad_map = ctx.get("pad_to_camera", {})
 
     frame_meta_list = batch_meta.frame_meta_list
@@ -458,6 +459,58 @@ def decorate_for_osd(
         except Exception:
             pass
 
+        # --- ROI bounding rectangle overlay ------------------------------------
+        # Draw a rect encapsulating each ROI polygon so operators can see the
+        # monitored zone on the stream. Cyan dashed border + "ROI: name" label.
+        if roi_mgr is not None:
+            _mw = pipeline_settings.muxer_output_width
+            _mh = pipeline_settings.muxer_output_height
+            roi_polys = roi_mgr.get_polygons(camera_id)
+            for poly in roi_polys:
+                if not poly.points:
+                    continue
+                xs = [p[0] for p in poly.points]
+                ys = [p[1] for p in poly.points]
+                rx = int(min(xs) * _mw)
+                ry = int(min(ys) * _mh)
+                rw = int((max(xs) - min(xs)) * _mw)
+                rh = int((max(ys) - min(ys)) * _mh)
+                if rw < 10 or rh < 10:
+                    continue
+                try:
+                    roi_disp = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+                    roi_disp.num_rects = 1
+                    rp = roi_disp.rect_params[0]
+                    rp.left = rx
+                    rp.top = ry
+                    rp.width = rw
+                    rp.height = rh
+                    rp.border_width = 2
+                    rp.border_color.red = 0.0
+                    rp.border_color.green = 0.75
+                    rp.border_color.blue = 1.0
+                    rp.border_color.alpha = 0.6
+                    rp.has_bg_color = 0
+                    roi_disp.num_labels = 1
+                    rtp = roi_disp.text_params[0]
+                    rtp.display_text = f"ROI: {poly.name}"
+                    rtp.x_offset = rx
+                    rtp.y_offset = max(0, ry - 18)
+                    rtp.font_params.font_name = "Serif"
+                    rtp.font_params.font_size = 11
+                    rtp.font_params.font_color.red = 0.0
+                    rtp.font_params.font_color.green = 0.75
+                    rtp.font_params.font_color.blue = 1.0
+                    rtp.font_params.font_color.alpha = 0.8
+                    rtp.set_bg_clr = 1
+                    rtp.text_bg_clr.red = 0.0
+                    rtp.text_bg_clr.green = 0.0
+                    rtp.text_bg_clr.blue = 0.0
+                    rtp.text_bg_clr.alpha = 0.5
+                    pyds.nvds_add_display_meta_to_frame(frame_meta, roi_disp)
+                except Exception:
+                    pass
+
         try:
             frame_meta_list = frame_meta_list.next
         except StopIteration:
@@ -508,8 +561,11 @@ def extract_metadata(
         # Look up the actual camera name from the source_id via source_manager
         _pad_map = ctx.get("pad_to_camera", {}) if isinstance(ctx, dict) else {}
         camera_id = _pad_map.get(frame_meta.source_id, f"cam-{frame_meta.source_id + 1:02d}")
-        frame_width = frame_meta.source_frame_width or pipeline_settings.input_width
-        frame_height = frame_meta.source_frame_height or pipeline_settings.input_height
+        # nvinfer outputs bbox coords in muxer resolution, NOT source resolution.
+        # source_frame_width may be 1280 (original) while rect.left is in 1920 (muxer).
+        # Always use muxer dimensions for normalization.
+        frame_width = pipeline_settings.muxer_output_width
+        frame_height = pipeline_settings.muxer_output_height
 
         detections: list[dict] = []
 
@@ -1048,7 +1104,7 @@ def main() -> None:
             osd_sink.add_probe(
                 Gst.PadProbeType.BUFFER,
                 decorate_for_osd,
-                {"fsm_manager": fsm_manager, "track_manager": track_manager, "pad_to_camera": source_manager.pad_to_camera},
+                {"fsm_manager": fsm_manager, "track_manager": track_manager, "roi_manager": roi_manager, "pad_to_camera": source_manager.pad_to_camera},
             )
             logger.info("OSD decoration probe attached to nvdsosd.sink")
 
