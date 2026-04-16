@@ -106,30 +106,34 @@ class VLMWorker:
         annotated output — we want clean frames for VLM analysis).
         Returns base64-encoded JPEG or None on failure.
         """
-        # Use annotated output stream — has bboxes showing the object in ROI
-        rtsp_url = f"rtsp://mediamtx:8554/{camera_id}-out"
+        # Try annotated output first (has bboxes), fall back to raw input
+        rtsp_urls = [
+            f"rtsp://mediamtx:8554/{camera_id}-out",
+            f"rtsp://mediamtx:8554/{camera_id}",
+        ]
         try:
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 tmp_path = tmp.name
-            result = subprocess.run(
-                [
-                    "ffmpeg", "-y", "-rtsp_transport", "tcp",
-                    "-i", rtsp_url,
-                    "-frames:v", "1", "-q:v", "5",
-                    tmp_path,
-                ],
-                capture_output=True, timeout=8,
-            )
-            if result.returncode != 0:
-                logger.debug("ffmpeg frame grab failed for %s", camera_id)
-                return None
-            data = Path(tmp_path).read_bytes()
+            for rtsp_url in rtsp_urls:
+                try:
+                    result = subprocess.run(
+                        [
+                            "ffmpeg", "-y", "-rtsp_transport", "tcp",
+                            "-t", "5",
+                            "-i", rtsp_url,
+                            "-frames:v", "1", "-q:v", "5",
+                            tmp_path,
+                        ],
+                        capture_output=True, timeout=12,
+                    )
+                    if result.returncode == 0:
+                        data = Path(tmp_path).read_bytes()
+                        if len(data) > 1000:
+                            Path(tmp_path).unlink(missing_ok=True)
+                            return base64.b64encode(data).decode("ascii")
+                except subprocess.TimeoutExpired:
+                    continue
             Path(tmp_path).unlink(missing_ok=True)
-            if len(data) < 1000:
-                return None
-            return base64.b64encode(data).decode("ascii")
-        except subprocess.TimeoutExpired:
-            logger.debug("ffmpeg frame grab timed out for %s", camera_id)
             return None
         except Exception:
             logger.debug("Frame grab failed for %s", camera_id, exc_info=True)
