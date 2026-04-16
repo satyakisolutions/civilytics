@@ -236,15 +236,31 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
 
         {/* Status indicator (top-left) */}
         <div className="absolute top-2 left-2 flex items-center gap-2 z-10">
-          <div className={cn(
-            'flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-semibold uppercase',
-            isStreamActive ? 'bg-success/20 text-success' :
-            camera.status === 'online' ? 'bg-success/20 text-success' :
-            camera.status === 'alert' ? 'bg-destructive/20 text-destructive' :
-            camera.status === 'warning' ? 'bg-warning/20 text-warning' :
-            'bg-muted text-muted-foreground'
-          )}>
-            <span className={cn('status-dot', isStreamActive ? 'status-dot-online' : status.dotClass)} />
+          <div
+            className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-semibold uppercase"
+            style={isStreamActive || camera.status === 'online' ? {
+              backgroundColor: 'rgba(34, 197, 94, 0.2)',
+              color: '#22c55e',
+            } : camera.status === 'alert' ? {
+              backgroundColor: 'rgba(239, 68, 68, 0.2)',
+              color: '#ef4444',
+            } : camera.status === 'warning' ? {
+              backgroundColor: 'rgba(245, 158, 11, 0.2)',
+              color: '#f59e0b',
+            } : {
+              backgroundColor: 'rgba(100, 100, 100, 0.2)',
+              color: '#9ca3af',
+            }}
+          >
+            <span
+              style={{
+                width: 6, height: 6, borderRadius: '50%', display: 'inline-block',
+                backgroundColor: isStreamActive || camera.status === 'online' ? '#22c55e' :
+                  camera.status === 'alert' ? '#ef4444' :
+                  camera.status === 'warning' ? '#f59e0b' : '#6b7280',
+                boxShadow: isStreamActive ? '0 0 6px #22c55e' : undefined,
+              }}
+            />
             {isStreamActive ? 'LIVE' : status.label}
           </div>
 
