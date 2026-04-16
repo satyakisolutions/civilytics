@@ -239,6 +239,7 @@ class AlertConsumer:
                         )
                     )
                     await session.commit()
+                logger.warning("VLM alert saved to DB: %s [%s] %s", alert_id, severity, person_desc[:40])
             except Exception:
                 logger.exception("Failed to save VLM alert to DB")
 
