@@ -53,7 +53,7 @@ class EventFSMManager:
         self._violation_threshold = violation_threshold_s
         self._exit_timeout = exit_timeout_s
 
-    def update(self, camera_id: str, track_id: int, class_name: str, in_roi: bool, dwell_time_s: float, bbox: dict | None = None) -> FSMEvent | None:
+    def update(self, camera_id: str, track_id: int, class_name: str, in_roi: bool, dwell_time_s: float, bbox: dict | None = None, has_carried_item: bool = False) -> FSMEvent | None:
         key = (camera_id, track_id)
         now = time.monotonic()
 
@@ -76,11 +76,20 @@ class EventFSMManager:
             if in_roi:
                 fsm.state = FSMState.ENTER
                 fsm.entered_at = now
+                # Fast-track: person carrying item in ROI → immediate OBSERVE
+                # Catches walk-by dumping where person never dwells long enough
+                if has_carried_item and class_name == "person":
+                    fsm.state = FSMState.OBSERVE
+                    logger.info("FSM %s track=%d: fast-track IDLE→OBSERVE (carried item in ROI)", camera_id, track_id)
         elif fsm.state == FSMState.ENTER:
             if not in_roi:
                 fsm.state = FSMState.EXITED
                 self._cleanup(key)
                 return None  # Silent exit
+            elif has_carried_item and class_name == "person":
+                # Fast-track: person picked up/still carrying item → OBSERVE
+                fsm.state = FSMState.OBSERVE
+                logger.info("FSM %s track=%d: fast-track ENTER→OBSERVE (carried item)", camera_id, track_id)
             elif dwell_time_s >= self._enter_threshold:
                 fsm.state = FSMState.OBSERVE
         elif fsm.state == FSMState.OBSERVE:

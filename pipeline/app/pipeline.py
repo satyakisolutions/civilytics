@@ -505,6 +505,31 @@ def extract_metadata(
         frame_height = frame_meta.source_frame_height or pipeline_settings.input_height
 
         detections: list[dict] = []
+
+        # --- Pre-scan: collect carried_item bboxes for person association ---
+        # Used to detect "person carrying item" for fast-track FSM trigger
+        carried_item_bboxes: list[tuple[str, dict]] = []  # (class_name, bbox_dict)
+        _prescan = frame_meta.obj_meta_list
+        while _prescan is not None:
+            try:
+                _om = pyds.NvDsObjectMeta.cast(_prescan.data)
+            except StopIteration:
+                break
+            _cid = int(_om.class_id)
+            _cn = COCO_CLASS_MAP.get(_cid)
+            if _cn and CLASS_CATEGORIES.get(_cn) == "carried_item":
+                _r = _om.rect_params
+                carried_item_bboxes.append((_cn, {
+                    "x": _r.left / (frame_meta.source_frame_width or pipeline_settings.input_width),
+                    "y": _r.top / (frame_meta.source_frame_height or pipeline_settings.input_height),
+                    "w": _r.width / (frame_meta.source_frame_width or pipeline_settings.input_width),
+                    "h": _r.height / (frame_meta.source_frame_height or pipeline_settings.input_height),
+                }))
+            try:
+                _prescan = _prescan.next
+            except StopIteration:
+                break
+
         # Diagnostic: count ALL raw nvinfer objects before any filtering,
         # so we can tell at a glance whether nvinfer is producing 0 boxes
         # (parser/threshold problem) vs producing boxes that the Python
@@ -548,11 +573,27 @@ def extract_metadata(
 
                     track_info = track_manager.update_track(camera_id, track_id, class_name, bbox_dict, in_roi)
 
+                    # Check if this person has a carried_item overlapping
+                    has_carried = False
+                    if class_name == "person" and carried_item_bboxes:
+                        px, py, pw, ph = bbox_dict["x"], bbox_dict["y"], bbox_dict["w"], bbox_dict["h"]
+                        for _ci_name, _ci_bb in carried_item_bboxes:
+                            ix, iy, iw, ih = _ci_bb["x"], _ci_bb["y"], _ci_bb["w"], _ci_bb["h"]
+                            ox1 = max(px, ix); oy1 = max(py, iy)
+                            ox2 = min(px+pw, ix+iw); oy2 = min(py+ph, iy+ih)
+                            if ox2 > ox1 and oy2 > oy1:
+                                overlap = (ox2-ox1) * (oy2-oy1)
+                                item_area = iw * ih
+                                if item_area > 0 and overlap / item_area > 0.3:
+                                    has_carried = True
+                                    break
+
                     fsm_event = fsm_manager.update(
                         camera_id, track_id, class_name,
                         in_roi=in_roi,
                         dwell_time_s=track_info.dwell_time_s,
                         bbox=bbox_dict,
+                        has_carried_item=has_carried,
                     )
 
                     if fsm_event:
