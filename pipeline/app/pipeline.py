@@ -686,10 +686,8 @@ def extract_metadata(
                             _fsm_obj.observe_triggered = True
                             _category = CLASS_CATEGORIES.get(class_name, "unknown")
 
-                            # Capture current frame for VLM analysis
-                            _frame_b64 = _capture_frame_base64(gst_buffer, frame_meta)
-                            _frames = [_frame_b64] if _frame_b64 else []
-                            logger.info("Frame capture for VLM: %s (%d frames)", camera_id, len(_frames))
+                            # Frames captured by VLM worker from RTSP (not here)
+                            _frames = []
 
                             # Send VLM request WITH frame data — VLM will see the
                             # person and generate contextual deterrent with description.
