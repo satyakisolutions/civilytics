@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { ROIPoint, ROIPolygon } from "@/types/monitoring";
 import { API_BASE } from "@/lib/api-base";
 
@@ -43,12 +43,17 @@ export function useROIEditor({ cameraId }: UseROIEditorOptions) {
     setCurrentPoints(prev => [...prev, point]);
   }, []);
 
+  const undoPoint = useCallback(() => {
+    setCurrentPoints(prev => prev.slice(0, -1));
+  }, []);
+
   const finishPolygon = useCallback((name: string) => {
     if (currentPoints.length < 3) return;
     const newPoly: ROIPolygon = { name, points: currentPoints };
     const updated = [...polygons, newPoly];
     setPolygons(updated);
     setCurrentPoints([]);
+    setIsEditing(false);
     savePolygons(updated);
   }, [currentPoints, polygons, savePolygons]);
 
@@ -63,8 +68,21 @@ export function useROIEditor({ cameraId }: UseROIEditorOptions) {
     setIsEditing(false);
   }, []);
 
+  // Re-fetch on window focus so deleted/updated ROIs sync from backend
+  useEffect(() => {
+    const onFocus = () => { if (!isEditing) fetchPolygons(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [fetchPolygons, isEditing]);
+
+  // Poll every 30s to stay in sync (covers cases where user doesn't switch tabs)
+  useEffect(() => {
+    const interval = setInterval(() => { if (!isEditing) fetchPolygons(); }, 30_000);
+    return () => clearInterval(interval);
+  }, [fetchPolygons, isEditing]);
+
   return {
     polygons, isEditing, setIsEditing, currentPoints, isLoading,
-    fetchPolygons, addPoint, finishPolygon, removePolygon, cancelEditing,
+    fetchPolygons, addPoint, undoPoint, finishPolygon, removePolygon, cancelEditing,
   };
 }
