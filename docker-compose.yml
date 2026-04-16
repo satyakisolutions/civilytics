@@ -147,6 +147,7 @@ services:
         condition: service_healthy
     volumes:
       - tts_data:/tmp/wastewatch/tts
+      - ./backend/models/piper:/tmp/piper_voices:ro
       - pipeline_models:/models:ro
     command: ["python3", "-m", "services.tts.main"]
     restart: unless-stopped
