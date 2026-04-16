@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Alert } from '@/types/monitoring';
+import { API_BASE } from '@/lib/api-base';
 import { useToast } from '@/hooks/use-toast';
 import { useNotifications } from '@/hooks/useNotifications';
 
@@ -40,10 +41,69 @@ export function useAlerts() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchAlerts();
+  // Track known alert IDs to detect new ones on poll
+  const knownAlertIds = useRef<Set<string>>(new Set());
 
-    // Subscribe to realtime alert updates
+  // Fetch from backend API (works without Supabase realtime)
+  const fetchFromApi = useCallback(async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/api/alerts?limit=50`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const mapped: Alert[] = (data || []).map((a: any) => ({
+        id: a.id,
+        eventId: a.event_id || '',
+        severity: a.severity,
+        title: a.title,
+        message: a.message,
+        timestamp: new Date(a.timestamp),
+        status: a.status,
+        cameraId: a.camera_id,
+        zone: a.zone,
+        ttsAudioUrl: a.tts_audio_url,
+      }));
+
+      // Detect NEW alerts (not seen before)
+      for (const alert of mapped) {
+        if (!knownAlertIds.current.has(alert.id) && alert.status === 'active') {
+          knownAlertIds.current.add(alert.id);
+          // Only notify if this is genuinely new (not from initial load)
+          if (knownAlertIds.current.size > mapped.length) {
+            continue; // Skip — this is the initial load
+          }
+          notifyViolation(
+            alert.title,
+            alert.message || '',
+            alert.severity as 'critical' | 'warning' | 'info',
+            `alert-${alert.id}`,
+            (alert as any).ttsAudioUrl || undefined
+          );
+          toast({
+            title: alert.title,
+            description: alert.message,
+            variant: alert.severity === 'critical' ? 'destructive' : 'default'
+          });
+        }
+      }
+
+      // Seed known IDs on first load
+      if (knownAlertIds.current.size === 0) {
+        for (const a of mapped) knownAlertIds.current.add(a.id);
+      }
+
+      setAlerts(mapped);
+    } catch { /* API may not be available */ }
+  }, [notifyViolation, toast]);
+
+  useEffect(() => {
+    // Initial fetch from both sources
+    fetchAlerts();
+    fetchFromApi();
+
+    // Poll backend API every 5s for new alerts (reliable fallback)
+    const pollInterval = setInterval(fetchFromApi, 5000);
+
+    // Also try Supabase realtime (may not work with raw PostgreSQL)
     const channel = supabase
       .channel('alerts-realtime')
       .on(
@@ -55,8 +115,6 @@ export function useAlerts() {
         },
         (payload) => {
           const newAlert = payload.new as any;
-          
-          // Play TTS voice alert if available, otherwise fall back to tone
           notifyViolation(
             newAlert.title,
             newAlert.message,
@@ -64,35 +122,26 @@ export function useAlerts() {
             `alert-${newAlert.id}`,
             newAlert.tts_audio_url || undefined
           );
-
-          // Show toast notification
           toast({
             title: newAlert.title,
             description: newAlert.message,
             variant: newAlert.severity === 'critical' ? 'destructive' : 'default'
           });
-
-          // Refresh alerts list
-          fetchAlerts();
+          fetchFromApi();
         }
       )
       .on(
         'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'alerts'
-        },
-        () => {
-          fetchAlerts();
-        }
+        { event: 'UPDATE', schema: 'public', table: 'alerts' },
+        () => fetchFromApi()
       )
       .subscribe();
 
     return () => {
+      clearInterval(pollInterval);
       supabase.removeChannel(channel);
     };
-  }, [fetchAlerts, toast, notifyViolation]);
+  }, [fetchAlerts, fetchFromApi, toast, notifyViolation]);
 
 
 
