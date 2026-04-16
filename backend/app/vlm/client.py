@@ -109,7 +109,10 @@ class VLMClient:
                     "image_url": {"url": f"data:image/jpeg;base64,{frame}"},
                 }
             )
-        content.append({"type": "text", "text": "Analyse the frames above. The image has bounding boxes drawn on detected objects — focus on the object with the RED or AMBER colored box and label showing ROI/ALERT/OBSERVE. That is the suspect object in the restricted zone. Describe THAT specific object/person, not others in the scene."})
+        if len(frames_base64) >= 2:
+            content.append({"type": "text", "text": "Image 1 is a CROPPED close-up of the suspect object that triggered the alert. Image 2 is the full scene for context. Describe the object/person in Image 1 — that is the one in the restricted zone. Generate the deterrent_message addressing them specifically."})
+        else:
+            content.append({"type": "text", "text": "Analyse this frame. Focus on the object at the trigger location mentioned in the system prompt. Describe it and generate a deterrent_message addressing it specifically."})
 
         payload = {
             "model": settings.vlm_model,

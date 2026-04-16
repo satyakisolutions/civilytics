@@ -99,7 +99,7 @@ class VLMWorker:
             logger.exception("VLMWorker consume loop error")
 
     @staticmethod
-    def _crop_to_bbox(jpeg_b64: str, bbox: dict, padding: float = 0.15) -> str:
+    def _crop_to_bbox(jpeg_b64: str, bbox: dict, padding: float = 0.30) -> str:
         """Crop a base64 JPEG to the trigger bbox with padding.
 
         This ensures the VLM only sees the object that triggered the alert,
@@ -182,14 +182,17 @@ class VLMWorker:
                     None, self._grab_rtsp_frame, request.camera_id
                 )
                 if frame:
-                    # Crop to trigger bbox so VLM only sees the alert object
                     if request.trigger_bbox:
-                        frame = self._crop_to_bbox(frame, request.trigger_bbox)
-                        logger.info("Cropped frame to trigger bbox for %s (%d KB)", request.camera_id, len(frame) * 3 // 4 // 1024)
+                        cropped = self._crop_to_bbox(frame, request.trigger_bbox)
+                        # Send cropped (focus) + full (context)
+                        request.frames_base64 = [cropped, frame]
+                        request.frame_timestamps = [0.0, 0.0]
+                        logger.info("Cropped+full frames for %s (crop %d KB, full %d KB)",
+                                    request.camera_id, len(cropped)*3//4//1024, len(frame)*3//4//1024)
                     else:
-                        logger.info("Grabbed full RTSP frame for %s (%d KB)", request.camera_id, len(frame) * 3 // 4 // 1024)
-                    request.frames_base64 = [frame]
-                    request.frame_timestamps = [0.0]
+                        request.frames_base64 = [frame]
+                        request.frame_timestamps = [0.0]
+                        logger.info("Full frame for %s (%d KB)", request.camera_id, len(frame)*3//4//1024)
                 else:
                     logger.warning("Could not grab frame for %s — VLM will analyze without image", request.camera_id)
 
