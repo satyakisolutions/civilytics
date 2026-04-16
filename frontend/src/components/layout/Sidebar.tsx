@@ -107,6 +107,10 @@ export function Sidebar({ className }: SidebarProps) {
               <span className="text-success text-[10px] uppercase font-medium">Healthy</span>
             </div>
           </div>
+          {/* Live service health panel */}
+          <div className="mt-2">
+            <HealthPanel />
+          </div>
         </div>
       </div>
 
@@ -231,3 +235,4 @@ function TimeDisplay() {
 }
 
 import { useState } from 'react';
+import { HealthPanel } from './HealthPanel';
