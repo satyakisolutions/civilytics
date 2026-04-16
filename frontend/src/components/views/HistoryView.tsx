@@ -292,13 +292,21 @@ function EventRow({ event }: { event: ViolationEvent }) {
             className="h-7 w-7"
             title="Play alert audio"
             onClick={() => {
-              if ('speechSynthesis' in window) {
+              const ttsUrl = (event as any).ttsAudioUrl;
+              if (ttsUrl) {
+                // Play real Piper TTS audio
+                const audio = new Audio(`${API_BASE}${ttsUrl}`);
+                audio.volume = 0.9;
+                audio.play().catch(() => {
+                  // Fallback to browser speech if audio fails
+                  if ('speechSynthesis' in window) {
+                    speechSynthesis.cancel();
+                    speechSynthesis.speak(new SpeechSynthesisUtterance(`${event.title}. ${event.message}`));
+                  }
+                });
+              } else if ('speechSynthesis' in window) {
                 speechSynthesis.cancel();
-                const text = `${event.title || ''}. ${event.message || ''}`;
-                const u = new SpeechSynthesisUtterance(text);
-                u.rate = 1.0;
-                u.volume = 0.9;
-                speechSynthesis.speak(u);
+                speechSynthesis.speak(new SpeechSynthesisUtterance(`${event.title}. ${event.message}`));
               }
             }}
           >

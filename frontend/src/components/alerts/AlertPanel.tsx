@@ -170,12 +170,19 @@ function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
             size="sm"
             className="h-7 text-xs"
             onClick={() => {
-              if ('speechSynthesis' in window) {
+              const ttsUrl = (alert as any).ttsAudioUrl;
+              if (ttsUrl) {
+                const audio = new Audio(`${API_BASE}${ttsUrl}`);
+                audio.volume = 0.9;
+                audio.play().catch(() => {
+                  if ('speechSynthesis' in window) {
+                    speechSynthesis.cancel();
+                    speechSynthesis.speak(new SpeechSynthesisUtterance(`${alert.title}. ${alert.message}`));
+                  }
+                });
+              } else if ('speechSynthesis' in window) {
                 speechSynthesis.cancel();
-                const u = new SpeechSynthesisUtterance(`${alert.title}. ${alert.message}`);
-                u.rate = 1.0;
-                u.volume = 0.8;
-                speechSynthesis.speak(u);
+                speechSynthesis.speak(new SpeechSynthesisUtterance(`${alert.title}. ${alert.message}`));
               }
             }}
           >
