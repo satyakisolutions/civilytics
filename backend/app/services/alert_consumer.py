@@ -212,8 +212,9 @@ class AlertConsumer:
             tts_audio_url = f"/tts/tts_{hashlib.sha256(shaped.encode()).hexdigest()[:16]}.wav"
 
         # Write VLM alert to DB — skip if no useful description
-        if not person_desc and not deterrent and not reasoning:
-            logger.debug("Skipping VLM alert — no useful content for %s", camera_id)
+        _is_fallback = "could not be parsed" in reasoning or reasoning == "unknown"
+        if (not person_desc and not deterrent) or _is_fallback:
+            logger.debug("Skipping VLM alert — no useful content for %s (fallback=%s)", camera_id, _is_fallback)
             return
 
         camera_uuid = await self._resolve_camera_uuid(camera_id)

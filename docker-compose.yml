@@ -326,7 +326,7 @@ services:
       --quantization awq
       --dtype float16
       --max-model-len 16384
-      --gpu-memory-utilization 0.88
+      --gpu-memory-utilization 0.70
       --limit-mm-per-prompt '{"image": 8}'
       --port 8000
     ports:

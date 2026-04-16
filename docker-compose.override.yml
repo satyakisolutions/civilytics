@@ -24,7 +24,7 @@ services:
       # Comma-separated list of `cam-id=rtsp://...` pairs. cam-01 is
       # the only live camera right now (the other sample clips are fed
       # to the VLM worker as historical footage via history-publisher).
-      WW_SOURCES: "cam-01=rtsp://mediamtx:8554/cam-01,cam-02=rtsp://mediamtx:8554/cam-02"
+      WW_SOURCES: "cam-01=rtsp://mediamtx:8554/cam-01"
       # Diagnostic: force nvinfer debug to level 5 so we can see parse
       # function resolution, custom-lib loading, and per-batch object
       # counts in the container logs.
