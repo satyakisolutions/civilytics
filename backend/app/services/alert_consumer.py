@@ -172,9 +172,14 @@ class AlertConsumer:
         deterrent = response.get("deterrent_message", "")
         severity = "critical" if is_dumping else "warning"
 
-        # --- Deterrent TTS (spoken on IP speakers) ---
-        # Only send TTS for actual dumping/theft — not for normal activity
-        speaker_text = deterrent if is_dumping else ""
+        # --- Deterrent TTS (spoken on IP speakers + Play button in UI) ---
+        # Use deterrent if VLM generated one, otherwise build from person desc
+        if deterrent:
+            speaker_text = deterrent
+        elif person_desc:
+            speaker_text = f"{person_desc}, you are in a restricted zone. Leave immediately. You are being recorded."
+        else:
+            speaker_text = ""
         if speaker_text:
             speaker_hash = hashlib.sha256(speaker_text.encode()).hexdigest()[:16]
             try:
@@ -202,18 +207,16 @@ class AlertConsumer:
         else:
             operator_text = reasoning or action or "Activity detected"
 
-        # Compute TTS audio URL from the aggressive deterrent text
-        # (matches what the TTS engine will generate with _apply_tone)
+        # Compute TTS audio URL from the speaker text
         tts_audio_url = None
         if speaker_text:
-            # The TTS engine applies aggressive tone shaping before hashing
             from app.tts.engine import _apply_tone
             shaped = _apply_tone(speaker_text)
             tts_audio_url = f"/tts/tts_{hashlib.sha256(shaped.encode()).hexdigest()[:16]}.wav"
 
-        # Write VLM alert to DB — skip if no useful description
-        _is_fallback = "could not be parsed" in reasoning or reasoning == "unknown"
-        if (not person_desc and not deterrent) or _is_fallback:
+        # Write VLM alert to DB — skip only fallback/empty results
+        _is_fallback = "could not be parsed" in reasoning
+        if not person_desc and _is_fallback:
             logger.debug("Skipping VLM alert — no useful content for %s (fallback=%s)", camera_id, _is_fallback)
             return
 
