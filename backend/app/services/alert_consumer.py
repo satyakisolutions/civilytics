@@ -193,15 +193,43 @@ class AlertConsumer:
             except Exception:
                 logger.exception("Failed to send deterrent TTS")
 
-        # --- Operator notification (UI — reasoning + deterrent) ---
-        # Build a notification text for the operator dashboard
-        operator_text = reasoning
-        if person_desc:
-            operator_text = f"{person_desc}. {reasoning}"
+        # --- Operator notification (UI — person description + deterrent) ---
+        operator_text = deterrent or reasoning
+        if person_desc and person_desc not in operator_text:
+            operator_text = f"{person_desc}. {operator_text}"
 
+        # Compute TTS audio URL from the aggressive deterrent text
+        # (matches what the TTS engine will generate with _apply_tone)
         tts_audio_url = None
         if speaker_text:
-            tts_audio_url = f"/tts/tts_{hashlib.sha256(speaker_text.encode()).hexdigest()[:16]}.wav"
+            # The TTS engine applies aggressive tone shaping before hashing
+            from app.tts.engine import _apply_tone
+            shaped = _apply_tone(speaker_text)
+            tts_audio_url = f"/tts/tts_{hashlib.sha256(shaped.encode()).hexdigest()[:16]}.wav"
+
+        # Write VLM alert to DB so Event History shows the description
+        camera_uuid = await self._resolve_camera_uuid(camera_id)
+        if camera_uuid:
+            try:
+                alert_id = str(uuid.uuid4())
+                now = datetime.utcnow()
+                async with async_session() as session:
+                    await session.execute(
+                        insert(self._get_alert_table()).values(
+                            id=alert_id,
+                            camera_id=camera_uuid,
+                            severity=severity,
+                            title=f"VLM: {person_desc[:50]}" if person_desc else f"VLM: {action[:50]}",
+                            message=operator_text,
+                            tts_audio_url=tts_audio_url,
+                            status="active",
+                            timestamp=now,
+                            created_at=now,
+                        )
+                    )
+                    await session.commit()
+            except Exception:
+                logger.exception("Failed to save VLM alert to DB")
 
         ws_payload = {
             "type": "vlm_result",
