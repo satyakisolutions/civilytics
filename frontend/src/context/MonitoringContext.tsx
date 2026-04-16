@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, createContext, useContext, ReactNode } from 'react';
+import { useState, useEffect, useCallback, useRef, createContext, useContext, ReactNode } from 'react';
 import { GridLayout, Alert, ViolationEvent } from '@/types/monitoring';
 import { mockViolationEvents } from '@/data/mockData';
 import { API_BASE } from '@/lib/api-base';
@@ -28,6 +28,7 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [events] = useState<ViolationEvent[]>(mockViolationEvents);
   const [isAlertPanelOpen, setIsAlertPanelOpen] = useState(false);
+  const clearedAtRef = useRef<Date | null>(null);
 
   // Poll real alerts from backend API every 5s
   const fetchAlerts = useCallback(async () => {
@@ -35,7 +36,7 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
       const resp = await fetch(`${API_BASE}/api/alerts?limit=50`);
       if (!resp.ok) return;
       const data = await resp.json();
-      setAlerts((data || []).map((a: any) => ({
+      let mapped = (data || []).map((a: any) => ({
         id: a.id,
         eventId: a.event_id || '',
         severity: a.severity,
@@ -45,7 +46,12 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
         status: a.status,
         cameraId: a.camera_id,
         zone: a.zone,
-      })));
+      }));
+      // After clear, only show alerts newer than the clear timestamp
+      if (clearedAtRef.current) {
+        mapped = mapped.filter((a: Alert) => a.timestamp > clearedAtRef.current!);
+      }
+      setAlerts(mapped);
     } catch { /* API may not be available */ }
   }, []);
 
@@ -68,6 +74,7 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
   };
 
   const clearAlerts = () => {
+    clearedAtRef.current = new Date();
     setAlerts([]);
   };
 
