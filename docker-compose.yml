@@ -102,7 +102,7 @@ services:
       - .env
     environment:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://redis:6379/0
+      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
       WW_MEDIAMTX_API_URL: http://mediamtx:9997
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
       WW_KEYCLOAK_URL: http://keycloak:8080
@@ -113,6 +113,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - tts_data:/tmp/wastewatch/tts
+      - evidence_data:/app/evidence
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
     restart: unless-stopped
 
@@ -143,7 +146,7 @@ services:
       kafka:
         condition: service_healthy
     volumes:
-      - tts_data:/data/tts
+      - tts_data:/tmp/wastewatch/tts
       - pipeline_models:/models:ro
     command: ["python3", "-m", "services.tts.main"]
     restart: unless-stopped
@@ -170,7 +173,7 @@ services:
       - .env
     environment:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://redis:6379/0
+      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
     depends_on:
       kafka:
         condition: service_healthy
@@ -187,7 +190,7 @@ services:
       - .env
     environment:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://redis:6379/0
+      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
     depends_on:
       kafka:
         condition: service_healthy
@@ -221,7 +224,7 @@ services:
       - .env
     environment:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://redis:6379/0
+      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
       WW_MEDIAMTX_API_URL: http://mediamtx:9997
       WW_VLM_BASE_URL: http://vlm:8000/v1
     depends_on:
@@ -254,7 +257,7 @@ services:
       - .env
     environment:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://redis:6379/0
+      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
       WW_DATABASE_URL: ${WW_DATABASE_URL}
       WW_SMTP_HOST: ${WW_SMTP_HOST:-}
       WW_SMTP_PORT: ${WW_SMTP_PORT:-587}
@@ -279,7 +282,7 @@ services:
       - .env
     environment:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://redis:6379/0
+      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
     depends_on:
       kafka:
         condition: service_healthy
@@ -300,7 +303,7 @@ services:
       - .env
     environment:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://redis:6379/0
+      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
     depends_on:
       kafka:
@@ -343,7 +346,7 @@ services:
     ports:
       - "8100:8100"
     volumes:
-      - tts_data:/data/tts
+      - tts_data:/tmp/wastewatch/tts
     restart: unless-stopped
 
 volumes:
