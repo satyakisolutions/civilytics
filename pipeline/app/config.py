@@ -28,10 +28,10 @@ class PipelineSettings(BaseSettings):
     # ROI
     analytics_config_path: str = "configs/nvdsanalytics_config.txt"
 
-    # Dwell thresholds — tuned for narrow-road LSG deployment
-    dwell_enter_threshold_s: float = 3.0
-    dwell_observe_threshold_s: float = 10.0
-    dwell_violation_threshold_s: float = 15.0
+    # Dwell thresholds — tuned for narrow-road LSG demo
+    dwell_enter_threshold_s: float = 0.5      # 0.5s — any brief stop
+    dwell_observe_threshold_s: float = 3.0    # 3s — suspicious, start recording + VLM + TTS warning
+    dwell_violation_threshold_s: float = 6.0  # 6s — confirmed violation, alert dispatched
 
     model_config = {"env_prefix": "WW_"}
 
