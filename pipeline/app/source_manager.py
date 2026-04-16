@@ -154,3 +154,8 @@ class SourceManager:
     def active_sources(self) -> dict[str, str]:
         """Return a mapping of camera_id → uri for all active sources."""
         return {cam_id: uri for cam_id, (uri, _) in self._sources.items()}
+
+    @property
+    def pad_to_camera(self) -> dict[int, str]:
+        """Return a mapping of pad_id → camera_id for reverse lookup."""
+        return {pad_id: cam_id for cam_id, (_, pad_id) in self._sources.items()}

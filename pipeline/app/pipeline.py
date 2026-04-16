@@ -308,6 +308,7 @@ def decorate_for_osd(
     ctx = ctx or {}
     fsm_mgr = ctx.get("fsm_manager")
     track_mgr = ctx.get("track_manager")
+    _osd_pad_map = ctx.get("pad_to_camera", {})
 
     frame_meta_list = batch_meta.frame_meta_list
     while frame_meta_list is not None:
@@ -316,7 +317,7 @@ def decorate_for_osd(
         except StopIteration:
             break
 
-        camera_id = f"cam-{frame_meta.source_id:02d}"
+        camera_id = _osd_pad_map.get(frame_meta.source_id, f"cam-{frame_meta.source_id + 1:02d}")
 
         # --- First pass: collect carried items ---------------------------------
         carried_items: list[tuple[str, object]] = []
@@ -504,7 +505,9 @@ def extract_metadata(
         except StopIteration:
             break
 
-        camera_id = f"cam-{frame_meta.source_id:02d}"
+        # Look up the actual camera name from the source_id via source_manager
+        _pad_map = ctx.get("pad_to_camera", {}) if isinstance(ctx, dict) else {}
+        camera_id = _pad_map.get(frame_meta.source_id, f"cam-{frame_meta.source_id + 1:02d}")
         frame_width = frame_meta.source_frame_width or pipeline_settings.input_width
         frame_height = frame_meta.source_frame_height or pipeline_settings.input_height
 
@@ -1022,6 +1025,7 @@ def main() -> None:
             "fsm_manager": fsm_manager,
             "roi_preprocessor": roi_preprocessor,
             "frame_batcher": frame_batcher,
+            "pad_to_camera": source_manager.pad_to_camera,
         }
         fakesink_sink_pad.add_probe(
             Gst.PadProbeType.BUFFER,
@@ -1044,7 +1048,7 @@ def main() -> None:
             osd_sink.add_probe(
                 Gst.PadProbeType.BUFFER,
                 decorate_for_osd,
-                {"fsm_manager": fsm_manager, "track_manager": track_manager},
+                {"fsm_manager": fsm_manager, "track_manager": track_manager, "pad_to_camera": source_manager.pad_to_camera},
             )
             logger.info("OSD decoration probe attached to nvdsosd.sink")
 
