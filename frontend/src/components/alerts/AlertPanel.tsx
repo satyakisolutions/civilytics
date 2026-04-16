@@ -1,13 +1,14 @@
-import { 
-  X, 
-  Bell, 
-  CheckCircle2, 
-  AlertTriangle, 
+import {
+  X,
+  Bell,
+  CheckCircle2,
+  AlertTriangle,
   Info,
   Clock,
   MapPin,
   Camera,
   ChevronRight,
+  Volume2,
 } from 'lucide-react';
 import { useMonitoring } from '@/context/MonitoringContext';
 import { Alert as AlertType } from '@/types/monitoring';
@@ -155,18 +156,35 @@ function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
 
       {/* Actions */}
       {alert.status === 'active' && (
-        <div className="flex gap-2">
-          <Button 
-            size="sm" 
+        <div className="flex gap-1.5">
+          <Button
+            size="sm"
             className="flex-1 h-7 text-xs"
             onClick={onAcknowledge}
           >
             <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-            Acknowledge
+            Ack
           </Button>
-          <Button 
-            variant="outline" 
-            size="sm" 
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => {
+              if ('speechSynthesis' in window) {
+                speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance(`${alert.title}. ${alert.message}`);
+                u.rate = 1.0;
+                u.volume = 0.8;
+                speechSynthesis.speak(u);
+              }
+            }}
+          >
+            <Volume2 className="w-3.5 h-3.5 mr-1" />
+            Play
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             className="h-7 text-xs"
           >
             <Camera className="w-3.5 h-3.5 mr-1" />
