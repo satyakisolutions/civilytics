@@ -534,35 +534,30 @@ def decorate_for_osd(
 
 
 def _capture_frame_base64(gst_buffer, frame_meta) -> str | None:
-    """Capture a single frame from the GStreamer buffer as base64 JPEG.
+    """Capture a frame from the GStreamer buffer as base64-encoded image.
 
-    Uses pyds.get_nvds_buf_surface() to get a numpy array from the GPU
-    buffer, then encodes to JPEG via cv2 or raw encoding.
+    Uses pyds.get_nvds_buf_surface() to map GPU buffer to CPU numpy array,
+    then encodes as PPM (no external deps) → base64 for VLM analysis.
     """
     import base64
+    import struct
     try:
+        # Map the GPU surface to CPU memory
         frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
         if frame is None:
             return None
-        # frame is numpy array (H, W, 4) in RGBA format
-        # Convert to JPEG bytes
-        import cv2
-        rgb = frame[:, :, :3]  # Drop alpha
-        _, jpeg = cv2.imencode('.jpg', rgb, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        return base64.b64encode(jpeg.tobytes()).decode('ascii')
-    except ImportError:
-        # cv2 not available — try raw encoding
-        try:
-            frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-            if frame is None:
-                return None
-            import base64 as b64
-            # Send raw RGB as base64 (VLM worker will handle decoding)
-            return b64.b64encode(frame[:, :, :3].tobytes()).decode('ascii')
-        except Exception:
-            return None
-    except Exception:
-        logger.debug("Frame capture failed", exc_info=True)
+        # frame shape: (H, W, 4) RGBA
+        h, w = frame.shape[0], frame.shape[1]
+        rgb = frame[:, :, :3]  # Drop alpha channel
+
+        # Encode as PPM (simplest format — no library needed)
+        # PPM format: P6\n<width> <height>\n255\n<raw RGB bytes>
+        header = f"P6\n{w} {h}\n255\n".encode('ascii')
+        ppm_bytes = header + rgb.tobytes()
+
+        return base64.b64encode(ppm_bytes).decode('ascii')
+    except Exception as exc:
+        logger.debug("Frame capture failed: %s", exc)
         return None
 
 
