@@ -325,7 +325,7 @@ services:
       --model Qwen/Qwen2.5-VL-7B-Instruct-AWQ
       --quantization awq
       --dtype float16
-      --max-model-len 16384
+      --max-model-len 4096
       --gpu-memory-utilization 0.85
       --limit-mm-per-prompt '{"image": 8}'
       --port 8000
