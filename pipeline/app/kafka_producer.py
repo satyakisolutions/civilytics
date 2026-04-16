@@ -57,6 +57,7 @@ class PipelineKafkaProducer:
                 key=camera_id.encode("utf-8"),
                 value=orjson.dumps({
                     "camera_id": camera_id, "track_id": track_id,
+                    "track_session_id": f"{camera_id}_{track_id}",
                     "zone_name": zone_name, "dwell_time_s": round(dwell_time_s, 1),
                     "class_name": class_name, "path_summary": path_summary,
                     "frame_timestamps": [], "frames_base64": [],
