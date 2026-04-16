@@ -102,52 +102,11 @@ export function useAlerts() {
   }, [notifyViolation, toast]);
 
   useEffect(() => {
-    // Initial fetch from both sources
-    fetchAlerts();
     fetchFromApi();
-
-    // Poll backend API every 5s for new alerts (reliable fallback)
-    const pollInterval = setInterval(fetchFromApi, 5000);
-
-    // Also try Supabase realtime (may not work with raw PostgreSQL)
-    const channel = supabase
-      .channel('alerts-realtime')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'alerts'
-        },
-        (payload) => {
-          const newAlert = payload.new as any;
-          notifyViolation(
-            newAlert.title,
-            newAlert.message,
-            newAlert.severity as 'critical' | 'warning' | 'info',
-            `alert-${newAlert.id}`,
-            newAlert.tts_audio_url || undefined
-          );
-          toast({
-            title: newAlert.title,
-            description: newAlert.message,
-            variant: newAlert.severity === 'critical' ? 'destructive' : 'default'
-          });
-          fetchFromApi();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'alerts' },
-        () => fetchFromApi()
-      )
-      .subscribe();
-
-    return () => {
-      clearInterval(pollInterval);
-      supabase.removeChannel(channel);
-    };
-  }, [fetchAlerts, fetchFromApi, toast, notifyViolation]);
+    // Poll backend API every 10s — no Supabase realtime (causes overload)
+    const pollInterval = setInterval(fetchFromApi, 10_000);
+    return () => clearInterval(pollInterval);
+  }, [fetchFromApi]);
 
 
 
