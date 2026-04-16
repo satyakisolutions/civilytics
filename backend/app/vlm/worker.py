@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+import subprocess
+import tempfile
+from pathlib import Path
 
 import orjson
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -94,6 +98,42 @@ class VLMWorker:
         except Exception:
             logger.exception("VLMWorker consume loop error")
 
+    @staticmethod
+    def _grab_rtsp_frame(camera_id: str) -> str | None:
+        """Grab a single JPEG frame from the camera's RTSP input stream.
+
+        Uses ffmpeg to capture 1 frame from the raw RTSP input (not the
+        annotated output — we want clean frames for VLM analysis).
+        Returns base64-encoded JPEG or None on failure.
+        """
+        rtsp_url = f"rtsp://mediamtx:8554/{camera_id}"
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp_path = tmp.name
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-y", "-rtsp_transport", "tcp",
+                    "-i", rtsp_url,
+                    "-frames:v", "1", "-q:v", "5",
+                    tmp_path,
+                ],
+                capture_output=True, timeout=8,
+            )
+            if result.returncode != 0:
+                logger.debug("ffmpeg frame grab failed for %s", camera_id)
+                return None
+            data = Path(tmp_path).read_bytes()
+            Path(tmp_path).unlink(missing_ok=True)
+            if len(data) < 1000:
+                return None
+            return base64.b64encode(data).decode("ascii")
+        except subprocess.TimeoutExpired:
+            logger.debug("ffmpeg frame grab timed out for %s", camera_id)
+            return None
+        except Exception:
+            logger.debug("Frame grab failed for %s", camera_id, exc_info=True)
+            return None
+
     async def _handle_message(self, payload: dict) -> None:
         async with self._semaphore:
             try:
@@ -102,11 +142,18 @@ class VLMWorker:
                 logger.warning("Invalid VLMRequest payload: %s", exc)
                 return
 
-            logger.debug(
-                "VLMWorker processing track %s (camera=%s)",
-                request.track_id,
-                request.camera_id,
-            )
+            # If no frames were provided, grab one from RTSP stream
+            if not request.frames_base64:
+                logger.info("No frames in VLM request for %s — grabbing from RTSP", request.camera_id)
+                frame = await asyncio.get_event_loop().run_in_executor(
+                    None, self._grab_rtsp_frame, request.camera_id
+                )
+                if frame:
+                    request.frames_base64 = [frame]
+                    request.frame_timestamps = [0.0]
+                    logger.info("Grabbed RTSP frame for %s (%d KB)", request.camera_id, len(frame) * 3 // 4 // 1024)
+                else:
+                    logger.warning("Could not grab frame for %s — VLM will analyze without image", request.camera_id)
 
             result = await self._client.analyze(request)
             if result is None:
