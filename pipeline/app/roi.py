@@ -98,6 +98,10 @@ class ROIManager:
     def get_polygons(self, camera_id: str) -> list[ROIPolygon]:
         return self._polygons.get(camera_id, [])
 
+    def get_all_polygons(self) -> dict[str, list[ROIPolygon]]:
+        """Return all polygons for all cameras."""
+        return dict(self._polygons)
+
     def get_bounding_rects(self, camera_id: str) -> list[BoundingRect]:
         """Get auto-derived bounding rectangles for a camera's polygon ROIs."""
         return self._bounding_rects.get(camera_id, [])

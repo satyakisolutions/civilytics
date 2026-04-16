@@ -901,6 +901,11 @@ def main() -> None:
     health = CameraHealth(timeout_s=30.0, max_retries=5)
     source_manager = SourceManager(pipeline, streammux)
 
+    # Evidence writer — manages JSON metadata, keyframes, and recording retention
+    from app.evidence_writer import EvidenceWriter
+    evidence_writer = EvidenceWriter()
+    _rotation_counter = {"ticks": 0}  # rotate once per ~360 ticks (1 hour at 10s interval)
+
     # Attach metadata probe to fakesink's sink pad
     fakesink_sink_pad = fakesink.get_static_pad("sink")
     if fakesink_sink_pad is None:
@@ -947,6 +952,10 @@ def main() -> None:
             roi_manager=roi_manager,
             api_base=os.environ.get("WW_API_BASE", "http://api:8080"),
             interval_s=10.0,
+            nvdsanalytics_elem=nvdsanalytics,
+            source_manager=source_manager,
+            config_width=pipeline_settings.muxer_output_width,
+            config_height=pipeline_settings.muxer_output_height,
         )
         roi_syncer.start()
         fsm_manager = EventFSMManager(
@@ -1091,6 +1100,12 @@ def main() -> None:
         if roi_preprocessor is not None:
             current_cams = list(source_manager.active_sources.keys())
             roi_preprocessor.update_crops(current_cams)
+
+        # Evidence rotation — run once per hour (360 ticks × 10s = 1 hour)
+        _rotation_counter["ticks"] += 1
+        if _rotation_counter["ticks"] >= 360:
+            _rotation_counter["ticks"] = 0
+            evidence_writer.rotate()
 
         return True  # Keep the timeout alive
 
