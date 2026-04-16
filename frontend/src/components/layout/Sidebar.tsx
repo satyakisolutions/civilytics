@@ -57,20 +57,21 @@ export function Sidebar({ className }: SidebarProps) {
       'flex flex-col h-full bg-sidebar border-r border-sidebar-border',
       className
     )}>
-      {/* Logo / Brand */}
+      {/* Satyaki Logo + Brand */}
       <div className="p-4 border-b border-sidebar-border">
         <div className="flex items-center gap-3">
           <div className="relative">
-            <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center">
-              <Shield className="w-6 h-6 text-primary" />
-            </div>
+            <svg viewBox="0 0 64 64" className="w-10 h-10" aria-label="Satyaki Solutions">
+              <path d="M32 2 L58 17 L58 47 L32 62 L6 47 L6 17 Z" fill="#FCA719" stroke="#1A1A2E" strokeWidth="3"/>
+              <text x="32" y="44" fontFamily="Poppins, Helvetica, Arial, sans-serif" fontSize="32" fontWeight="900" textAnchor="middle" fill="#1A1A2E">W</text>
+            </svg>
             {systemStatus.systemHealth === 'healthy' && (
               <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-success rounded-full border-2 border-sidebar status-dot-online" />
             )}
           </div>
           <div className="flex flex-col">
-            <span className="font-semibold text-sidebar-foreground text-sm">WasteWatch</span>
-            <span className="text-xs text-muted-foreground">Smart Monitoring</span>
+            <span className="font-semibold text-sidebar-foreground text-sm" style={{ fontFamily: "'Poppins', sans-serif" }}>WasteWatch</span>
+            <span className="text-[10px] text-muted-foreground" style={{ fontFamily: "'Poppins', sans-serif" }}>Satyaki Solutions Pvt Ltd</span>
           </div>
         </div>
       </div>
@@ -204,6 +205,23 @@ export function Sidebar({ className }: SidebarProps) {
       {/* Time Display */}
       <div className="p-4 border-t border-sidebar-border">
         <TimeDisplay />
+      </div>
+
+      {/* Powered By Footer */}
+      <div className="px-4 pb-3 border-t border-sidebar-border pt-2">
+        <a
+          href="https://satyaki.co.in"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center justify-center gap-1.5 opacity-60 hover:opacity-100 transition-opacity"
+        >
+          <span className="text-[9px] text-muted-foreground" style={{ fontFamily: "'Poppins', sans-serif" }}>Powered by</span>
+          <svg viewBox="0 0 64 64" className="w-3.5 h-3.5">
+            <path d="M32 2 L58 17 L58 47 L32 62 L6 47 L6 17 Z" fill="#FCA719"/>
+            <text x="32" y="44" fontFamily="Poppins, sans-serif" fontSize="32" fontWeight="900" textAnchor="middle" fill="#1A1A2E">S</text>
+          </svg>
+          <span className="text-[9px] font-medium" style={{ fontFamily: "'Poppins', sans-serif", color: '#FCA719' }}>Satyaki Solutions</span>
+        </a>
       </div>
     </aside>
   );
