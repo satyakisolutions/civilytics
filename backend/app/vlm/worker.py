@@ -121,7 +121,9 @@ class VLMWorker:
                             "ffmpeg", "-y", "-rtsp_transport", "tcp",
                             "-t", "5",
                             "-i", rtsp_url,
-                            "-frames:v", "1", "-q:v", "5",
+                            "-frames:v", "1",
+                            "-vf", "scale=640:-1",  # Downscale to save GPU memory
+                            "-q:v", "8",  # Lower quality = smaller file
                             tmp_path,
                         ],
                         capture_output=True, timeout=12,
