@@ -1,9 +1,15 @@
-"""VLM Kafka worker — consumes vlm.requests, publishes vlm.results."""
+"""VLM Kafka worker — consumes vlm.requests, publishes vlm.results.
+
+Runs a persistent per-camera ffmpeg grabber that keeps
+/tmp/vlm_frames/{cam}.jpg fresh (1fps, -update 1). Trigger-time latency
+drops from ~5s (spawn-per-request) to <1s (disk read).
+"""
 from __future__ import annotations
 
 import asyncio
 import base64
 import logging
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -16,6 +22,9 @@ from app.config.kafka import GROUP_VLM_WORKER, TOPIC_VLM_REQUESTS, TOPIC_VLM_RES
 from app.config.settings import settings
 from app.vlm.client import VLMClient
 from app.vlm.schemas import VLMRequest
+
+FRAME_CACHE_DIR = Path(os.environ.get("WW_VLM_FRAME_CACHE", "/tmp/vlm_frames"))
+FRAME_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +49,7 @@ class VLMWorker:
         self._producer: AIOKafkaProducer | None = None
         self._client: VLMClient | None = None
         self._task: asyncio.Task | None = None
+        self._grabbers: dict[str, subprocess.Popen] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -83,7 +93,44 @@ class VLMWorker:
         if self._client:
             await self._client.close()
 
+        for cam_id, proc in self._grabbers.items():
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        self._grabbers.clear()
+
         logger.info("VLMWorker stopped")
+
+    def _ensure_grabber(self, camera_id: str) -> None:
+        """Spawn (or respawn) a persistent ffmpeg writing latest JPEG to disk."""
+        proc = self._grabbers.get(camera_id)
+        if proc is not None and proc.poll() is None:
+            return
+        rtsp_url = f"rtsp://mediamtx:8554/{camera_id}-out"
+        out_path = FRAME_CACHE_DIR / f"{camera_id}.jpg"
+        cmd = [
+            "ffmpeg", "-y",
+            "-loglevel", "error",
+            "-rtsp_transport", "tcp",
+            "-i", rtsp_url,
+            "-vf", "fps=2,scale=960:-1",
+            "-q:v", "6",
+            "-update", "1",
+            str(out_path),
+        ]
+        try:
+            new_proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            )
+            self._grabbers[camera_id] = new_proc
+            logger.info("Spawned persistent ffmpeg grabber for %s → %s", camera_id, out_path)
+        except Exception:
+            logger.exception("Failed to spawn grabber for %s", camera_id)
 
     # ------------------------------------------------------------------
     # Internal
@@ -124,48 +171,43 @@ class VLMWorker:
             logger.debug("Crop failed: %s — using full frame", exc)
             return jpeg_b64
 
-    @staticmethod
-    def _grab_rtsp_frame(camera_id: str) -> str | None:
-        """Grab a single JPEG frame from the camera's RTSP input stream.
+    def _grab_rtsp_frame(self, camera_id: str) -> str | None:
+        """Return base64 JPEG of the latest cached frame for camera_id.
 
-        Uses ffmpeg to capture 1 frame from the raw RTSP input (not the
-        annotated output — we want clean frames for VLM analysis).
-        Returns base64-encoded JPEG or None on failure.
+        Persistent ffmpeg keeps /tmp/vlm_frames/{cam}.jpg fresh at 2fps.
+        Falls back to one-shot ffmpeg capture if cache missing/stale.
         """
-        # Try annotated output first (has bboxes), fall back to raw input
-        rtsp_urls = [
-            f"rtsp://mediamtx:8554/{camera_id}-out",
-            f"rtsp://mediamtx:8554/{camera_id}",
-        ]
+        self._ensure_grabber(camera_id)
+        cache_path = FRAME_CACHE_DIR / f"{camera_id}.jpg"
+        # Wait briefly for grabber's first write (cold start) or stale read
+        import time as _t
+        for _ in range(8):
+            if cache_path.exists() and cache_path.stat().st_size > 1000:
+                age = _t.time() - cache_path.stat().st_mtime
+                if age < 3.0:
+                    try:
+                        return base64.b64encode(cache_path.read_bytes()).decode("ascii")
+                    except Exception:
+                        break
+            _t.sleep(0.25)
+        # Fallback: one-shot grab
         try:
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 tmp_path = tmp.name
-            for rtsp_url in rtsp_urls:
-                try:
-                    result = subprocess.run(
-                        [
-                            "ffmpeg", "-y", "-rtsp_transport", "tcp",
-                            "-t", "5",
-                            "-i", rtsp_url,
-                            "-frames:v", "1",
-                            "-vf", "scale=640:-1",  # Downscale to save GPU memory
-                            "-q:v", "8",  # Lower quality = smaller file
-                            tmp_path,
-                        ],
-                        capture_output=True, timeout=12,
-                    )
-                    if result.returncode == 0:
-                        data = Path(tmp_path).read_bytes()
-                        if len(data) > 1000:
-                            Path(tmp_path).unlink(missing_ok=True)
-                            return base64.b64encode(data).decode("ascii")
-                except subprocess.TimeoutExpired:
-                    continue
-            Path(tmp_path).unlink(missing_ok=True)
-            return None
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-rtsp_transport", "tcp", "-t", "5",
+                 "-i", f"rtsp://mediamtx:8554/{camera_id}-out",
+                 "-frames:v", "1", "-vf", "scale=640:-1", "-q:v", "8", tmp_path],
+                capture_output=True, timeout=10,
+            )
+            if result.returncode == 0:
+                data = Path(tmp_path).read_bytes()
+                Path(tmp_path).unlink(missing_ok=True)
+                if len(data) > 1000:
+                    return base64.b64encode(data).decode("ascii")
         except Exception:
-            logger.debug("Frame grab failed for %s", camera_id, exc_info=True)
-            return None
+            pass
+        return None
 
     async def _handle_message(self, payload: dict) -> None:
         async with self._semaphore:

@@ -15,6 +15,7 @@ Environment variables (all prefixed WW_):
     WW_MUXER_OUTPUT_WIDTH / WW_MUXER_OUTPUT_HEIGHT
 """
 
+import base64
 import logging
 import os
 import sys
@@ -41,6 +42,7 @@ from app.roi import ROIManager
 from app.source_manager import SourceManager
 from app.stream_watcher import StreamWatcher
 from app.tracking import TrackStateManager
+from app.vlm_grpc_client import VLMGrpcClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,35 +58,14 @@ logger = logging.getLogger(__name__)
 # (person = 0) which silently filtered every real detection.
 # Keep in lock-step with pipeline/configs/labels.txt.
 COCO_CLASS_MAP: dict[int, str] = {
-    # Persons
-    1: "person",
-    # Vehicles
-    2: "bicycle",
-    3: "car",
-    4: "motorcycle",
-    6: "bus",
-    8: "truck",
-    # Carried items (potential waste containers)
-    27: "backpack",
-    28: "umbrella",
-    31: "handbag",
-    33: "suitcase",
-    # Waste objects (evidence of dumping)
-    44: "bottle",
-    46: "wine_glass",
-    47: "cup",
-    51: "bowl",
-    62: "chair",
-    63: "couch",
-    64: "potted_plant",
-    65: "bed",
-    67: "dining_table",
-    70: "toilet",
-    72: "tv",
-    78: "microwave",
-    79: "oven",
-    81: "sink",
-    82: "refrigerator",
+    # Fine-tuned 2-class RFDETR-Nano indices (see training/finetune_rfdetr.py).
+    # Training used 0=person, 1=handbag — DeepStreamOutput argmax returns
+    # those indices directly, and labels.txt is now `person\nhandbag` in
+    # lock-step. Old COCO91 map caused handbags to be labeled "person" and
+    # persons to be dropped entirely, so all downstream FSM transitions
+    # keyed off the wrong class.
+    0: "person",
+    1: "handbag",
 }
 
 # Per-category OSD colour (r, g, b, a) used by the pre-nvosd decoration
@@ -419,6 +400,24 @@ def decorate_for_osd(
             rect.border_color.alpha = ba
             rect.has_bg_color = 0
 
+            # --- Dumped item / waste zone highlight ---
+            # Fill the bbox with semi-transparent red for:
+            #  (a) any waste_object (direct evidence of dumping)
+            #  (b) a carried_item belonging to a suspect / escalated track
+            # so the operator sees WHAT was dumped, not just the person.
+            _highlight = False
+            if category == "waste_object":
+                _highlight = True
+            elif category == "carried_item" and (is_suspect or fsm_state in ("violation", "alerting", "escalated")):
+                _highlight = True
+            if _highlight:
+                rect.has_bg_color = 1
+                rect.bg_color.red = 1.0
+                rect.bg_color.green = 0.15
+                rect.bg_color.blue = 0.15
+                rect.bg_color.alpha = 0.35
+                rect.border_width = max(border_w, 3)
+
             # --- Text params ---
             txt = obj_meta.text_params
             txt.display_text = label
@@ -538,6 +537,86 @@ def decorate_for_osd(
 # can't be mapped via get_nvds_buf_surface (requires RGBA). Adding
 # nvvideoconvert causes segfaults. Instead, the VLM worker grabs
 # the frame directly from the RTSP stream when it needs one.
+
+
+_CAPTURE_DIAG = {"n": 0, "ok": 0, "no_batch": 0, "no_map": 0, "sz_mismatch": 0, "last_err": ""}
+
+
+def capture_frame_probe(
+    pad: Gst.Pad,
+    info: Gst.PadProbeInfo,
+    ctx: dict,
+) -> Gst.PadProbeReturn:
+    """Pull RGBA bytes from nvvideoconvert's system-mem buffer, encode JPEG,
+    cache per source_id. Runs synchronous with detection metadata."""
+    _CAPTURE_DIAG["n"] += 1
+    if _CAPTURE_DIAG["n"] % 50 == 1:
+        logger.info("capture probe tick n=%d ok=%d no_batch=%d no_map=%d sz_mismatch=%d last_err=%r",
+                    _CAPTURE_DIAG["n"], _CAPTURE_DIAG["ok"], _CAPTURE_DIAG["no_batch"],
+                    _CAPTURE_DIAG["no_map"], _CAPTURE_DIAG["sz_mismatch"], _CAPTURE_DIAG["last_err"][:120])
+    buf = info.get_buffer()
+    if buf is None:
+        return Gst.PadProbeReturn.OK
+    batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(buf))
+    if batch_meta is None:
+        _CAPTURE_DIAG["no_batch"] += 1
+        return Gst.PadProbeReturn.OK
+
+    cache: dict[int, bytes] = ctx.get("frame_jpeg_cache", {})
+    if cache is None:
+        return Gst.PadProbeReturn.OK
+
+    success, map_info = buf.map(Gst.MapFlags.READ)
+    if not success:
+        _CAPTURE_DIAG["no_map"] += 1
+        return Gst.PadProbeReturn.OK
+    try:
+        import numpy as np
+        from PIL import Image
+        import io
+
+        raw = bytes(map_info.data)
+        w = pipeline_settings.muxer_output_width
+        h = pipeline_settings.muxer_output_height
+        frame_size = w * h * 4
+
+        if len(raw) < frame_size:
+            _CAPTURE_DIAG["sz_mismatch"] += 1
+            _CAPTURE_DIAG["last_err"] = f"raw={len(raw)} expected>={frame_size}"
+            return Gst.PadProbeReturn.OK
+
+        frame_meta_list = batch_meta.frame_meta_list
+        while frame_meta_list is not None:
+            try:
+                frame_meta = pyds.NvDsFrameMeta.cast(frame_meta_list.data)
+            except StopIteration:
+                break
+            batch_id = frame_meta.batch_id
+            offset = batch_id * frame_size
+            if offset + frame_size > len(raw):
+                _CAPTURE_DIAG["sz_mismatch"] += 1
+                break
+            try:
+                arr = np.frombuffer(raw[offset:offset + frame_size], dtype=np.uint8).reshape((h, w, 4))
+                bgr = arr[:, :, :3]
+                img = Image.fromarray(bgr)
+                if img.width > 1280:
+                    new_h = int(img.height * (1280 / img.width))
+                    img = img.resize((1280, new_h), Image.BILINEAR)
+                out = io.BytesIO()
+                img.save(out, format="JPEG", quality=70)
+                cache[frame_meta.source_id] = out.getvalue()
+                _CAPTURE_DIAG["ok"] += 1
+            except Exception as exc:
+                _CAPTURE_DIAG["last_err"] = str(exc)[:200]
+            try:
+                frame_meta_list = frame_meta_list.next
+            except StopIteration:
+                break
+    finally:
+        buf.unmap(map_info)
+
+    return Gst.PadProbeReturn.OK
 
 
 def extract_metadata(
@@ -682,47 +761,74 @@ def extract_metadata(
                         # Get the FSM object to check/set one-shot guards
                         _fsm_obj = fsm_manager._fsms.get((camera_id, track_id))
 
-                        if fsm_event.state == FSMState.OBSERVE and _fsm_obj and not _fsm_obj.observe_triggered:
-                            _fsm_obj.observe_triggered = True
-                            _category = CLASS_CATEGORIES.get(class_name, "unknown")
-
-                            # Frames captured by VLM worker from RTSP (not here)
-                            _frames = []
-
-                            # Send VLM request WITH frame data — VLM will see the
-                            # person and generate contextual deterrent with description.
-                            kafka_producer.send_vlm_request(
-                                camera_id=camera_id, track_id=track_id,
-                                zone_name=camera_id, dwell_time_s=track_info.dwell_time_s,
-                                class_name=class_name,
-                                path_summary=f"observe_trigger:{track_info.dwell_time_s:.0f}s",
-                                frames_base64=_frames,
-                                trigger_bbox=bbox_dict,
-                            )
-
-                            # Start evidence collection
+                        # ENTER: start recording AND fire VLM immediately
+                        # (Phase 0.1: cuts ~3-5s wall clock vs waiting for
+                        # VIOLATION). Track bbox is known here, motion gate
+                        # applied downstream by alert_consumer.
+                        if fsm_event.state == FSMState.ENTER:
                             _ew = ctx.get("evidence_writer")
                             if _ew:
                                 _ew.start_evidence(camera_id, track_id, class_name)
 
-                            # Alert UI (no TTS — wait for VLM)
-                            if _category == "vehicle":
-                                kafka_producer.send_alert(
-                                    camera_id=camera_id, track_id=track_id,
-                                    severity="warning",
-                                    title=f"Suspicious stop — {class_name} at {camera_id}",
-                                    message=f"Vehicle stopped in restricted zone. VLM analyzing.",
-                                )
+                            _category = CLASS_CATEGORIES.get(class_name, "unknown")
+                            _actionable = (
+                                class_name in VEHICLE_CLASSES or
+                                _category in ("person", "carried_item", "waste_object")
+                            )
+                            if _actionable and _fsm_obj and not _fsm_obj.vlm_fired:
+                                _fsm_obj.vlm_fired = True
+                                _speed = track_info.speed_px_s
+                                _area = track_info.bbox_area
+                                _cache = ctx.get("frame_jpeg_cache", {})
+                                _jpeg = _cache.get(frame_meta.source_id)
+                                _vlm = ctx.get("vlm_client")
+                                if _vlm is not None:
+                                    _vlm.submit(
+                                        camera_id=camera_id, track_id=track_id,
+                                        class_name=class_name,
+                                        dwell_time_s=track_info.dwell_time_s,
+                                        path_summary=f"enter;speed_norm={_speed:.4f};area_norm={_area:.5f}",
+                                        trigger_bbox=bbox_dict,
+                                        jpeg_bytes=_jpeg,
+                                    )
 
-                        # --- VIOLATION triggers: one-shot per track ---
+                        # VIOLATION (red bbox): VLM already fired on ENTER
+                        # (Phase 0.1). Capture keyframe for evidence only.
+                        # Re-fire VLM only if ENTER fire was skipped.
                         elif fsm_event.state == FSMState.VIOLATION and _fsm_obj and not _fsm_obj.violation_triggered:
                             _fsm_obj.violation_triggered = True
-                            kafka_producer.send_alert(
-                                camera_id=camera_id, track_id=track_id,
-                                severity="critical",
-                                title=f"Violation — {class_name} at {camera_id}",
-                                message=f"Confirmed violation in restricted zone. VLM analyzing.",
+
+                            _category = CLASS_CATEGORIES.get(class_name, "unknown")
+                            _actionable = (
+                                class_name in VEHICLE_CLASSES or
+                                _category in ("person", "carried_item", "waste_object")
                             )
+                            _cache = ctx.get("frame_jpeg_cache", {})
+                            _jpeg = _cache.get(frame_meta.source_id)
+
+                            if _actionable and not _fsm_obj.vlm_fired:
+                                _fsm_obj.vlm_fired = True
+                                _speed = track_info.speed_px_s
+                                _area = track_info.bbox_area
+                                _vlm = ctx.get("vlm_client")
+                                if _vlm is not None:
+                                    _vlm.submit(
+                                        camera_id=camera_id, track_id=track_id,
+                                        class_name=class_name,
+                                        dwell_time_s=track_info.dwell_time_s,
+                                        path_summary=f"violation_fallback;speed_norm={_speed:.4f};area_norm={_area:.5f}",
+                                        trigger_bbox=bbox_dict,
+                                        jpeg_bytes=_jpeg,
+                                    )
+
+                            _ew = ctx.get("evidence_writer")
+                            if _ew:
+                                # Use the same JPEG sent to VLM — it is the
+                                # red-bbox frame showing the correct target.
+                                _ew.capture_violation_keyframe(
+                                    camera_id, track_id,
+                                    jpeg_bytes=_jpeg if _actionable else None,
+                                )
 
                         # LPR triggers immediately on violation (no batching needed)
                         if fsm_event.state.value == "violation":
@@ -734,27 +840,32 @@ def extract_metadata(
                                     class_name=class_name,
                                 )
 
-                        # Flush partial batch on track exit
+                        # Flush partial batch on track exit — keep batcher clean but
+                        # do NOT dispatch VLM for non-escalated tracks (noise).
                         if fsm_event.state.value == "exited":
-                            exit_batch = frame_batcher.on_track_exit(camera_id, track_id)
-                            if exit_batch:
-                                kafka_producer.send_vlm_request(
-                                    camera_id=camera_id, track_id=track_id,
-                                    zone_name=camera_id, dwell_time_s=track_info.dwell_time_s,
-                                    class_name=class_name,
-                                    path_summary=f"exit_batch:{len(exit_batch)}frames",
-                                )
-                            # Finalize evidence — determine outcome based on whether violation was triggered
+                            frame_batcher.on_track_exit(camera_id, track_id)
+                            # Finalize evidence in background — finalize sleeps
+                            # SEGMENT_SECS+2 to flush the trailing segment, so
+                            # we must not block the DeepStream callback.
                             _ew = ctx.get("evidence_writer")
                             if _ew:
-                                _was_violation = _fsm_obj.violation_triggered if _fsm_obj else False
+                                import threading
+                                # Read from the escalation set — it persists
+                                # across FSM cleanup. _fsm_obj is already None
+                                # here because update() → EXITED cleans the
+                                # FSM before we get a chance to inspect it.
+                                _was_violation = fsm_manager.is_escalated(camera_id, track_id)
                                 _outcome = "violation" if _was_violation else "clear"
-                                _ew.finalize(
-                                    camera_id=camera_id, track_id=track_id,
-                                    outcome=_outcome,
-                                    dwell_time_s=track_info.dwell_time_s,
-                                    action=class_name,
-                                )
+                                threading.Thread(
+                                    target=_ew.finalize,
+                                    kwargs=dict(
+                                        camera_id=camera_id, track_id=track_id,
+                                        outcome=_outcome,
+                                        dwell_time_s=track_info.dwell_time_s,
+                                        action=class_name,
+                                    ),
+                                    daemon=True,
+                                ).start()
 
                     # Enrich detection with tracking data
                     detection_dict["dwell_time_s"] = round(track_info.dwell_time_s, 1)
@@ -769,27 +880,11 @@ def extract_metadata(
                     if _ew and _current_fsm in ("observe", "violation", "alerting", "escalated"):
                         _ew.add_frame(camera_id, track_id, bbox_dict, float(obj_meta.confidence), _current_fsm)
 
-                    # --- Conditional frame batching for VLM ---
-                    # Instead of sending every violation frame to VLM immediately,
-                    # collect frames over a 60s window (1 every 10s = 6 frames).
-                    # VLM gets temporal context: "what happened over the last minute"
+                    # VLM dispatch moved to OBSERVE+carried / VIOLATION only (red bbox).
+                    # The frame_batcher periodic-batch path was firing VLM on every
+                    # 60s window regardless of track state, producing ghost alerts
+                    # that described whoever happened to be in frame. Dropped.
                     current_fsm = detection_dict.get("fsm_state")
-                    vlm_batch = frame_batcher.on_frame(
-                        camera_id=camera_id,
-                        track_id=track_id,
-                        frame_num=frame_meta.frame_num,
-                        timestamp_ms=int(time.monotonic() * 1000),
-                        fsm_state=current_fsm,
-                        detections=detections,
-                    )
-                    if vlm_batch is not None:
-                        # Batch ready — send to VLM with temporal context
-                        kafka_producer.send_vlm_request(
-                            camera_id=camera_id, track_id=track_id,
-                            zone_name=camera_id, dwell_time_s=track_info.dwell_time_s,
-                            class_name=class_name,
-                            path_summary=f"batch:{len(vlm_batch)}frames:{current_fsm}",
-                        )
 
                 detections.append(detection_dict)
 
@@ -834,7 +929,7 @@ def extract_metadata(
 # ---------------------------------------------------------------------------
 
 
-def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Element, bool, Optional[Gst.Element], OutputStreamManager]:
+def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Element, bool, Optional[Gst.Element], OutputStreamManager, Gst.Element]:
     """Construct and return the DeepStream GStreamer pipeline.
 
     Returns:
@@ -988,6 +1083,31 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     for elem in (queue_meta, fakesink):
         pipeline.add(elem)
 
+    # --- Branch 3: synchronous frame capture (RGBA → JPEG cache) ------------
+    # nvvideoconvert lifts NV12/NVMM to RGBA in system memory so Python can
+    # map the buffer without the segfault you hit on raw NV12. A per-source
+    # JPEG cache is populated from this probe at the same tick as the
+    # detection metadata; the extract_metadata probe (branch 2) reads
+    # the cache when it needs to attach a frame to a VLM request.
+    queue_capture = make_element("queue", "queue_capture")
+    queue_capture.set_property("leaky", 2)
+    queue_capture.set_property("max-size-buffers", 3)
+    queue_capture.set_property("max-size-bytes", 0)
+    queue_capture.set_property("max-size-time", 0)
+    nvconv_capture = make_element("nvvideoconvert", "nvconv_capture")
+    capsfilter_capture = make_element("capsfilter", "capsfilter_capture")
+    try:
+        capsfilter_capture.set_property(
+            "caps", Gst.Caps.from_string("video/x-raw, format=RGBA")
+        )
+    except Exception:
+        logger.exception("capsfilter_capture caps set failed")
+    fakesink_capture = make_element("fakesink", "fakesink_capture")
+    fakesink_capture.set_property("sync", False)
+    fakesink_capture.set_property("async", False)
+    for elem in (queue_capture, nvconv_capture, capsfilter_capture, fakesink_capture):
+        pipeline.add(elem)
+
     # --- Link main chain ----------------------------------------------------
     # streammux -> nvinfer -> nvtracker -> nvdsanalytics -> [wastewatchmeta] -> nvosd -> tee
     if not streammux.link(nvinfer):
@@ -1042,7 +1162,23 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
         logger.critical("Failed to link queue_meta -> fakesink")
         sys.exit(1)
 
-    return pipeline, streammux, fakesink, nvdsanalytics, use_native_meta, ww_meta_elem, output_manager
+    # --- Link branch 3: tee -> queue_capture -> nvvideoconvert -> caps -> fakesink ---
+    tee_src_capture = tee.get_request_pad("src_%u")
+    qc_sink = queue_capture.get_static_pad("sink")
+    if tee_src_capture.link(qc_sink) != Gst.PadLinkReturn.OK:
+        logger.critical("Failed to link tee -> queue_capture")
+        sys.exit(1)
+    if not queue_capture.link(nvconv_capture):
+        logger.critical("Failed to link queue_capture -> nvvideoconvert")
+        sys.exit(1)
+    if not nvconv_capture.link(capsfilter_capture):
+        logger.critical("Failed to link nvvideoconvert -> capsfilter_capture")
+        sys.exit(1)
+    if not capsfilter_capture.link(fakesink_capture):
+        logger.critical("Failed to link capsfilter_capture -> fakesink_capture")
+        sys.exit(1)
+
+    return pipeline, streammux, fakesink, nvdsanalytics, use_native_meta, ww_meta_elem, output_manager, fakesink_capture
 
 
 # ---------------------------------------------------------------------------
@@ -1053,9 +1189,15 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
 def main() -> None:
     Gst.init(None)
 
-    pipeline, streammux, fakesink, nvdsanalytics, use_native_meta, ww_meta_elem, output_manager = build_pipeline()  # noqa: F841
+    pipeline, streammux, fakesink, nvdsanalytics, use_native_meta, ww_meta_elem, output_manager, fakesink_capture = build_pipeline()  # noqa: F841
+
+    # Per-source JPEG cache populated by the capture probe. Written by
+    # capture_frame_probe in microseconds (Python encodes RGBA → JPEG with
+    # PIL), read by extract_metadata when OBSERVE/VIOLATION fires.
+    frame_jpeg_cache: dict[int, bytes] = {}
 
     kafka_producer = PipelineKafkaProducer()
+    vlm_client = VLMGrpcClient()
     health = CameraHealth(timeout_s=30.0, max_retries=5)
     source_manager = SourceManager(pipeline, streammux)
 
@@ -1129,6 +1271,7 @@ def main() -> None:
 
         probe_ctx = {
             "kafka_producer": kafka_producer,
+            "vlm_client": vlm_client,
             "health": health,
             "track_manager": track_manager,
             "roi_manager": roi_manager,
@@ -1137,12 +1280,23 @@ def main() -> None:
             "frame_batcher": frame_batcher,
             "pad_to_camera": source_manager.pad_to_camera,
             "evidence_writer": evidence_writer,
+            "frame_jpeg_cache": frame_jpeg_cache,
         }
         fakesink_sink_pad.add_probe(
             Gst.PadProbeType.BUFFER,
             extract_metadata,
             probe_ctx,
         )
+
+        # Attach synchronous frame capture probe to branch 3's sink.
+        capture_sink = fakesink_capture.get_static_pad("sink")
+        if capture_sink is not None:
+            capture_sink.add_probe(
+                Gst.PadProbeType.BUFFER,
+                capture_frame_probe,
+                {"frame_jpeg_cache": frame_jpeg_cache},
+            )
+            logger.info("Frame capture probe attached to fakesink_capture.sink")
 
         logger.warning("Custom plugin not available — using Python fallback")
 
@@ -1249,15 +1403,9 @@ def main() -> None:
             for lost in lost_tracks:
                 fsm_manager.clear_escalated(lost.camera_id, lost.track_id)
 
-        # Prune stale frame batchers and send partial batches to VLM
-        stale_batches = frame_batcher.prune_stale()
-        for cam_id, trk_id, frames in stale_batches:
-            kafka_producer.send_vlm_request(
-                camera_id=cam_id, track_id=trk_id,
-                zone_name=cam_id, dwell_time_s=0,
-                class_name="unknown",
-                path_summary=f"timeout_batch:{len(frames)}frames",
-            )
+        # Prune stale frame batchers. No VLM dispatch here either —
+        # stale-timeout batches are pre-red and never needed alert-level review.
+        frame_batcher.prune_stale()
 
         # Update ROI preprocessor crops if sources changed (fallback path only)
         if roi_preprocessor is not None:

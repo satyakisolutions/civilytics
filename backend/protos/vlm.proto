@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package wastewatch.vlm.v1;
+
+// Unary analyze RPC. Pipeline calls the worker directly instead of
+// publishing to Kafka `wastewatch.vlm.requests`. Results still land on
+// Kafka `wastewatch.vlm.results` so AlertConsumer and anyone else can
+// subscribe unchanged.
+service VLMService {
+  rpc Analyze (AnalyzeRequest) returns (AnalyzeResponse);
+  rpc Ping    (PingRequest)    returns (PingResponse);
+}
+
+message BoundingBox {
+  float x = 1;
+  float y = 2;
+  float w = 3;
+  float h = 4;
+}
+
+message AnalyzeRequest {
+  string camera_id           = 1;
+  int64  track_id            = 2;
+  string track_session_id    = 3;
+  string zone_name           = 4;
+  float  dwell_time_s        = 5;
+  string class_name          = 6;
+  string path_summary        = 7;
+  BoundingBox trigger_bbox   = 8;
+  // Raw JPEG bytes. 1 frame = cropped+full not needed separately —
+  // server's _crop_to_bbox can derive crop from the full frame + bbox.
+  repeated bytes frames_jpeg = 9;
+  repeated double frame_timestamps = 10;
+  string request_id          = 11;
+}
+
+message AnalyzeResponse {
+  string camera_id          = 1;
+  int64  track_id           = 2;
+  string track_session_id   = 3;
+  string person_description = 4;
+  string action             = 5;
+  bool   is_dumping         = 6;
+  string waste_type         = 7;
+  string severity           = 8;
+  float  confidence         = 9;
+  string reasoning          = 10;
+  string command            = 11;
+  string deterrent_message  = 12;
+  float  inference_time_ms  = 13;
+  string model_version      = 14;
+  int32  frames_analyzed    = 15;
+}
+
+message PingRequest {}
+message PingResponse {
+  string status   = 1;
+  int64  inflight = 2;
+}

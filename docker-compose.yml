@@ -128,9 +128,14 @@ services:
     environment:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       WW_VLM_BASE_URL: http://vlm:8000/v1
+      WW_VLM_GRPC_PORT: "50061"
     depends_on:
       kafka:
         condition: service_healthy
+    expose:
+      - "50061"
+    ports:
+      - "50061:50061"
     command: ["python3", "-m", "services.vlm.main"]
     restart: unless-stopped
 
@@ -306,6 +311,10 @@ services:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
+      WW_EVIDENCE_DIR: /app/evidence
+      WW_VLM_GRPC_TARGET: vlm-worker:50061
+    volumes:
+      - evidence_data:/app/evidence
     depends_on:
       kafka:
         condition: service_healthy
@@ -328,6 +337,7 @@ services:
       --max-model-len 4096
       --gpu-memory-utilization 0.85
       --limit-mm-per-prompt '{"image": 8}'
+      --speculative-config '{"method":"ngram","num_speculative_tokens":5,"prompt_lookup_max":4,"prompt_lookup_min":2}'
       --port 8000
     ports:
       - "8001:8000"
