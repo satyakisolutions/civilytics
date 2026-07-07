@@ -58,6 +58,7 @@ export interface Alert {
   status: AlertStatus;
   cameraId: string;
   zone: string;
+  ttsAudioUrl?: string;
 }
 
 export interface AnalyticsData {

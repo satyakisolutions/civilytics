@@ -19,37 +19,74 @@ export function useViolationEvents(filters?: ViolationFilters) {
 
   const fetchEvents = useCallback(async () => {
     try {
-      const params = new URLSearchParams({ limit: '50' });
-      if (filters?.status) params.set('status', filters.status);
-      if (filters?.eventType) params.set('event_type', filters.eventType);
-      if (filters?.cameraId) params.set('camera_id', filters.cameraId);
-      if (filters?.dateFrom) params.set('start_date', filters.dateFrom.toISOString());
-      if (filters?.dateTo) params.set('end_date', filters.dateTo.toISOString());
+      // Backing table `violation_events` is empty; derive timeline from
+      // /api/alerts (populated by AlertConsumer). Also fetch /api/evidence/files
+      // for snapshot + video URLs keyed by camera_id + timestamp.
+      const [alertsResp, evidenceResp] = await Promise.all([
+        fetch(`${API_BASE}/api/alerts?limit=100`).catch(() => null),
+        fetch(`${API_BASE}/api/evidence/files?limit=200`).catch(() => null),
+      ]);
 
-      const resp = await fetch(`${API_BASE}/api/events?${params}`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
+      const alerts = alertsResp?.ok ? await alertsResp.json() : [];
+      const evidence = evidenceResp?.ok ? await evidenceResp.json() : [];
 
-      const mapped: ViolationEvent[] = (data || []).map((e: any) => ({
-        id: e.id,
-        cameraId: e.camera_id,
-        cameraName: e.camera_id?.slice(0, 8) || 'Unknown',
-        zone: '',
-        location: '',
-        timestamp: new Date(e.timestamp),
-        eventType: e.event_type as ViolationEvent['eventType'],
-        severity: e.severity as ViolationEvent['severity'],
-        confidence: e.confidence || 0,
-        personId: e.person_id || undefined,
-        repeatCount: e.repeat_count || 1,
-        snapshotUrl: e.snapshot_url || undefined,
-        videoClipUrl: e.video_clip_url || undefined,
-        status: e.status as ViolationEvent['status'],
-        acknowledgedBy: e.acknowledged_by || undefined,
-        acknowledgedAt: e.acknowledged_at ? new Date(e.acknowledged_at) : undefined,
-        notes: e.notes || undefined,
-        isValid: e.is_valid,
-      }));
+      // Build evidence lookup: camera_id → array of {timestamp, keyframe_url, video_url}
+      const evidenceByCamera = new Map<string, any[]>();
+      for (const ev of evidence) {
+        const list = evidenceByCamera.get(ev.camera_id) || [];
+        list.push(ev);
+        evidenceByCamera.set(ev.camera_id, list);
+      }
+
+      const mapped: ViolationEvent[] = (alerts || []).map((a: any) => {
+        const title = (a.title || '').toLowerCase();
+        const eventType = title.includes('dumping') || title.includes('violation')
+          ? 'dumping_detected'
+          : title.includes('suspicious') || title.includes('observe')
+            ? 'suspicious_activity'
+            : 'suspicious_activity';
+
+        // Match evidence record whose timestamp is within 3min of alert
+        const alertTime = new Date(a.timestamp).getTime();
+        const cands = evidenceByCamera.get(a.camera_id) || [];
+        let match: any = null;
+        let bestDelta = Number.POSITIVE_INFINITY;
+        for (const ev of cands) {
+          const delta = Math.abs(new Date(ev.timestamp_start || ev.created_at).getTime() - alertTime);
+          if (delta < bestDelta && delta < 180_000) {
+            bestDelta = delta;
+            match = ev;
+          }
+        }
+
+        const snapshotUrl = match?.keyframe_url
+          ? `${API_BASE}/api/evidence/file?path=${encodeURIComponent(match.keyframe_url)}`
+          : undefined;
+        const videoClipUrl = match?.video_url
+          ? `${API_BASE}/api/evidence/file?path=${encodeURIComponent(match.video_url)}`
+          : undefined;
+
+        return {
+          id: a.id,
+          cameraId: a.camera_id,
+          cameraName: a.camera_id?.slice(0, 8) || 'Unknown',
+          zone: a.zone || '',
+          location: '',
+          timestamp: new Date(a.timestamp),
+          eventType: eventType as ViolationEvent['eventType'],
+          severity: a.severity as ViolationEvent['severity'],
+          confidence: 85,
+          personId: undefined,
+          repeatCount: 1,
+          snapshotUrl,
+          videoClipUrl,
+          status: (a.status === 'active' ? 'active' : 'resolved') as ViolationEvent['status'],
+          acknowledgedBy: undefined,
+          acknowledgedAt: undefined,
+          notes: a.message || undefined,
+          isValid: undefined,
+        };
+      });
 
       setEvents(mapped);
     } catch (error) {

@@ -67,7 +67,7 @@ export function TopBar() {
         </div>
       </div>
 
-      {/* Right: Quick filters */}
+      {/* Right: Quick filters + Satyaki */}
       <div className="flex items-center gap-3">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -100,6 +100,17 @@ export function TopBar() {
             <DropdownMenuItem className="text-muted-foreground">Offline</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <a
+          href="https://satyaki.co.in"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1.5 pl-3 ml-1 border-l border-border opacity-80 hover:opacity-100 transition-opacity"
+          title="Satyaki Solutions Pvt Ltd"
+        >
+          <img src="/satyaki-logo.svg" alt="Satyaki Solutions Pvt Ltd" className="h-6 w-auto" />
+          <span className="text-xs font-medium hidden sm:inline whitespace-nowrap" style={{ fontFamily: "'Poppins', sans-serif", color: '#FCA719' }}>Satyaki Solutions Pvt Ltd</span>
+        </a>
       </div>
     </div>
   );

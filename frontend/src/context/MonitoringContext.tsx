@@ -29,38 +29,132 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
   const [events] = useState<ViolationEvent[]>(mockViolationEvents);
   const [isAlertPanelOpen, setIsAlertPanelOpen] = useState(false);
   const clearedAtRef = useRef<Date | null>(null);
+  const knownAlertIds = useRef<Set<string>>(new Set());
+  const initialLoadDone = useRef(false);
+  const lastNotifyTime = useRef(0);
+  const [isSoundEnabled, setIsSoundEnabled] = useState(true);
+  const soundEnabledRef = useRef(isSoundEnabled);
+  useEffect(() => { soundEnabledRef.current = isSoundEnabled; }, [isSoundEnabled]);
 
-  // Poll real alerts from backend API every 5s
+  // Inline beep + push — can't use `useNotifications` here because that hook
+  // reads this very context (would cause a circular init error).
+  const fireNotification = useCallback((title: string, body: string, severity: 'critical' | 'warning' | 'info', tag?: string) => {
+    if (soundEnabledRef.current) {
+      try {
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = 880;
+        osc.type = 'sine';
+        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.2);
+      } catch { /* ignore */ }
+    }
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification(`${severity === 'critical' ? '🚨' : '⚠️'} ${title}`, {
+          body, tag: tag || `alert-${Date.now()}`, icon: '/favicon.ico',
+          requireInteraction: severity === 'critical', silent: true,
+        });
+      } catch { /* ignore */ }
+    }
+  }, []);
+
+  // Poll real alerts from backend API every 5s + fire notifications for new critical alerts.
   const fetchAlerts = useCallback(async () => {
     try {
       const resp = await fetch(`${API_BASE}/api/alerts?limit=50`);
       if (!resp.ok) return;
       const data = await resp.json();
-      let mapped = (data || []).map((a: any) => ({
-        id: a.id,
-        eventId: a.event_id || '',
-        severity: a.severity,
-        title: a.title,
-        message: a.message,
-        timestamp: new Date(a.timestamp),
-        status: a.status,
-        cameraId: a.camera_id,
-        zone: a.zone,
-      }));
+      let mapped = (data || [])
+        .filter((a: any) => a.status !== 'resolved') // hide residues from previous escalations
+        .map((a: any) => ({
+          id: a.id,
+          eventId: a.event_id || '',
+          severity: a.severity,
+          title: a.title,
+          message: a.message,
+          timestamp: new Date(a.timestamp),
+          status: a.status,
+          cameraId: a.camera_id,
+          zone: a.zone,
+          ttsAudioUrl: a.tts_audio_url,
+        }));
       // After clear, only show alerts newer than the clear timestamp
       if (clearedAtRef.current) {
         mapped = mapped.filter((a: Alert) => a.timestamp > clearedAtRef.current!);
       }
+
+      if (!initialLoadDone.current) {
+        for (const a of mapped) knownAlertIds.current.add(a.id);
+        initialLoadDone.current = true;
+      } else {
+        const now = Date.now();
+        // Tighter cooldown (3s) + fire on every new critical, not just one
+        // per poll. After ClearAll we reset the dedup set so the next
+        // genuine alert still notifies.
+        let fired = 0;
+        for (const alert of mapped) {
+          if (knownAlertIds.current.has(alert.id)) continue;
+          knownAlertIds.current.add(alert.id);
+          if (alert.status !== 'active') continue;
+          if (alert.severity !== 'critical') continue;
+          if (now - lastNotifyTime.current < 3_000) continue;
+          lastNotifyTime.current = now;
+          fireNotification(alert.title, alert.message || '', alert.severity, `alert-${alert.id}`);
+          setIsAlertPanelOpen(true);
+          fired += 1;
+          if (fired >= 3) break; // cap per poll so a backlog doesn't spam
+        }
+      }
+
       setAlerts(mapped);
     } catch { /* API may not be available */ }
-  }, []);
+  }, [fireNotification]);
 
   useEffect(() => {
     fetchAlerts();
     const interval = setInterval(fetchAlerts, 5000);
     return () => clearInterval(interval);
   }, [fetchAlerts]);
-  const [isSoundEnabled, setIsSoundEnabled] = useState(true);
+
+  // Bootstrap audio + notification permission on first user gesture.
+  // Browsers block AudioContext and Notification.requestPermission without a gesture.
+  useEffect(() => {
+    let done = false;
+    const unlock = () => {
+      if (done) return;
+      done = true;
+      try {
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.01);
+      } catch { /* ignore */ }
+      if ('Notification' in window && Notification.permission === 'default') {
+        try { Notification.requestPermission(); } catch { /* ignore */ }
+      }
+      window.removeEventListener('click', unlock);
+      window.removeEventListener('keydown', unlock);
+      window.removeEventListener('touchstart', unlock);
+    };
+    window.addEventListener('click', unlock, { once: false });
+    window.addEventListener('keydown', unlock, { once: false });
+    window.addEventListener('touchstart', unlock, { once: false });
+    return () => {
+      window.removeEventListener('click', unlock);
+      window.removeEventListener('keydown', unlock);
+      window.removeEventListener('touchstart', unlock);
+    };
+  }, []);
   const [currentView, setCurrentView] = useState<'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline'>('monitoring');
 
   const acknowledgeAlert = async (id: string) => {
@@ -84,6 +178,11 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
 
   const clearAlerts = () => {
     clearedAtRef.current = new Date();
+    // Also reset the dedup set + cooldown so subsequent NEW alerts still
+    // beep/blink/push. Without this, every alert id seen before clear
+    // stays in `knownAlertIds` and the notification path early-returns.
+    knownAlertIds.current = new Set();
+    lastNotifyTime.current = 0;
     setAlerts([]);
   };
 

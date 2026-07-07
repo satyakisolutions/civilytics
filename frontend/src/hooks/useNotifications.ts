@@ -47,9 +47,9 @@ export function useNotifications() {
     severity: 'critical' | 'warning' | 'info',
     tag?: string, _ttsAudioUrl?: string
   ) => {
-    // Cooldown: max 1 notification per 15 seconds
+    // Cooldown: 3s so backlog still fires per-alert beep/push
     const now = Date.now();
-    if (now - lastNotifyRef.current < 15_000) return;
+    if (now - lastNotifyRef.current < 3_000) return;
     lastNotifyRef.current = now;
 
     playBeep();

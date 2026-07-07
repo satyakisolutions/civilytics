@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useViolationEvents } from '@/hooks/useViolationEvents';
 import { ViolationEvent } from '@/types/monitoring';
 import { cn } from '@/lib/utils';
@@ -11,7 +11,6 @@ import {
   Clock,
   CheckCircle2,
   Play,
-  Pause,
   SkipBack,
   SkipForward,
   Camera,
@@ -22,6 +21,8 @@ import {
   Calendar,
   X,
   Loader2,
+  Rewind,
+  FastForward,
 } from 'lucide-react';
 import { format, isToday, isYesterday, startOfDay } from 'date-fns';
 
@@ -29,7 +30,14 @@ export function TimelineView() {
   const { events, isLoading } = useViolationEvents();
   const [selectedEvent, setSelectedEvent] = useState<ViolationEvent | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Apply playback rate whenever rate changes OR a new video mounts.
+  useEffect(() => {
+    const el = videoRef.current;
+    if (el) el.playbackRate = playbackRate;
+  }, [playbackRate, selectedEvent]);
 
   const filteredEvents = useMemo(() => {
     if (!searchQuery) return events;
@@ -203,23 +211,29 @@ export function TimelineView() {
         </ScrollArea>
 
         {/* Detail / Playback panel */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-w-0">
           {selectedEvent ? (
             <>
-              {/* Media viewer */}
-              <div className="flex-1 bg-black/90 flex items-center justify-center relative">
-                {selectedEvent.snapshotUrl ? (
+              {/* Media viewer — main video. Keyframe snapshot shown as
+                  corner thumbnail. `min-h-0`/`min-w-0` lets flex shrink,
+                  `object-contain` letterboxes tall/wide recordings. */}
+              <div className="flex-1 min-h-0 min-w-0 bg-black/90 flex items-center justify-center relative overflow-hidden">
+                {selectedEvent.videoClipUrl ? (
+                  <video
+                    ref={videoRef}
+                    key={selectedEvent.id}
+                    src={selectedEvent.videoClipUrl}
+                    poster={selectedEvent.snapshotUrl}
+                    controls
+                    autoPlay
+                    loop
+                    className="max-w-full max-h-full w-auto h-auto object-contain"
+                  />
+                ) : selectedEvent.snapshotUrl ? (
                   <img
                     src={selectedEvent.snapshotUrl}
                     alt="Event snapshot"
-                    className="max-w-full max-h-full object-contain"
-                  />
-                ) : selectedEvent.videoClipUrl ? (
-                  <video
-                    src={selectedEvent.videoClipUrl}
-                    controls
-                    autoPlay={isPlaying}
-                    className="max-w-full max-h-full"
+                    className="max-w-full max-h-full w-auto h-auto object-contain"
                   />
                 ) : (
                   <div className="text-muted-foreground text-sm flex flex-col items-center gap-2">
@@ -228,13 +242,33 @@ export function TimelineView() {
                   </div>
                 )}
 
-                {/* Severity overlay */}
-                <div className="absolute top-4 left-4">
+                {/* Keyframe thumbnail (bottom-right) */}
+                {selectedEvent.videoClipUrl && selectedEvent.snapshotUrl && (
+                  <a
+                    href={selectedEvent.snapshotUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open keyframe"
+                    className="absolute bottom-3 right-3 border border-border rounded overflow-hidden shadow-lg hover:ring-2 hover:ring-primary transition"
+                  >
+                    <img
+                      src={selectedEvent.snapshotUrl}
+                      alt="Keyframe"
+                      className="w-32 h-20 object-cover"
+                    />
+                  </a>
+                )}
+
+                {/* Severity + event id overlay */}
+                <div className="absolute top-4 left-4 flex items-center gap-2">
                   <Badge
                     variant={selectedEvent.severity === 'critical' ? 'destructive' : 'secondary'}
                     className="text-xs"
                   >
                     {selectedEvent.severity.toUpperCase()}
+                  </Badge>
+                  <Badge variant="secondary" className="font-mono text-[10px]">
+                    {selectedEvent.id.slice(0, 12)}
                   </Badge>
                 </div>
 
@@ -246,26 +280,19 @@ export function TimelineView() {
                 </div>
               </div>
 
-              {/* Playback controls */}
+              {/* Playback controls — prev/next event + speed */}
               <div className="border-t border-border p-3">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-3">
+                <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+                  <div className="flex items-center gap-2">
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8"
                       disabled={currentIndex <= 0}
                       onClick={() => goToEvent('prev')}
+                      title="Previous event"
                     >
                       <SkipBack className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      variant="default"
-                      size="icon"
-                      className="h-10 w-10 rounded-full"
-                      onClick={() => setIsPlaying(!isPlaying)}
-                    >
-                      {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
                     </Button>
                     <Button
                       variant="ghost"
@@ -273,9 +300,45 @@ export function TimelineView() {
                       className="h-8 w-8"
                       disabled={currentIndex >= filteredEvents.length - 1}
                       onClick={() => goToEvent('next')}
+                      title="Next event"
                     >
                       <SkipForward className="w-4 h-4" />
                     </Button>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => setPlaybackRate(r => Math.max(0.25, +(r / 2).toFixed(2)))}
+                      title="Slow down"
+                    >
+                      <Rewind className="w-4 h-4" />
+                    </Button>
+                    {[0.5, 1, 2, 4].map(r => (
+                      <Button
+                        key={r}
+                        variant={playbackRate === r ? 'default' : 'ghost'}
+                        size="sm"
+                        className="h-8 px-2 text-[11px] font-mono"
+                        onClick={() => setPlaybackRate(r)}
+                      >
+                        {r}×
+                      </Button>
+                    ))}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => setPlaybackRate(r => Math.min(8, +(r * 2).toFixed(2)))}
+                      title="Speed up"
+                    >
+                      <FastForward className="w-4 h-4" />
+                    </Button>
+                    <Badge variant="secondary" className="ml-1 font-mono text-[10px]">
+                      {playbackRate}×
+                    </Badge>
                   </div>
 
                   <div className="text-xs text-muted-foreground font-mono">

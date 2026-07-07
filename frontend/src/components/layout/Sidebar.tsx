@@ -239,11 +239,8 @@ export function Sidebar({ className }: SidebarProps) {
           className="flex items-center justify-center gap-1.5 opacity-60 hover:opacity-100 transition-opacity"
         >
           <span className="text-[9px] text-muted-foreground" style={{ fontFamily: "'Poppins', sans-serif" }}>Powered by</span>
-          <svg viewBox="0 0 64 64" className="w-3.5 h-3.5">
-            <path d="M32 2 L58 17 L58 47 L32 62 L6 47 L6 17 Z" fill="#FCA719"/>
-            <text x="32" y="44" fontFamily="Poppins, sans-serif" fontSize="32" fontWeight="900" textAnchor="middle" fill="#1A1A2E">S</text>
-          </svg>
-          <span className="text-[9px] font-medium" style={{ fontFamily: "'Poppins', sans-serif", color: '#FCA719' }}>Satyaki Solutions</span>
+          <img src="/satyaki-logo.svg" alt="Satyaki Solutions Pvt Ltd" className="h-4 w-auto" />
+          <span className="text-[9px] font-medium whitespace-nowrap" style={{ fontFamily: "'Poppins', sans-serif", color: '#FCA719' }}>Satyaki Solutions Pvt Ltd</span>
         </a>
       </div>
     </aside>
