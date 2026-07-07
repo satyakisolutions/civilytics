@@ -70,15 +70,18 @@ class AlertDispatcher:
             logger.exception("AlertDispatcher consumer loop error")
 
     async def _handle_message(self, payload: dict):
+        # VLM result payload nests detection fields under `response` —
+        # read from there first, fall back to top-level for legacy senders.
+        _resp = payload.get("response") or {}
         camera_id: str = payload.get("camera_id", "unknown")
-        severity: str = payload.get("severity", "info").lower()
-        is_dumping: bool = payload.get("is_dumping", False)
+        severity: str = str(_resp.get("severity") or payload.get("severity", "info")).lower()
+        is_dumping: bool = bool(_resp.get("is_dumping", payload.get("is_dumping", False)))
         track_id: int | None = payload.get("track_id")
-        dwell_time_s: float | None = payload.get("dwell_time_s")
-        vlm_summary: str | None = payload.get("vlm_summary")
+        dwell_time_s: float | None = (payload.get("track_context") or {}).get("dwell_time_s") or payload.get("dwell_time_s")
+        vlm_summary: str | None = _resp.get("reasoning") or payload.get("vlm_summary")
         plate_number: str | None = payload.get("plate_number")
         snapshot_url: str | None = payload.get("snapshot_url")
-        message: str = payload.get("message", f"Suspicious activity detected at camera {camera_id}")
+        message: str = _resp.get("deterrent_message") or payload.get("message") or f"Suspicious activity detected at camera {camera_id}"
 
         # Skip low-signal "info" events unless active dumping is confirmed
         if severity == "info" and not is_dumping:

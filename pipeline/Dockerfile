@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-gst-1.0 python3-gi python3-gi-cairo \
     gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
     gstreamer1.0-python3-plugin-loader gstreamer1.0-libav \
+    ffmpeg \
     curl ca-certificates \
  && apt-get install -y --reinstall \
     libavcodec58 libavformat58 libavutil56 libswscale5 libswresample3 \

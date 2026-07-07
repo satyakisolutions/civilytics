@@ -38,6 +38,30 @@ class TrackInfo:
             return 0.0
         return self.last_seen - self.roi_entered_at
 
+    @property
+    def speed_px_s(self) -> float:
+        """Recent bbox-center speed in pixels/sec (average over last ~2s of samples)."""
+        if len(self.bbox_history) < 2:
+            return 0.0
+        recent = list(self.bbox_history)[-5:]  # last ~2.5s of samples
+        dt = recent[-1].get("t", 0) - recent[0].get("t", 0)
+        if dt <= 0:
+            return 0.0
+        def center(b):
+            return (b.get("x", 0) + b.get("w", 0) / 2.0,
+                    b.get("y", 0) + b.get("h", 0) / 2.0)
+        cx0, cy0 = center(recent[0])
+        cx1, cy1 = center(recent[-1])
+        return ((cx1 - cx0) ** 2 + (cy1 - cy0) ** 2) ** 0.5 / dt
+
+    @property
+    def bbox_area(self) -> float:
+        """Current bbox area in px^2 — proxy for distance-to-camera (larger = closer)."""
+        if not self.bbox_history:
+            return 0.0
+        last = self.bbox_history[-1]
+        return float(last.get("w", 0)) * float(last.get("h", 0))
+
     def update(self, bbox: dict, in_roi: bool):
         now = time.monotonic()
         self.last_seen = now

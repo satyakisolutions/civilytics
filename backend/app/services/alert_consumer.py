@@ -13,7 +13,7 @@ from pathlib import Path
 
 import orjson
 from aiokafka import AIOKafkaConsumer
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
 
 # Use a SEPARATE group from the escalation worker so both receive messages
 GROUP_ALERT_DISPATCH = "wastewatch.group.api-alert-consumer"
@@ -102,32 +102,34 @@ class AlertConsumer:
         message = payload.get("message", "")
         track_id = payload.get("track_id")
         tts_text = payload.get("tts_text", "")  # The exact text sent to TTS worker
+        suppress_tts = payload.get("suppress_tts", False)
 
         # Resolve pipeline camera name to DB UUID
         camera_uuid = await self._resolve_camera_uuid(camera_name)
         if not camera_uuid:
             logger.warning("AlertConsumer: unknown camera %s — broadcasting WS only", camera_name)
 
-        # Compute TTS audio URL from the exact text sent to the TTS worker.
-        # The TTS engine names files tts_{sha256(text)[:16]}.wav — use the
-        # tts_text field (same string the pipeline sent to wastewatch.tts)
-        # so the hash matches. The file may not exist yet (async generation)
-        # but the URL is deterministic so the frontend can retry.
+        # TTS URL only from VLM-generated deterrent (handled in _handle_vlm_result).
+        # Templated pipeline alerts set suppress_tts=True and get no audio URL.
         tts_audio_url = None
-        _tts_hash_source = tts_text or message
-        if _tts_hash_source:
-            text_hash = hashlib.sha256(_tts_hash_source.encode()).hexdigest()[:16]
-            tts_audio_url = f"/tts/tts_{text_hash}.wav"
+        if not suppress_tts:
+            _tts_hash_source = tts_text or message
+            if _tts_hash_source:
+                text_hash = hashlib.sha256(_tts_hash_source.encode()).hexdigest()[:16]
+                tts_audio_url = f"/tts/tts_{text_hash}.wav"
 
         alert_id = str(uuid.uuid4())
         now = datetime.utcnow()
 
-        # Write to DB — triggers Supabase realtime subscription in frontend
+        # Write to DB — triggers Supabase realtime subscription in frontend.
+        # Prior active alerts on the same camera stay active so the panel
+        # stacks live notifications; operator acknowledges or clears them.
         if camera_uuid:
             try:
                 async with async_session() as session:
+                    tbl = self._get_alert_table()
                     await session.execute(
-                        insert(self._get_alert_table()).values(
+                        insert(tbl).values(
                             id=alert_id,
                             camera_id=camera_uuid,
                             severity=severity,
@@ -160,8 +162,10 @@ class AlertConsumer:
 
     async def _handle_vlm_result(self, payload: dict):
         """Handle VLM analysis result — broadcast to UI and trigger TTS with VLM reasoning."""
-        import sys
-        print(f"[AlertConsumer] _handle_vlm_result called for {payload.get('camera_id')}", file=sys.stderr, flush=True)
+        logger.info("VLM result received: cam=%s track=%s is_dumping=%s waste=%s",
+                     payload.get("camera_id"), payload.get("track_id"),
+                     (payload.get("response") or {}).get("is_dumping"),
+                     (payload.get("response") or {}).get("waste_type"))
         camera_id = payload.get("camera_id", "")
         track_id = payload.get("track_id")
         response = payload.get("response", {})
@@ -175,13 +179,15 @@ class AlertConsumer:
         deterrent = response.get("deterrent_message", "")
         severity = "critical" if is_dumping else "warning"
 
-        # --- Deterrent TTS (spoken on IP speakers + Play button in UI) ---
-        # VLM prompt requires deterrent_message to always be populated.
-        # Use it directly — it addresses the specific person/vehicle by description.
-        speaker_text = deterrent or ""
-        if not speaker_text and person_desc:
-            # Fallback only if VLM somehow left it empty
-            speaker_text = f"{person_desc}. This is a no-dumping zone. You are being recorded."
+        # --- Deterrent TTS — CRITICAL/dumping only ---
+        # Warnings get text on UI but no spoken deterrent. Audio reserved
+        # for confirmed dumping / red alerts so operators don't hear
+        # constant barking on every suspicious stop.
+        speaker_text = ""
+        if is_dumping:
+            speaker_text = deterrent or ""
+            if not speaker_text and person_desc:
+                speaker_text = f"{person_desc}. Illegal dumping detected. You are being recorded."
         if speaker_text:
             speaker_hash = hashlib.sha256(speaker_text.encode()).hexdigest()[:16]
             try:
@@ -195,19 +201,22 @@ class AlertConsumer:
                 await self._tts_producer.send_and_wait(
                     TOPIC_TTS,
                     value={"camera_id": camera_id, "track_id": track_id,
-                           "text": speaker_text, "priority": "high" if is_dumping else "normal"},
+                           "text": speaker_text, "priority": "high"},
                 )
             except Exception:
                 logger.exception("Failed to send deterrent TTS")
 
         # --- Operator notification (UI) ---
-        # Show deterrent if available (aggressive scolding), otherwise person + reasoning
+        # Show deterrent if available (aggressive scolding), otherwise person + reasoning.
+        # Prepend waste type when VLM identified one — answers "what was dumped?".
         if deterrent:
             operator_text = deterrent
         elif person_desc and reasoning:
             operator_text = f"{person_desc}. {reasoning}"
         else:
             operator_text = reasoning or action or "Activity detected"
+        if waste_type and waste_type != "none":
+            operator_text = f"[waste: {waste_type}] {operator_text}"
 
         # Compute TTS audio URL from the speaker text
         tts_audio_url = None
@@ -216,7 +225,36 @@ class AlertConsumer:
             shaped = _apply_tone(speaker_text)
             tts_audio_url = f"/tts/tts_{hashlib.sha256(shaped.encode()).hexdigest()[:16]}.wav"
 
-        # Write VLM alert to DB — skip only fallback/empty results
+        # VLM-gated escalation: only emit an alert when the model confirms
+        # dumping AND the target was close + slow enough to be actionable.
+        # Speed + bbox_area arrive in track_context.path_summary from the
+        # pipeline ("enter;speed_px_s=X;bbox_area=Y"). Fast walkers and far
+        # targets are filtered out so audio/alerts don't fire on passersby.
+        if not is_dumping:
+            logger.info("VLM non-violation — skipping alert for %s (waste=%s conf=%s)",
+                        camera_id, waste_type, confidence)
+            return
+        _ctx = payload.get("track_context") or {}
+        _ps = str(_ctx.get("path_summary") or "")
+        _speed_norm = 0.0
+        _area_norm = 0.0
+        for _part in _ps.split(";"):
+            if _part.startswith("speed_norm="):
+                try: _speed_norm = float(_part.split("=", 1)[1])
+                except ValueError: pass
+            elif _part.startswith("area_norm="):
+                try: _area_norm = float(_part.split("=", 1)[1])
+                except ValueError: pass
+        # Thresholds on normalized frame units (bbox coords are 0..1).
+        # SPEED_NORM_MAX=0.25 ≈ target crossing 25% of frame per second
+        # (brisk walk/jog). AREA_NORM_MIN=0.004 ≈ bbox smaller than 0.4%
+        # of frame — target too far from camera to act on.
+        SPEED_NORM_MAX = 0.25
+        AREA_NORM_MIN = 0.004
+        if _speed_norm > SPEED_NORM_MAX or (_area_norm > 0.0 and _area_norm < AREA_NORM_MIN):
+            logger.info("VLM violation suppressed by motion gate for %s: speed=%.4f area=%.5f",
+                        camera_id, _speed_norm, _area_norm)
+            return
         _is_fallback = "could not be parsed" in reasoning
         if not person_desc and _is_fallback:
             logger.debug("Skipping VLM alert — no useful content for %s (fallback=%s)", camera_id, _is_fallback)
@@ -225,15 +263,44 @@ class AlertConsumer:
         camera_uuid = await self._resolve_camera_uuid(camera_id)
         if camera_uuid:
             try:
-                alert_id = str(uuid.uuid4())
                 now = datetime.utcnow()
+                vlm_title = f"VLM: {person_desc[:50]}" if person_desc else f"VLM: {action[:50]}"
                 async with async_session() as session:
+                    tbl = self._get_alert_table()
+                    # If a pipeline-generated critical (VIOLATION) alert is
+                    # still active on this camera, upgrade it in place with
+                    # the VLM description — keep severity=critical so the UI
+                    # retains the red state, but the message now names the
+                    # actual subject (e.g. "Woman in saree with handbag").
+                    critical_rows = (await session.execute(
+                        select(tbl.c.id)
+                        .where(tbl.c.camera_id == camera_uuid,
+                               tbl.c.status == "active",
+                               tbl.c.severity == "critical")
+                    )).all()
+
+                    if critical_rows:
+                        critical_ids = [r.id for r in critical_rows]
+                        await session.execute(
+                            update(tbl)
+                            .where(tbl.c.id.in_(critical_ids))
+                            .values(title=vlm_title, message=operator_text,
+                                    tts_audio_url=tts_audio_url,
+                                    timestamp=now)  # refresh so UI treats as new
+                        )
+                        await session.commit()
+                        logger.warning("VLM upgraded existing critical alert(s) on %s: %s", camera_id, person_desc[:40])
+                        return
+
+                    # No prior critical alert — insert new one. Keep prior
+                    # non-critical active so panel stacks live alerts.
+                    alert_id = str(uuid.uuid4())
                     await session.execute(
-                        insert(self._get_alert_table()).values(
+                        insert(tbl).values(
                             id=alert_id,
                             camera_id=camera_uuid,
                             severity=severity,
-                            title=f"VLM: {person_desc[:50]}" if person_desc else f"VLM: {action[:50]}",
+                            title=vlm_title,
                             message=operator_text,
                             tts_audio_url=tts_audio_url,
                             status="active",
@@ -242,7 +309,9 @@ class AlertConsumer:
                         )
                     )
                     await session.commit()
-                logger.warning("VLM alert saved to DB: %s [%s] %s", alert_id, severity, person_desc[:40])
+                logger.warning("VLM alert saved to DB: %s [%s] %s",
+                               alert_id if 'alert_id' in locals() else 'upgraded',
+                               severity, person_desc[:40])
             except Exception:
                 logger.exception("Failed to save VLM alert to DB")
 

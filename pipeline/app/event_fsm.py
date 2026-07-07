@@ -46,6 +46,7 @@ class TrackFSM:
     # One-shot guards: each trigger fires exactly once per track lifecycle
     observe_triggered: bool = False
     violation_triggered: bool = False
+    vlm_fired: bool = False
 
 
 class EventFSMManager:

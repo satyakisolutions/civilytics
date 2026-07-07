@@ -61,7 +61,7 @@ publish_tier() {
 # for the frontend quality toggle on the raw input path; the
 # DeepStream pipeline's annotated `cam-01-out` stream is separate
 # and always served at the large tier.
-SRC_FILE="${LSG_LIVE_SRC:-VID-20260131-WA0007.mp4}"
+SRC_FILE="${LSG_LIVE_SRC:-VID-20260131-WA0002.mp4}"
 
 publish_tier "cam-01"    "${SRC_FILE}" "large"  "${TIER_LARGE}"  &
 publish_tier "cam-01-md" "${SRC_FILE}" "medium" "${TIER_MEDIUM}" &

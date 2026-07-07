@@ -66,7 +66,7 @@ echo "  ✓ All backend services started"
 # Step 6: Frontend
 echo ""
 echo "▶ [6/6] Starting frontend dev server..."
-docker compose up -d frontend-dev 2>/dev/null || true
+docker compose up -d frontend 2>/dev/null || true
 echo "  ✓ Frontend started"
 
 # Wait for vLLM
