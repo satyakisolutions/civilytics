@@ -32,9 +32,13 @@ class VLMServicer(vlm_pb2_grpc.VLMServiceServicer):
         self._inflight = 0
         self._client: VLMClient | None = None
         self._producer: AIOKafkaProducer | None = None
+        # One long-lived worker for its frame-grabber helpers. Reused across
+        # requests so its persistent ffmpeg grabbers are not leaked/respawned.
+        self._grab_helper: VLMWorker | None = None
 
     async def start(self):
         self._client = VLMClient()
+        self._grab_helper = VLMWorker(bootstrap_servers=settings.kafka_bootstrap_servers)
         self._producer = AIOKafkaProducer(
             bootstrap_servers=settings.kafka_bootstrap_servers,
             value_serializer=lambda v: orjson.dumps(v),
@@ -47,6 +51,9 @@ class VLMServicer(vlm_pb2_grpc.VLMServiceServicer):
             await self._client.close()
         if self._producer:
             await self._producer.stop()
+        if self._grab_helper:
+            # terminates any persistent ffmpeg grabbers it spawned
+            await self._grab_helper.stop()
 
     async def Analyze(self, request, context):
         self._inflight += 1
@@ -84,9 +91,9 @@ class VLMServicer(vlm_pb2_grpc.VLMServiceServicer):
 
                 # If no frames at all, fall back to persistent RTSP grabber
                 if not vreq.frames_base64:
-                    # Reuse the stateful grabber pattern via a throwaway worker
-                    # (only uses its _grab_rtsp_frame + _crop_to_bbox helpers).
-                    helper = VLMWorker(bootstrap_servers=settings.kafka_bootstrap_servers)
+                    # Reuse the shared long-lived helper so its persistent
+                    # ffmpeg grabbers are not leaked/respawned per request.
+                    helper = self._grab_helper
                     frame = await asyncio.get_event_loop().run_in_executor(
                         None, helper._grab_rtsp_frame, vreq.camera_id
                     )

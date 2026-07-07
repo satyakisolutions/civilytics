@@ -108,15 +108,19 @@ class VLMGrpcClient:
             self._ensure_channel()
             assert self._stub is not None
             self._stub.Analyze(req, timeout=self._timeout_s)
-            self._consecutive_failures = 0
+            with self._lock:
+                self._consecutive_failures = 0
         except grpc.RpcError as exc:
-            self._consecutive_failures += 1
+            with self._lock:
+                self._consecutive_failures += 1
+                failures = self._consecutive_failures
+                if failures >= self._max_consecutive:
+                    self._breaker_until = time.monotonic() + self._breaker_duration_s
             logger.warning("VLM gRPC failure (%d consecutive): %s",
-                           self._consecutive_failures, exc.code() if hasattr(exc, "code") else exc)
-            if self._consecutive_failures >= self._max_consecutive:
-                self._breaker_until = time.monotonic() + self._breaker_duration_s
+                           failures, exc.code() if hasattr(exc, "code") else exc)
+            if failures >= self._max_consecutive:
                 logger.error("VLM gRPC circuit opened for %.0fs after %d failures",
-                             self._breaker_duration_s, self._consecutive_failures)
+                             self._breaker_duration_s, failures)
         except Exception:
             logger.exception("VLM gRPC unexpected error")
 

@@ -37,7 +37,10 @@ async def list_evidence(
 
 
 @router.get("/files", response_model=list[dict])
-async def list_evidence_files(limit: int = Query(default=100, le=500)):
+async def list_evidence_files(
+    limit: int = Query(default=100, le=500),
+    _user: dict = Depends(require_viewer),
+):
     """Scan evidence dir for JSON sidecar files produced by pipeline evidence_writer.
 
     Layout: /app/evidence/{violations|suspicious}/{camera_name}/{YYYY-MM-DD}/evt_*.json
@@ -85,14 +88,17 @@ async def list_evidence_files(limit: int = Query(default=100, le=500)):
 
 
 @router.get("/file")
-async def get_evidence_file(path: str):
+async def get_evidence_file(
+    path: str,
+    _user: dict = Depends(require_viewer),
+):
     """Serve a single evidence file (keyframe JPEG or MP4) by absolute path.
 
     Guards against path traversal — path must live under EVIDENCE_ROOT.
     """
     try:
         resolved = Path(path).resolve()
-        if not str(resolved).startswith(str(EVIDENCE_ROOT.resolve())):
+        if not resolved.is_relative_to(EVIDENCE_ROOT.resolve()):
             raise HTTPException(status_code=403, detail="Path outside evidence root")
         if not resolved.exists():
             raise HTTPException(status_code=404, detail="File not found")
