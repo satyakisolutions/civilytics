@@ -464,9 +464,10 @@ Duration: 3-5 days
 - Keep the model warm.
 - Add asynchronous post-roll assembly and keyframe selection.
 - Enforce the structured output schema.
-- Send text alerts and optional administrator phone audio.
+- Run MiniCPM-o in shadow mode first: log its verdicts against shadow-mode events from Phase 3, but do not deliver any admin text or phone audio yet. Compare verdicts to human-reviewed ground truth on the validation set (section 22).
+- Only after MiniCPM-o's shadow-mode verdicts meet accuracy targets, enable text alerts and optional administrator phone audio as a live, operational path.
 
-Exit: verified events are delivered once, with evidence and uncertainty.
+Exit: MiniCPM-o verdicts validated against ground truth in shadow mode first; verified events are then delivered once live, with evidence and uncertainty.
 
 ### Phase 5: supervised public warning
 
