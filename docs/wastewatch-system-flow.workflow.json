@@ -1,0 +1,225 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "WasteWatch Object-Release Detection Flow",
+    "quality_profile": "showcase",
+    "output": "system-flow.html"
+  },
+  "lanes": [
+    {
+      "id": "perception",
+      "label": "Perception (DeepStream)"
+    },
+    {
+      "id": "trigger",
+      "label": "Trigger & Lifecycle"
+    },
+    {
+      "id": "response",
+      "label": "Verification & Response"
+    }
+  ],
+  "phases": [
+    {
+      "id": "perceive",
+      "label": "Perceive",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "trigger_phase",
+      "label": "Trigger & Track",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "respond_phase",
+      "label": "Verify & Respond",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "groups": [
+    {
+      "id": "fast_path",
+      "label": "Fast path -- continuous, no VLM in the loop",
+      "lane": "trigger",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    }
+  ],
+  "mainPath": [
+    "stream_in",
+    "detect_track",
+    "lifecycle",
+    "incident_threshold",
+    "verify_call",
+    "admin_alert"
+  ],
+  "nodes": [
+    {
+      "id": "stream_in",
+      "lane": "perception",
+      "col": 0,
+      "type": "external",
+      "label": "Camera Stream",
+      "sublabel": "25 FPS RTSP"
+    },
+    {
+      "id": "detect_track",
+      "lane": "perception",
+      "col": 1,
+      "type": "backend",
+      "label": "Detect & Track",
+      "sublabel": "then fast object detector, 5-10 FPS",
+      "width": 150
+    },
+    {
+      "id": "roi_ignore",
+      "lane": "perception",
+      "col": 2,
+      "type": "backend",
+      "label": "Outside ROI",
+      "sublabel": "no action"
+    },
+    {
+      "id": "lifecycle",
+      "lane": "trigger",
+      "col": 3,
+      "type": "backend",
+      "label": "Object Lifecycle",
+      "sublabel": "per-track inventory",
+      "tag": "9 states",
+      "width": 110
+    },
+    {
+      "id": "warning",
+      "lane": "response",
+      "col": 2,
+      "type": "security",
+      "label": "Public Warning",
+      "sublabel": "neutral template only",
+      "tag": "Threshold A"
+    },
+    {
+      "id": "incident_threshold",
+      "lane": "trigger",
+      "col": 4,
+      "type": "security",
+      "label": "Incident Threshold",
+      "sublabel": "persistence + separation",
+      "tag": "Threshold B",
+      "width": 126
+    },
+    {
+      "id": "verify_call",
+      "lane": "response",
+      "col": 4,
+      "type": "external",
+      "label": "MiniCPM-o Verify",
+      "sublabel": "8-12 keyframes",
+      "tag": "~1.8s/frame",
+      "width": 114
+    },
+    {
+      "id": "dismiss",
+      "lane": "response",
+      "col": 3,
+      "type": "backend",
+      "label": "Log & Dismiss",
+      "sublabel": "false trigger",
+      "width": 100
+    },
+    {
+      "id": "admin_alert",
+      "lane": "response",
+      "col": 5,
+      "type": "messagebus",
+      "label": "Admin Alert",
+      "sublabel": "text + phone audio"
+    }
+  ],
+  "edges": [
+    {
+      "id": "stream-detect",
+      "from": "stream_in",
+      "to": "detect_track",
+      "variant": "default"
+    },
+    {
+      "id": "detect-ignore",
+      "from": "detect_track",
+      "to": "roi_ignore",
+      "label": "outside ROI",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "lifecycle-warning",
+      "from": "lifecycle",
+      "to": "warning",
+      "label": "early release evidence",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "lifecycle-incident",
+      "from": "lifecycle",
+      "to": "incident_threshold",
+      "variant": "emphasis"
+    },
+    {
+      "id": "verify-admin",
+      "from": "verify_call",
+      "to": "admin_alert",
+      "label": "confirmed",
+      "variant": "emphasis",
+      "role": "return"
+    },
+    {
+      "id": "verify-dismiss",
+      "from": "verify_call",
+      "to": "dismiss",
+      "label": "not confirmed",
+      "variant": "dashed",
+      "role": "error"
+    },
+    {
+      "id": "incident-verify",
+      "from": "incident_threshold",
+      "to": "verify_call",
+      "label": "threshold B crossed",
+      "variant": "default"
+    },
+    {
+      "id": "detect-lifecycle",
+      "from": "detect_track",
+      "to": "lifecycle",
+      "label": "inside ROI",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two-Speed Design",
+      "items": [
+        "Fast detector runs continuously; MiniCPM-o is never in the per-frame loop",
+        "MiniCPM-o called only for confirmed release candidates (~1.8s/frame, measured on RTX 3060)"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Safety & Evidence",
+      "items": [
+        "Public warning uses neutral, pre-approved templates only -- never raw model text",
+        "MiniCPM-o verdicts pass shadow-mode validation before admin alerts go live",
+        "A bounded ring buffer supplies real pre-roll -- not a latest-frame cache"
+      ]
+    }
+  ]
+}
