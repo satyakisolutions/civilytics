@@ -1,234 +1,567 @@
-# Bag-Trigger-Gated Dumping Detection — Design Spec
+# Object-Release Trigger-Gated Dumping Detection - Corrected Design Spec
 
 Date: 2026-08-31
-Status: Approved direction (supersedes the full Approach 2 state-machine spec as the near-term build target)
-Supersedes for now: the always-on/full-state-machine scope in `docs/superpowers/specs/2026-08-21-minicpmo-vlm-design.md` Phase 2. That spec's Phase 1 (MiniCPM-o trigger-model config swap) is unaffected and can still ship independently.
+Status: Recommended proof-of-concept direction
+Scope: First production-oriented vertical slice under the target WasteWatch architecture
+Supersedes: the original version of this file (bag-count-decrease as primary trigger signal, latest-frame-only cache, single warning threshold) — corrected below after review found several unsafe/incomplete details. Also supersedes the always-on/full-state-machine scope in `docs/superpowers/specs/2026-08-21-minicpmo-vlm-design.md` Phase 2 as the near-term build target; that spec's Phase 1 (MiniCPM-o trigger-model config swap) is unaffected and can still ship independently.
 
-## 1. Why this design, not the others
+## 1. Decision
 
-Six approaches were explored (full writeup: `docs/wastewatch-approaches.pdf`). The two that mattered most:
+Use a fast detector and tracker for continuous monitoring. Use MiniCPM-o only after a suspicious object-release sequence has been detected.
 
-- **Approach 2** (full ROI-gated temporal state machine, risk engine, safe-TTS rewrite, phone escalation with DTMF ack, versioned events, new DB tables, object storage) is the eventual target architecture, but Phase 0 inspection found it needs multiple pieces of infrastructure that don't exist yet (object storage, event versioning) and a rewrite of live TTS behavior. It's a multi-week build with real open questions.
-- **Approach 3** (real hardware test) measured MiniCPM-o 4.5 at **~1.8 seconds per frame**, steady state, on the actual target GPU (RTX 3060, 12GB) using the standard `transformers` inference path. That is roughly 0.55 fps — nowhere near the 1fps continuous-narration target, and 5x too slow for the 3fps "suspicious" tier in Approach 2's own sampling table.
+This is the best first approach for:
 
-Rather than spend weeks either building Approach 2's full infrastructure or converting MiniCPM-o to a faster serving stack (TensorRT: weeks of custom work, no existing conversion path for this architecture; vLLM-omni: real candidate but unbenchmarked), this design routes around the latency problem structurally: **a fast, cheap detector decides when anything is worth looking at; MiniCPM-o is called rarely, as a verifier, not continuously.**
+- Low warning latency
+- Low average GPU use
+- Low inference cost
+- Short implementation time
+- Explainable event decisions
 
-This is not a compromise that sacrifices the hard case. The sample clip that motivated Approach 6 (a person carrying two bags who discreetly releases one near a tree, occluded by their own body for under a second, no throwing motion) is still detectable — because the trigger isn't "is there a bag in frame," it's "did the number of bags moving with this person just decrease." That's a tracking-and-counting problem, not a captioning problem, and it doesn't need a VLM to solve it.
+Do not use MiniCPM-o for continuous 5-10 FPS captioning. The measured single-frame latency of about 1.8 seconds on the target RTX 3060 makes that unsuitable for a real-time control loop.
 
-## 2. Facts this design is grounded in
+## 2. Why the previous draft needed correction
 
-All of the following were established this session, not assumed:
+The overall trigger-gated direction was sound, but several implementation details were unsafe or incomplete:
 
-- MiniCPM-o 4.5 real steady-state single-frame latency: **~1.8s** (range 1.4–2.1s), naive `transformers.chat()` path, 4-bit-quantized LLM backbone + bf16 vision modules, on an RTX 3060 12GB. Peak VRAM 8.09GB.
-- Model load time: 382s one-time; first-call CUDA warmup: 19.5s extra.
-- The model, when called, produces accurate, factually-grounded, non-accusatory descriptions of a real scene (verified on a real press-brake work-area clip) — the *quality* of MiniCPM-o's output is not in question, only the frequency at which it can be called.
-- The existing pipeline (`pipeline/app/pipeline.py`) already runs RF-DETR (2-class, TensorRT FP16) via `nvinfer`, ByteTrack via `nvtracker`, and a ROI polygon filter via `nvdsanalytics`, all at full camera frame rate today. This is the layer Approach 5's fast detector sits alongside.
-- The existing trigger-VLM path (`vlm_grpc_client.py` → `grpc_server.py` → `client.py`) already does exactly the "fire rarely, call VLM, don't block the pipeline thread" pattern this design needs — it is being reused, not reinvented.
-- `backend/app/alerts/sip_gateway.py` already has a working (if incomplete — no DTMF ack, no idempotency, no persisted call records) three-backend call escalation system (pjsua2 / Asterisk AMI / Twilio). This design uses it as-is for the first release; no call-platform change is in scope here.
-- The current TTS engine (`backend/app/tts/engine.py`) hardcodes an aggressive, all-caps, shaming tone wrapper. This design does **not** touch that in its first phase — the public warning message content is a new, separate concern from the trigger/tracking pipeline being built here, and rewriting TTS tone is explicitly out of scope for this spec (tracked separately under Approach 2's TTS-conflict finding).
-- No labeled bag/container dataset exists for this camera environment. YOLO-World is chosen specifically because it needs no training data to start (open-vocabulary, zero-shot).
+| Previous assumption | Problem | Correction |
+|---|---|---|
+| Warn after the released bag is stationary and the person is moving away | This confirms an event after the release. It may be too late to prevent dumping | Add an earlier release-candidate warning threshold and a later confirmed-incident threshold |
+| Read only the latest JPEG from a cache | A latest-frame cache cannot supply pre-event video | Keep a bounded per-camera ring buffer |
+| Collect post-event frames when the trigger fires | Future frames do not exist yet | Open an event, then complete the clip asynchronously after the post-roll interval |
+| Treat a reduction in bag count as the primary signal | Detection misses, occlusion, and track-ID changes can all reduce the count | Track the full object lifecycle and require supporting evidence |
+| Find the released bag only in current detections | A small stationary or occluded bag may temporarily disappear | Use re-detection, last-known location, scene change, and persistence checks |
+| Reuse the current aggressive TTS wording | A false or humiliating public accusation creates safety and trust risks | Use neutral, pre-approved warning templates before enabling live audio |
+| Treat public speaker audio and admin phone audio as one path | They have different recipients, wording, urgency, and audit needs | Implement separate public-warning and admin-notification adapters |
+| Accept one positive sample clip as sufficient validation | It cannot establish a false-warning rate | Validate in shadow mode on positive and negative clips before public activation |
 
-## 3. Assumptions (stated explicitly, not hidden in code)
+## 3. Grounded facts and open assumptions
 
-- **A1**: YOLO-World's zero-shot accuracy on this camera's real footage (resolution, lighting, camera angle) is good enough to trigger on, without custom training, for a PoC. Unverified — this is the first thing Phase 1 tests.
-- **A2**: Running YOLO-World at 5–10fps on every camera, continuously, fits in the GPU/CPU budget alongside the existing DeepStream pipeline. Unverified — needs a latency+VRAM measurement identical in spirit to what was done for MiniCPM-o in Approach 3.
-- **A3**: A simple rule (bag-count decrease + object stationary + person-object distance increasing + no retrieval within N seconds) is sufficient to distinguish real dumping from a person setting a bag down and picking it back up, without needing MiniCPM-o's temporal reasoning for that distinction. If false, MiniCPM-o's verification call (Phase 3) is the backstop — but if this rule is too noisy, the verifier will be called too often, eroding the whole point of the design.
-- **A4**: The existing ByteTrack tracker (`nvtracker`) can be extended to track bag-class objects with stable IDs, not just person/vehicle. Unverified — ByteTrack is class-agnostic in principle, but this hasn't been tested against small, frequently-occluded objects like bags.
-- **A5**: 3–5 seconds of pre-drop buffer plus the release frames plus 2–3 seconds post-drop is enough temporal context for MiniCPM-o to correctly verify a real event, given it was accurate on a 25-second/10-frame batch in Approach 3's test. Not re-tested at this specific shorter window.
+### Measured facts
 
-## 4. Architecture and pseudocode
+- MiniCPM-o 4.5 took about 1.8 seconds per single frame in steady state on the target RTX 3060 12 GB using the tested Transformers path.
+- Peak MiniCPM-o VRAM was measured at about 8.09 GB.
+- Model loading and first-call warmup were large, so the service must remain loaded and warm.
+- The existing application already has DeepStream detection, tracking, ROI filtering, asynchronous VLM calls, alert dispatch, and SIP integrations that can be extended.
+- The reference clip contains a subtle release near the tree at about the fifth second. This should be used as one positive regression case, not as the entire acceptance set.
 
-### 4.1 Pipeline flow
+### Assumptions that must be tested
 
-```
-Camera stream (25fps, existing)
-        |
-        v
-DeepStream: streammux -> nvinfer (RF-DETR, existing) -> nvtracker (ByteTrack, existing) -> nvdsanalytics (ROI filter, existing)
-        |
-        v
-[NEW] Bag detector tap, 5-10fps sampled from existing frame_jpeg_cache (same cache the trigger-VLM path already reads)
-        |
-        v
-[NEW] Person-bag association + inventory tracking
-        |
-        v
-   bag count decreased for this person-track?  -----> no  --> keep observing
-        |
-       yes
-        v
-   released bag stationary + person-object distance increasing, sustained N seconds?  --> no --> keep observing (bag may be retrieved)
-        |
-       yes
-        v
-[EXISTING PATTERN, reused] Immediate TTS warning via existing sip/speaker path (no new tone/template work in this phase)
-        |
-        v
-[NEW, rare] gRPC Analyze-style call to MiniCPM-o with pre-drop + release + post-drop frames, for verification only
-        |
-        v
-   MiniCPM-o confirms dumping?  --> no --> log as false trigger, tune rule, no admin alert
-        |
-       yes
-        v
-[EXISTING] Admin alert via existing alert dispatcher + SIPGateway (Twilio/Asterisk, as today)
-```
+- An open-vocabulary detector can reliably detect relevant bags, sacks, boxes, and waste objects at the camera's real resolution and angle.
+- The actual DeepStream low-level tracker can preserve small-object identity through brief occlusion and after motion stops.
+- The complete GPU workload can coexist without out-of-memory errors or unacceptable latency.
+- A neutral early warning can be triggered with an acceptable false-warning rate.
+- MiniCPM-o can distinguish release, retrieval, temporary placement, and abandonment from a short ordered keyframe sequence.
 
-### 4.2 Bag detector tap (pseudocode)
+## 4. Critical design principle
+
+Separate the system into two speeds:
+
+- The fast path detects people, vehicles, carried objects, release candidates, and movement changes.
+- The reasoning path receives only a small number of suspicious events and explains or verifies them.
+
+The detector and state machine control timing. MiniCPM-o does not sit in the real-time frame loop.
+
+## 5. Runtime flow
+
+1. Decode each camera stream once.
+2. Detect and track people and vehicles at the existing pipeline rate.
+3. Apply the configured ROI. Ignore activity outside it.
+4. Run the waste-object detector only for active ROI tracks or scheduled re-detection areas.
+5. Associate candidate objects with a person or vehicle using proximity, relative motion, overlap, and track history.
+6. Maintain a per-track inventory of objects moving with that subject.
+7. Detect an object-release candidate when an associated object separates, stops following, or creates a persistent local scene change.
+8. If early evidence crosses the warning threshold, play a short neutral warning.
+9. Continue observing. If the object persists and the subject separates without retrieving it, create a confirmed incident candidate.
+10. Finish the pre-roll and post-roll event clip asynchronously.
+11. Send 8-12 ordered keyframes plus structured context to the already-warm MiniCPM-o service.
+12. If verification succeeds, notify the administrator with text and optional phone-call audio.
+13. Store the event evidence, rule features, model result, timings, and final disposition.
+
+## 6. Object lifecycle state machine
+
+Use lifecycle state, not raw bag count:
+
+| State | Meaning | Typical transition |
+|---|---|---|
+| OBSERVED | Candidate object exists in the ROI | Becomes associated with a subject |
+| ASSOCIATED | Object moves consistently with a person or vehicle | Evidence suggests it separated |
+| RELEASE_CANDIDATE | Object no longer follows the subject | Early warning or recovery |
+| OCCLUDED_PENDING | Object is temporarily hidden or missed | Reappears, is recovered, or times out |
+| PLACED_PENDING | Object appears stationary near the release location | Retrieved or persists |
+| RETRIEVED | Object moves with the same subject again | Close as non-incident |
+| ABANDONED_CANDIDATE | Object persists while the subject separates | Send for VLM verification |
+| CONFIRMED_INCIDENT | Rule and verifier support dumping | Notify admin and retain evidence |
+| DISMISSED | Evidence was insufficient or contradicted | Retain for tuning, no escalation |
+
+Track records must retain:
+
+- Camera ID and ROI ID
+- Person or vehicle track ID
+- Object track ID or candidate ID
+- First seen, associated, release, and last seen timestamps
+- Last-known box and release-location uncertainty
+- Motion and distance history
+- Detection confidence history
+- Scene-change evidence
+- Warning and escalation timestamps
+
+## 7. Use two thresholds
+
+### Threshold A: early release candidate
+
+Purpose: a preventive public warning.
+
+Possible evidence:
+
+- An object previously moved with the subject.
+- The object separates from the subject or stops following.
+- The subject continues moving.
+- The separation is consistent for a short debounce window.
+
+Example neutral warning:
+
+> Attention. An item may have been left near the tree. Please take it with you and use the designated waste bin.
+
+This warning must not describe protected characteristics, identify a person, shame them, or state that a crime definitely occurred.
+
+### Threshold B: confirmed incident candidate
+
+Purpose: administrator escalation and evidence retention.
+
+Require stronger evidence:
+
+- The object remains near the release location for a configured persistence interval.
+- Subject-to-object distance continues increasing or the subject exits the ROI.
+- The object is not retrieved.
+- Re-detection or scene-change evidence supports the object's continued presence.
+- MiniCPM-o verification supports release and abandonment.
+
+This split reduces response time without treating the early warning as a final accusation.
+
+## 8. Temporal buffers and event assembly
+
+Maintain a bounded ring buffer for every camera. Do not rely on a latest-frame cache.
+
+Recommended starting configuration:
+
+- Low-resolution evidence frames: 5 FPS
+- Pre-roll: 5 seconds
+- Post-roll: 4 seconds
+- Maximum event assembly window: 12 seconds
+- Ordered VLM keyframes: 8-12
+
+When Threshold A or a release candidate fires:
+
+1. Copy the relevant pre-roll references from the ring buffer.
+2. Create an open event record.
+3. Continue collecting frames until post-roll completes.
+4. Select keyframes around association, release, reappearance, persistence, and departure.
+5. Submit the completed package asynchronously.
+
+The live pipeline must never wait for post-roll collection or MiniCPM-o.
+
+## 9. Frame-rate policy
+
+The requested 5-10 FPS applies to the fast perception loop, not to same-level VLM captioning.
+
+Recommended starting rates:
+
+| Work | Rate |
+|---|---|
+| Decode, person/vehicle tracking, ROI | Existing stream rate |
+| Waste-object detection during active ROI activity | Start at 5 FPS |
+| Waste-object re-detection around a release location | 5-10 FPS for a short burst |
+| Inactive-camera sampling | 0-1 FPS or disabled |
+| MiniCPM-o | One ordered keyframe batch per suspicious event |
+
+Raise rates only after measuring end-to-end latency, GPU memory, queue age, and missed-event rate.
+
+## 10. Fast detector selection
+
+Start with YOLO-World or YOLOE as a no-training feasibility test because both support open-vocabulary detection.
+
+Prompt examples:
+
+- plastic bag
+- garbage bag
+- sack
+- cardboard box
+- waste bundle
+- bottle
+- container
+
+Do not make the final production decision from marketing benchmarks. Benchmark the exact model size, image resolution, precision, export format, and target hardware.
+
+If zero-shot recall is inadequate:
+
+1. Label real frames from the deployment cameras.
+2. Fine-tune a small conventional detector.
+3. Export it to the existing TensorRT/DeepStream path.
+
+A small domain-trained detector is likely to be cheaper and more predictable in production than a larger permanent open-vocabulary model.
+
+Commercial deployments must review the chosen model, code, and package licenses before distribution or hosted use. YOLO-World's official repository is GPL-3.0, and Ultralytics publishes separate open-source and enterprise licensing terms.
+
+## 11. Tracking requirements
+
+Do not assume that a configured component called ByteTrack proves the needed behavior. Confirm the actual DeepStream low-level tracker and its settings.
+
+Test:
+
+- ID continuity for small carried objects
+- Occlusion by the person's body
+- Stationary-object retention
+- Low-confidence association
+- Track termination and reactivation
+- Multiple people and multiple objects
+- Camera shake, shadows, and partial ROI exits
+
+Use a separate candidate identity if the tracker drops the stationary object. Match it back by location, appearance embedding when available, size, and scene-change evidence.
+
+## 12. Stationary-object verification
+
+The released object may not appear in every detector result. Verification should combine:
+
+- Periodic open-vocabulary re-detection near the release region
+- Last-known object location and uncertainty expansion
+- Pre-event versus post-event scene change
+- Persistence across multiple samples
+- Subject departure or ROI exit
+- Retrieval detection
+
+No single missing detection should confirm or dismiss an event.
+
+## 13. Corrected processing outline
 
 ```python
-# pipeline/app/bag_trigger.py (new)
+def on_camera_frame(camera, frame, timestamp):
+    camera.ring_buffer.append(frame, timestamp)
+    update_existing_person_vehicle_tracks(camera, frame)
 
-def bag_detector_tick(ctx: dict) -> None:
-    """Runs on a GLib timer at 5-10fps, reads the same frame_jpeg_cache
-    the existing capture_frame_probe already populates. Mirrors the
-    narration_sampler.py pattern already designed for the (deferred)
-    Approach 1 narration path -- same tap point, different consumer."""
-    cache = ctx["frame_jpeg_cache"]
-    detector = ctx["bag_detector"]  # YOLO-World instance, one per process, not per camera
-    tracker_state = ctx["bag_tracker_state"]  # per-camera inventory state
+    if not camera.has_active_roi_tracks():
+        return
 
-    for source_id, jpeg_bytes in cache.items():
-        detections = detector.detect(jpeg_bytes, classes=["bag", "sack", "container", "cardboard box"])
-        camera_state = tracker_state[source_id]
-        update_bag_inventory(camera_state, detections, person_tracks=ctx["active_person_tracks"][source_id])
-```
+    if camera.object_detector_due(timestamp):
+        objects = detect_candidate_objects(frame, camera.active_search_regions())
+        update_object_lifecycles(camera, objects, timestamp)
 
-```python
-def update_bag_inventory(camera_state, detections, person_tracks) -> None:
-    """Associates each detected bag with the nearest carrying person-track
-    (by bounding-box proximity + motion correlation), then checks for
-    an inventory decrease -- the core Approach 6 signal, simplified."""
-    for person_track in person_tracks:
-        prev_count = camera_state.carried_count.get(person_track.id, 0)
-        current_bags = associate_bags_to_person(detections, person_track)
-        current_count = len(current_bags)
+    for event in camera.release_candidates:
+        update_release_evidence(camera, event, timestamp)
 
-        if current_count < prev_count:
-            # a bag that WAS associated with this person is no longer moving with them
-            dropped_bag = find_missing_bag(camera_state, person_track, current_bags)
-            camera_state.pending_release[dropped_bag.id] = {
-                "person_track_id": person_track.id,
-                "release_frame": camera_state.frame_idx,
-                "last_known_bbox": dropped_bag.bbox,
-                "state": "OCCLUDED_PENDING_REAPPEARANCE",  # do not delete on brief occlusion
-            }
+        if event.crossed_warning_threshold() and not event.warning_sent:
+            public_warning.play(
+                template_id="possible_item_left",
+                camera_id=camera.id,
+                zone_name=event.safe_zone_name,
+            )
+            event.warning_sent = True
 
-        camera_state.carried_count[person_track.id] = current_count
-
-    check_pending_releases(camera_state, detections)
-```
-
-```python
-def check_pending_releases(camera_state, detections) -> None:
-    """For each bag pending release confirmation: has it reappeared
-    stationary near its last known location, and is the owning person's
-    distance from it increasing? This is the confirm-or-drop-the-flag step."""
-    now = camera_state.frame_idx
-    for bag_id, pending in list(camera_state.pending_release.items()):
-        reappeared = find_stationary_object_near(detections, pending["last_known_bbox"])
-        if reappeared is None:
-            if now - pending["release_frame"] > OCCLUSION_TIMEOUT_FRAMES:
-                del camera_state.pending_release[bag_id]  # false alarm, object never reappeared (tracking noise)
+        if event.is_retrieved():
+            event.close("retrieved")
             continue
 
-        person = camera_state.get_person_track(pending["person_track_id"])
-        distance = bbox_distance(person.bbox, reappeared.bbox)
-        pending["distance_history"].append(distance)
+        if event.crossed_incident_threshold():
+            event.begin_post_roll_if_needed(timestamp)
 
-        if len(pending["distance_history"]) >= MIN_CONSECUTIVE_FRAMES and is_increasing(pending["distance_history"]):
-            fire_dumping_trigger(camera_state, pending, reappeared)
-            del camera_state.pending_release[bag_id]
+        if event.post_roll_complete(timestamp) and not event.verification_submitted:
+            keyframes = select_ordered_keyframes(
+                camera.ring_buffer,
+                event,
+                maximum=12,
+            )
+            vlm_queue.submit(
+                event_id=event.id,
+                keyframes=keyframes,
+                structured_context=event.rule_features(),
+            )
+            event.verification_submitted = True
 ```
 
-```python
-def fire_dumping_trigger(camera_state, pending, bag) -> None:
-    """This is the ONLY place MiniCPM-o gets called in this design.
-    Reuses the existing vlm_grpc_client.py fire-and-forget pattern --
-    same thread-pool-submit, same circuit breaker, same Kafka result
-    topic. Only the request content differs: pre/release/post frames
-    instead of a single crop."""
-    frames = collect_temporal_window(
-        camera_state,
-        pre_seconds=4, post_seconds=2.5,
-        center_frame=pending["release_frame"],
-    )
-    vlm_client.submit_verification(
-        camera_id=camera_state.camera_id,
-        track_id=pending["person_track_id"],
-        frames_jpeg=frames,
-        context={"event": "bag_released", "bag_id": bag.id},
-    )
-    trigger_immediate_tts_warning(camera_state, pending["person_track_id"])  # do not wait for MiniCPM-o
+The event object must initialize all histories, timers, warning flags, and verification flags when it is created. It must not depend on an undefined missing-bag object.
+
+## 14. MiniCPM-o role
+
+MiniCPM-o is a selective temporal verifier and explanation generator.
+
+It should receive:
+
+- 8-12 ordered frames
+- Camera and safe zone label
+- Approximate release time
+- Subject and object boxes or cropped regions
+- Detector and rule observations
+- Explicit instructions to report uncertainty
+
+It should answer:
+
+- Was an item released or left behind?
+- Was it retrieved?
+- Did the person or vehicle move away?
+- Where was it left?
+- What visible evidence supports the conclusion?
+- Is the evidence insufficient or ambiguous?
+
+Do not ask it to infer intent, identity, ethnicity, health status, or other sensitive traits.
+
+Keep the model loaded in a dedicated warm service. Apply bounded concurrency and a request deadline. Never load it per event.
+
+## 15. Structured output contract
+
+Use schema-validated JSON rather than free-form text:
+
+```json
+{
+  "event_type": "possible_dumping",
+  "verdict": "confirmed",
+  "confidence": 0.86,
+  "subject_type": "person",
+  "object_description": "light-colored bag",
+  "location_description": "ground beside the tree",
+  "actions": [
+    "subject approached while carrying the item",
+    "item appeared on the ground",
+    "subject moved away",
+    "item remained visible"
+  ],
+  "retrieved": false,
+  "uncertainty": "brief body occlusion at the release moment",
+  "admin_summary": "A person appeared to leave a light-colored bag beside the tree and moved away without retrieving it."
+}
 ```
 
-Note the ordering in `fire_dumping_trigger`: the TTS warning fires immediately on the deterministic rule (bag separated + stationary + distance increasing), **before** MiniCPM-o responds. MiniCPM-o's job is to confirm the event for the admin alert / incident record, not to gate the preventive warning — the whole point of this design is that the warning can't wait 1.8+ seconds for a VLM response.
+Validate values, length, confidence range, and allowed enums before using model output downstream.
 
-### 4.3 Decision logic summary
+## 16. Public warning safety
 
-```python
-if bag_count_for_person_decreased:
-    state = "PENDING_RELEASE_CONFIRMATION"
+The current aggressive, all-caps, or shaming TTS wrapper must not be used for public warnings.
 
-elif released_bag_reappeared_stationary and person_bag_distance_increasing_for_N_frames:
-    state = "DUMPING_TRIGGERED"
-    play_tts_warning(person_track)          # immediate, existing TTS path
-    submit_to_minicpmo_for_verification()   # async, rare, ~1.8s is fine here
+Use cached, pre-approved, neutral audio templates so warning playback does not wait for generative TTS.
 
-# on MiniCPM-o response (async callback, existing Kafka wastewatch.vlm.results consumer):
-if minicpmo_confirms_dumping:
-    create_admin_alert()                     # existing alert dispatcher + SIPGateway
-else:
-    log_false_trigger_for_rule_tuning()      # no admin alert, rule gets tuned over time
-```
+Examples:
 
-## 5. Possible bottlenecks
+- "Attention. An item may have been left behind. Please take it with you."
+- "Please use the designated waste bin and remove the item from this area."
 
-| Bottleneck | Why it matters | How this design addresses / defers it |
-|---|---|---|
-| **YOLO-World zero-shot accuracy on real camera footage** | If it misses bags or false-positives heavily on this specific camera's resolution/lighting, the whole trigger is unreliable | Phase 1 is explicitly a measurement phase before anything else is built on top of it (Assumption A1) |
-| **YOLO-World throughput at 5-10fps per camera, N cameras** | Unmeasured GPU/CPU cost, could compete with the existing RF-DETR/DeepStream pipeline for the same GPU | Needs the same kind of latency+VRAM measurement done for MiniCPM-o in Approach 3, scaled to N cameras — not yet done (Assumption A2) |
-| **ByteTrack stability on small, frequently-occluded bag objects** | If bag track IDs flicker/reassign across brief occlusions, `update_bag_inventory` will misfire (see false "count decreased" from a tracking glitch, not a real drop) | `OCCLUDED_PENDING_REAPPEARANCE` state + `OCCLUSION_TIMEOUT_FRAMES` window is the mitigation, but the timeout value itself needs tuning against real footage (Assumption A4) |
-| **False-trigger rate of the deterministic rule** | Every false trigger costs one MiniCPM-o call (1.8s + GPU contention) plus one unnecessary public TTS warning — the second cost is worse, since warnings are user-facing and a bad one erodes trust | `check_pending_releases` requires `MIN_CONSECUTIVE_FRAMES` of sustained increasing distance, not a single-frame signal, specifically to reduce noise (Assumption A3) |
-| **Person-bag association under multiple people/bags in frame simultaneously** | The sample clip has one person, two bags — a busier scene (multiple people, overlapping bags) stresses `associate_bags_to_person`'s proximity heuristic much harder | Not addressed in this phase; explicitly scoped as a v2 concern, tracked in "out of scope" below |
-| **MiniCPM-o verification window sizing** | 4s pre + 2.5s post is a guess extrapolated from the 25s/10-frame test that worked; a shorter, more targeted window is unverified | Phase 3 explicitly benchmarks this against real trigger events before treating the verification step as reliable |
-| **GPU contention between YOLO-World (continuous) and MiniCPM-o (rare but heavy, 8GB peak VRAM)** | Both need to coexist on the same 12GB GPU as the existing DeepStream/RF-DETR process | YOLO-World is lightweight enough to likely coexist, but this is unverified — if MiniCPM-o's 8GB peak collides with YOLO-World + DeepStream's combined footprint, one of them needs to be moved off-GPU or made even smaller |
+Dynamic content should be limited to safe zone names such as "near the tree" or "at the entrance." Do not describe gender, race, age, clothing, disability, or other personal characteristics over a public speaker.
 
-## 6. Exact plan
+Provide rate limiting, quiet hours where required, manual mute, replay protection, and an audit record.
 
-### Phase 1 — Fast trigger detector (Week 1)
+## 17. Separate public and administrator channels
 
-**Goal**: Prove YOLO-World can detect bag-class objects in this camera's real footage, at a measured latency/VRAM cost, with no custom training.
+**Public speaker**
 
-- Install `ultralytics` (YOLO-World) in the existing test venv (`/mnt/1tb-backup/mlcache/venvs/minicpmo`, or a fresh sibling venv if dependency conflicts arise — do not assume compatibility with the pinned `transformers==4.51.0` environment without checking).
-- Run zero-shot detection with prompt classes: `garbage bag`, `plastic bag`, `sack`, `container`, `cardboard box`, `waste bundle` against the same sample clips already captured (the press-brake clip, and ideally a real dumping-pattern clip matching the tree-side scenario if one exists or can be captured).
-- Measure: per-frame latency (same methodology as Approach 3's MiniCPM-o measurement — steady state, excluding model load), VRAM footprint, and qualitative detection accuracy (does it actually find the bags, does it false-positive on background clutter).
-- **Exit criterion**: latency supports 5-10fps sustained, accuracy is visibly usable on real footage. If not, this phase's finding — not an assumption — determines whether to proceed to custom training instead (out of scope for this plan, tracked as a fallback).
+- Immediate
+- Neutral
+- Short
+- Cached audio
+- No definitive accusation
+- No personal description
 
-### Phase 2 — Person-bag tracking and inventory rule (Week 2)
+**Administrator text**
 
-**Goal**: Implement `bag_trigger.py` (pseudocode in section 4.2) against DeepStream's existing per-camera track outputs.
+- Event time and camera
+- Safe location description
+- Object description
+- Rule evidence and VLM summary
+- Confidence and uncertainty
+- Evidence link or clip ID
 
-- Extend the existing `frame_jpeg_cache` tap pattern (already used by both the trigger-VLM path and the deferred narration path) with the bag-detector tick.
-- Implement `associate_bags_to_person`, `update_bag_inventory`, `check_pending_releases` as described.
-- Test against the sample clip's known ground truth (2 bags carried in, 1 bag released and left, 1 bag carried out) — this is the acceptance test for the whole rule, not a generic unit test.
-- Tune `OCCLUSION_TIMEOUT_FRAMES` and `MIN_CONSECUTIVE_FRAMES` against this real footage rather than picking arbitrary defaults.
+**Administrator phone call**
 
-### Phase 3 — TTS warning + MiniCPM-o verification + admin alert (Week 3)
+Generate or select a separate audio message after confirmation:
 
-**Goal**: Wire the trigger into the existing alert/TTS/call infrastructure, unchanged.
+> WasteWatch alert for Camera 3. A possible dumping event was detected near the tree at 10:42. A light-colored bag appeared to be left on the ground, and the person moved away without retrieving it. Please review incident WW-1042.
 
-- On `DUMPING_TRIGGERED`, call the existing TTS/speaker path immediately (reuse as-is — no tone rewrite in this phase).
-- Implement `vlm_client.submit_verification()` as a thin extension of the existing `VLMGrpcClient`/`VLMServicer.Analyze` path (section 4.2's `fire_dumping_trigger`) — same fire-and-forget, same circuit breaker, same Kafka result topic, different payload (temporal window instead of single crop).
-- On MiniCPM-o confirmation, route through the existing alert dispatcher and `SIPGateway` (Twilio/Asterisk, as today) — no Jambonz, no DTMF ack, no new call infrastructure in this phase.
-- Log every trigger (confirmed and false) for later rule-tuning, even before a formal incident-persistence schema exists.
+The SIP gateway is only the delivery adapter. Add idempotency, retry limits, persisted call status, and acknowledgement later if operationally required.
 
-### Explicitly deferred (not in this plan)
+## 18. Concurrency and multi-camera behavior
 
-- Continuous MiniCPM-o narration (Approach 1's narration-review-queue scope) — separate, smaller, already spec'd elsewhere, can proceed independently if wanted.
-- TensorRT conversion of MiniCPM-o — no existing path, weeks of speculative work, not justified while the trigger-gating approach avoids needing it.
-- Full Approach 2 state machine (8 states, risk-score weighting, recovery transitions, object storage, versioned events) — this plan implements a minimal 2-state version of it (`observing` / `pending-release-confirmation`) sufficient for the sample pattern; the full state machine remains the eventual target if/when this simpler version proves insufficient.
-- Hand-pose association — Approach 6's fuller design included explicit hand-object motion correlation; this plan uses simpler bounding-box proximity for person-bag association as a first pass.
-- Jambonz integration — recommended in the approaches document for its DTMF-ack fit, but out of scope until phone-escalation acknowledgement is actually needed; Phase 3 uses the existing SIPGateway unchanged.
-- Public-TTS tone/template rewrite — tracked separately as an Approach 2 finding; this plan reuses whatever TTS behavior exists today without judgment on its wording.
-- Multi-person/multi-bag disambiguation in busy scenes — the sample clip and this plan's acceptance test are single-person, two-bag; busier scenes are a known unhandled case, not silently assumed away.
+A sequential loop over every camera will not scale.
+
+Use:
+
+- One decoder path per configured stream or the existing DeepStream batching
+- A bounded detector work queue
+- Batched inference where supported
+- Per-camera freshness timestamps
+- Drop-stale behavior instead of building an old-frame backlog
+- Priority for active release candidates
+- A maximum number of concurrent VLM requests
+- Backpressure metrics and circuit breakers
+
+If overloaded, reduce sampling on inactive cameras first. Never delay an active release candidate behind stale routine frames.
+
+## 19. GPU capacity gate
+
+MiniCPM-o already consumed about 8.09 GB of the 12 GB target GPU in the tested path. Capacity is not proven until the entire workload is measured together.
+
+Before integration approval, record:
+
+- DeepStream baseline VRAM and latency
+- Detector incremental VRAM and latency
+- MiniCPM-o warm idle VRAM
+- Peak memory during simultaneous detector and VLM inference
+- End-to-end queue delay
+- Thermal throttling over a sustained run
+
+If coexistence fails, use one of these options:
+
+- Run MiniCPM-o on a second GPU or remote inference node.
+- Use a smaller or more aggressively quantized verifier.
+- Serialize expensive inference and accept slower admin verification.
+- Keep the real-time detector local and call a hosted verifier only for rare events, subject to privacy and cost requirements.
+
+## 20. Phased implementation plan
+
+### Phase 0: establish truth
+
+Duration: 1-2 days
+
+- Confirm the actual repository components and tracker configuration.
+- Reproduce MiniCPM-o latency and memory measurements.
+- Define the ROI, safe zone labels, and warning policy.
+- Extract the reference event around the fifth second as a regression case.
+- Collect initial negative examples: walking, standing, setting down then retrieving, occlusion, shadows, and empty scenes.
+
+Exit: repeatable benchmarks and a small labeled evaluation set.
+
+### Phase 1: detector feasibility
+
+Duration: 2-3 days
+
+- Test YOLO-World and optionally YOLOE on deployment footage.
+- Measure recall, false positives, latency, VRAM, and small-object behavior.
+- Use ROI/track-gated inference.
+
+Exit: adequate recall at 5 FPS on the target machine, or a documented decision to label and train a small detector.
+
+### Phase 2: lifecycle tracker and replay harness
+
+Duration: 4-6 days
+
+- Add the ring buffer.
+- Implement association and object lifecycle states.
+- Add retrieval, occlusion, persistence, and scene-change handling.
+- Build an offline replay runner that produces event timelines.
+
+Exit: the reference event is detected and common negative cases close without escalation.
+
+### Phase 3: shadow mode
+
+Duration: 3-5 days plus observation time
+
+- Run on real streams with no public audio.
+- Record candidate events, timings, and false triggers.
+- Tune thresholds per camera if necessary.
+- Keep human review as ground truth.
+
+Exit: agreed precision, recall, and time-to-warning targets on representative footage.
+
+### Phase 4: MiniCPM-o verification and admin alerts
+
+Duration: 3-5 days
+
+- Keep the model warm.
+- Add asynchronous post-roll assembly and keyframe selection.
+- Enforce the structured output schema.
+- Send text alerts and optional administrator phone audio.
+
+Exit: verified events are delivered once, with evidence and uncertainty.
+
+### Phase 5: supervised public warning
+
+Duration: 2-4 days
+
+- Replace unsafe TTS behavior with neutral templates.
+- Enable warnings first in supervised hours or selected cameras.
+- Add rate limits, mute controls, health monitoring, and audit logs.
+
+Exit: public warning is enabled only after operational approval.
+
+## 21. Delivery expectation
+
+A realistic focused proof of concept is about 2-3 weeks after access to the repository, target GPU, camera configuration, and representative footage.
+
+A safe production rollout takes longer because shadow-mode evidence and operational approval cannot be compressed into coding time.
+
+## 22. Validation set
+
+The test set must include more than the known positive clip.
+
+**Positive patterns:**
+
+- Small bag dropped beside a tree
+- Box left near a wall
+- Object removed from a vehicle and abandoned
+- Brief body occlusion during release
+- Subject exits the ROI after release
+
+**Negative patterns:**
+
+- Bag set down and picked up
+- Bag handed to another person
+- Bag hidden behind a person but still carried
+- Person walks past existing litter
+- Worker intentionally places an approved object
+- Tracker ID switch
+- Shadow or foliage movement
+- Object detector flicker
+- Subject waits near the object
+
+Evaluate by event, not by individual frame.
+
+## 23. Acceptance metrics
+
+Agree on target values before live warning activation:
+
+- Event recall on labeled dumping clips
+- False alerts per camera-hour
+- False public warnings per camera-hour
+- Median and p95 time from release candidate to warning
+- Median and p95 time from confirmation to admin delivery
+- Retrieval cancellation accuracy
+- Queue age and dropped-frame rate
+- GPU peak memory and utilization
+- VLM verification precision and invalid-JSON rate
+- Duplicate alert rate
+
+The most important safety metric is false public warnings, not detector frame accuracy.
+
+## 24. Deferred work
+
+These are outside the first vertical slice:
+
+- Continuous scene narration
+- Full multi-class waste taxonomy
+- Cross-camera identity tracking
+- Biometric identification
+- Intent inference
+- Automated fines or enforcement
+- Full DTMF acknowledgement workflow
+- Large-scale custom detector training
+- MiniCPM-o TensorRT conversion
+
+The full target architecture can still add versioned events, object storage, richer risk scoring, recovery transitions, and durable call records after the vertical slice proves the behavior.
+
+## 25. Final recommendation
+
+Proceed with the trigger-gated architecture, but implement it as an object-release lifecycle system rather than a bag-count rule.
+
+The minimum safe sequence is:
+
+1. Benchmark the fast detector on real footage.
+2. Add a per-camera ring buffer and lifecycle tracker.
+3. Validate in offline replay and shadow mode.
+4. Add selective MiniCPM-o verification.
+5. Enable administrator text and phone audio.
+6. Enable neutral public warnings only after false-warning targets are met.
+
+This preserves the low-latency, low-compute advantage while correcting the timing, buffering, tracking, safety, and validation gaps in the earlier draft.
+
+## 26. Official references
+
+- YOLO-World official repository: https://github.com/AILab-CVC/YOLO-World
+- Ultralytics YOLO-World documentation: https://docs.ultralytics.com/models/yolo-world/
+- Ultralytics YOLOE documentation: https://docs.ultralytics.com/models/yoloe/
+- vLLM-Omni MiniCPM-o online serving example: https://docs.vllm.ai/projects/vllm-omni/en/v0.26.0/user_guide/examples/online_serving/minicpmo/
+- OpenBMB MiniCPM repository: https://github.com/OpenBMB/MiniCPM-V
