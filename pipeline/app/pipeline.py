@@ -167,6 +167,7 @@ _ALERT_CONFIG: dict[str, dict] = {
 
 
 _ALERT_SNAPSHOT_DIR = os.environ.get("WW_EVIDENCE_DIR", "/app/evidence") + "/alerts"
+_PERSON_HIGHLIGHT_DELAY_FRAMES = 15
 
 
 def _alert_snapshot_url(camera_id: str, track_id: int, ts_ms: int) -> str:
@@ -202,7 +203,7 @@ def _fire_waste_alert_async(
     snapshot_cache: dict[int, bytes] | None = None,
     snapshot_captured_at: dict[int, float] | None = None,
     snapshot_source_id: int | None = None,
-    snapshot_not_before_monotonic: float | None = None,
+    snapshot_visual_pair: dict | None = None,
 ) -> None:
     """Write the snapshot and publish the alert off the GStreamer pad probe.
 
@@ -231,20 +232,21 @@ def _fire_waste_alert_async(
     def _run():
         try:
             snapshot_bytes = jpeg_bytes
-            if snapshot_not_before_monotonic is not None:
+            if snapshot_visual_pair is not None:
                 # This is a background worker, never the GStreamer probe.
-                # Wait for a cache entry whose capture time is definitively
-                # after the person's delayed red NvOSD transition. A bounded
-                # poll avoids guessing from a fixed sleep while never holding
-                # up the real-time pipeline thread.
-                refresh_deadline = time.monotonic() + 2.0
-                while (
-                    snapshot_captured_at is not None
-                    and snapshot_source_id is not None
-                    and snapshot_captured_at.get(snapshot_source_id, 0.0)
-                        < snapshot_not_before_monotonic
-                    and time.monotonic() < refresh_deadline
-                ):
+                # Wait for OSD to report that it actually rendered the red
+                # person box, then for the capture branch to encode that frame.
+                # This follows frame order instead of guessing with wall time.
+                refresh_deadline = time.monotonic() + 3.0
+                while time.monotonic() < refresh_deadline:
+                    rendered_at = snapshot_visual_pair.get("person_visual_rendered_at")
+                    captured_at = (
+                        snapshot_captured_at.get(snapshot_source_id, 0.0)
+                        if snapshot_captured_at is not None and snapshot_source_id is not None
+                        else 0.0
+                    )
+                    if rendered_at is not None and captured_at >= rendered_at:
+                        break
                     time.sleep(0.02)
                 refreshed = (
                     snapshot_cache.get(snapshot_source_id)
@@ -511,28 +513,23 @@ def decorate_for_osd(
 
             # As soon as attribution connects a person and waste object,
             # recolour only the waste object's existing NvOSD box. The person
-            # intentionally stays in their normal colour during placement
-            # confirmation and for the following 500ms visual delay;
+            # intentionally stays in their normal colour until fifteen further
+            # frames containing that waste object have been detected;
             # force_violation() marks them red only afterward. No second
             # rectangle is drawn.
             _is_visual_pair = False
             if track_id != 0xFFFFFFFFFFFFFFFF:
-                _visual_now = time.monotonic()
                 for (_pair_camera, _pair_waste_id), _pair in tuple(_waste_pairs.items()):
                     if _pair_camera != camera_id:
                         continue
                     if track_id == _pair_waste_id:
                         _is_visual_pair = True
                         break
-                    if (
-                        track_id == _pair.get("person_id")
-                        and _pair.get("person_visual_after") is not None
-                        and _visual_now >= _pair["person_visual_after"]
-                    ):
-                        # Once the delayed person highlight starts, keep it
-                        # red across ROI/FSM changes until the tracker truly
-                        # loses that person from the video frame.
-                        _is_visual_pair = True
+                    if track_id == _pair.get("person_id") and is_suspect:
+                        # Record the exact first OSD render for the evidence
+                        # worker. Persistent redness itself comes from the FSM
+                        # escalation and lasts until this person track is lost.
+                        _pair.setdefault("person_visual_rendered_at", time.monotonic())
                         break
 
             # --- Build label text ---
@@ -902,7 +899,7 @@ def extract_metadata(
                 ctx.get("waste_dumper_map"),
                 ctx.get("waste_attribution_pair"),
                 ctx.get("waste_attribution_started_at"),
-                ctx.get("waste_person_violation_due_at"),
+                ctx.get("waste_person_violation_frames_remaining"),
                 ctx.get("waste_repeat_alert_at"),
             ):
                 if _d:
@@ -1054,7 +1051,9 @@ def extract_metadata(
                     # current-frame tracker metadata is considered.
                     _dumper_map = ctx.setdefault("waste_dumper_map", {})
                     _attribution_started_map = ctx.setdefault("waste_attribution_started_at", {})
-                    _person_violation_due_map = ctx.setdefault("waste_person_violation_due_at", {})
+                    _person_violation_frames_map = ctx.setdefault(
+                        "waste_person_violation_frames_remaining", {}
+                    )
                     _waste_key = (camera_id, track_id)
                     _retry_recycled_waste = (
                         _waste_key in _dumper_map
@@ -1130,33 +1129,33 @@ def extract_metadata(
                                 int(_source_w0), int(_source_h0),
                             )
 
-                    # The person's visual violation begins 500ms AFTER the
-                    # waste itself is confirmed. Keeping this as a per-frame
-                    # deadline avoids a sleeping/background thread touching
-                    # DeepStream/FSM state and guarantees the person cannot
-                    # turn red before the confirmed waste event.
-                    _person_due_at = _person_violation_due_map.get(_waste_key)
-                    if (
-                        class_name == "waste"
-                        and _person_due_at is not None
-                        and time.monotonic() >= _person_due_at
-                    ):
-                        _person_pid = _dumper_map.get(_waste_key)
-                        if _person_pid is not None:
-                            _person_track = track_manager.get_track(camera_id, _person_pid)
-                            _person_bbox = (
-                                _person_track.bbox_history[-1]
-                                if _person_track is not None and _person_track.bbox_history
-                                else None
-                            )
-                            fsm_manager.force_violation(
-                                camera_id, _person_pid, "person",
-                                dwell_time_s=(
-                                    _person_track.dwell_time_s if _person_track is not None else 0.0
-                                ),
-                                bbox=_person_bbox,
-                            )
-                        _person_violation_due_map.pop(_waste_key, None)
+                    # Count only frames where this exact waste track is
+                    # actually detected. Global frame numbers can advance
+                    # while a tiny waste object is temporarily missed, which
+                    # previously allowed the person to turn red on a frame
+                    # where no waste box was visible.
+                    _person_frames_left = _person_violation_frames_map.get(_waste_key)
+                    if class_name == "waste" and _person_frames_left is not None:
+                        _person_frames_left -= 1
+                        if _person_frames_left <= 0:
+                            _person_pid = _dumper_map.get(_waste_key)
+                            if _person_pid is not None:
+                                _person_track = track_manager.get_track(camera_id, _person_pid)
+                                _person_bbox = (
+                                    _person_track.bbox_history[-1]
+                                    if _person_track is not None and _person_track.bbox_history
+                                    else None
+                                )
+                                fsm_manager.force_violation(
+                                    camera_id, _person_pid, "person",
+                                    dwell_time_s=(
+                                        _person_track.dwell_time_s if _person_track is not None else 0.0
+                                    ),
+                                    bbox=_person_bbox,
+                                )
+                            _person_violation_frames_map.pop(_waste_key, None)
+                        else:
+                            _person_violation_frames_map[_waste_key] = _person_frames_left
 
                     # Ground-confirmed violation: fire the full confirmed/
                     # critical alert once a waste object has persisted for
@@ -1180,9 +1179,9 @@ def extract_metadata(
                     ):
                         # This paired spatial/persistence rule overrides the
                         # normal dwell FSM for the waste track. The frozen
-                        # first-frame person is promoted separately 500ms
-                        # after this confirmation so their red box cannot
-                        # precede the visible waste event.
+                        # first-frame person is promoted only after fifteen more
+                        # detections of this waste track, so their red box
+                        # cannot precede a visible waste detection.
                         fsm_manager.force_violation(
                             camera_id, track_id, class_name,
                             dwell_time_s=track_info.dwell_time_s,
@@ -1197,11 +1196,8 @@ def extract_metadata(
                         # ~15-25s after this immediate one instead of
                         # waiting a full waste_repeat_alert_interval_s.
                         ctx.setdefault("waste_repeat_alert_at", {})[(camera_id, track_id)] = time.monotonic()
-                        _person_visual_due_at = time.monotonic() + 0.5
-                        _person_violation_due_map[_waste_key] = _person_visual_due_at
+                        _person_violation_frames_map[_waste_key] = _PERSON_HIGHLIGHT_DELAY_FRAMES
                         _visual_pair = ctx.get("waste_attribution_pair", {}).get(_waste_key)
-                        if _visual_pair is not None:
-                            _visual_pair["person_visual_after"] = _person_visual_due_at
                         _cache = ctx.get("frame_jpeg_cache", {})
                         # Use the proximity attribution captured during the
                         # 500ms placement window, never a later bystander.
@@ -1222,12 +1218,7 @@ def extract_metadata(
                             snapshot_cache=_cache,
                             snapshot_captured_at=_capture_last_ts,
                             snapshot_source_id=int(frame_meta.source_id),
-                            # Select an actual JPEG captured after the person
-                            # turns red, plus one cache interval so the frame
-                            # necessarily passed through NvOSD in that state.
-                            snapshot_not_before_monotonic=(
-                                _person_visual_due_at + _CAPTURE_MIN_INTERVAL_S
-                            ),
+                            snapshot_visual_pair=_visual_pair,
                         )
                         logger.info(
                             "WASTE ALERT (immediate) %s track=%d: dumped by %s",
@@ -1444,7 +1435,7 @@ def extract_metadata(
                                 ctx.get("waste_dumper_map", {}).pop((camera_id, track_id), None)
                                 ctx.get("waste_attribution_pair", {}).pop((camera_id, track_id), None)
                                 ctx.get("waste_attribution_started_at", {}).pop((camera_id, track_id), None)
-                                ctx.get("waste_person_violation_due_at", {}).pop((camera_id, track_id), None)
+                                ctx.get("waste_person_violation_frames_remaining", {}).pop((camera_id, track_id), None)
                             frame_batcher.on_track_exit(camera_id, track_id)
                             # Finalize evidence in background — finalize sleeps
                             # SEGMENT_SECS+2 to flush the trailing segment, so
@@ -1883,8 +1874,8 @@ def main() -> None:
     scene_cut_flags: dict[int, bool] = {}
     # Shared between metadata attribution and the pre-NvOSD decoration probe.
     # It lets the waste object's original box turn red immediately. The
-    # person's box is deliberately left unchanged until 500ms after the
-    # waste confirmation completes.
+    # person's box is deliberately left unchanged until fifteen further frames
+    # containing the confirmed waste object have passed.
     waste_attribution_pair: dict[tuple[str, int], dict] = {}
 
     kafka_producer = PipelineKafkaProducer()
@@ -2208,7 +2199,7 @@ def main() -> None:
                     probe_ctx.get("waste_dumper_map", {}).pop(_lost_key, None)
                     probe_ctx.get("waste_attribution_pair", {}).pop(_lost_key, None)
                     probe_ctx.get("waste_attribution_started_at", {}).pop(_lost_key, None)
-                    probe_ctx.get("waste_person_violation_due_at", {}).pop(_lost_key, None)
+                    probe_ctx.get("waste_person_violation_frames_remaining", {}).pop(_lost_key, None)
                     probe_ctx.get("waste_repeat_alert_at", {}).pop(_lost_key, None)
                 elif CLASS_CATEGORIES.get(lost.class_name) == "person":
                     # Preserve waste attribution for reminders, but end the
@@ -2216,7 +2207,7 @@ def main() -> None:
                     # frame so a future recycled tracker ID is not coloured.
                     for _pair in probe_ctx.get("waste_attribution_pair", {}).values():
                         if _pair.get("person_id") == lost.track_id:
-                            _pair.pop("person_visual_after", None)
+                            _pair.pop("person_visual_rendered_at", None)
 
         # Prune stale frame batchers. No VLM dispatch here either —
         # stale-timeout batches are pre-red and never needed alert-level review.

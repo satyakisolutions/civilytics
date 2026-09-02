@@ -7,6 +7,12 @@ interface MetadataOverlayProps {
   height: number;
 }
 
+// DeepStream already rasterises frame-synchronous detection boxes into the
+// WebRTC stream. Drawing the same boxes again from Kafka metadata can lead the
+// delayed video by several frames and make a person appear red before the
+// corresponding waste is visible. Keep metadata for counters/banners only.
+const RENDER_BROWSER_DETECTION_BOXES = false;
+
 // ---------------------------------------------------------------------------
 // FSM state → bbox color (constant per state, not gradient)
 // ---------------------------------------------------------------------------
@@ -447,8 +453,8 @@ export function MetadataOverlay({ metadata, width, height }: MetadataOverlayProp
         <CameraAlertBanner alert={metadata.camera_alert} width={width} />
       )}
 
-      {/* Detection boxes */}
-      {detections.map((det, i) => (
+      {/* Detection boxes are rendered frame-synchronously by DeepStream OSD. */}
+      {RENDER_BROWSER_DETECTION_BOXES && detections.map((det, i) => (
         <DetectionBox key={`${det.class_id}-${det.track_id ?? i}`} detection={det} width={width} height={height} allDetections={detections} />
       ))}
 
