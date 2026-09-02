@@ -54,6 +54,12 @@ class SourceManager:
         if src_elem is None:
             raise RuntimeError(f"Failed to create uridecodebin for camera {camera_id}")
 
+        # uridecodebin creates the actual rtspsrc internally. Configure it
+        # through source-setup before playback starts; otherwise rtspsrc's
+        # defaults retain a 2000ms jitter buffer and allow it to grow when
+        # downstream inference briefly falls behind, which turns into 5-8s
+        # of stale-frame latency instead of dropping old live video.
+        src_elem.connect("source-setup", self._on_source_setup, camera_id)
         src_elem.set_property("uri", uri)
         src_elem.connect(
             "pad-added",
@@ -95,6 +101,35 @@ class SourceManager:
     # ------------------------------------------------------------------
     # Internal callbacks
     # ------------------------------------------------------------------
+
+    def _on_source_setup(
+        self,
+        _decodebin: Gst.Element,
+        source: Gst.Element,
+        camera_id: str,
+    ) -> None:
+        """Bound RTSP buffering so inference stays close to real time."""
+        factory = source.get_factory()
+        factory_name = factory.get_name() if factory is not None else ""
+        if factory_name != "rtspsrc":
+            return
+
+        properties = {prop.name for prop in source.list_properties()}
+        low_latency_values = {
+            "latency": 100,          # milliseconds of network jitter tolerance
+            "drop-on-latency": True, # discard stale frames instead of growing backlog
+            "buffer-mode": 0,        # none: use RTP timestamps without extra buffering
+            "protocols": 0x4,        # TCP: predictable transport on the local LAN
+            "ntp-sync": False,
+        }
+        for name, value in low_latency_values.items():
+            if name in properties:
+                source.set_property(name, value)
+
+        logger.info(
+            "Configured low-latency RTSP source for %s (latency=100ms, drop-on-latency=true)",
+            camera_id,
+        )
 
     def _on_pad_added(
         self,

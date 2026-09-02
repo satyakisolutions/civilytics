@@ -95,10 +95,13 @@ def test_format_message():
     msg = t._format_message(
         camera_id="cam-01", severity="critical", message="Dumping",
         dwell_time_s=25.3, vlm_summary="Person dumping waste", plate_number="KL-01-AB-1234",
+        detected_at=1788351429.0,
     )
     assert "cam-01" in msg
     assert "CRITICAL" in msg
-    assert "25.3s" in msg
+    assert "Dwell time" not in msg
+    assert "IST" in msg
+    assert ":" in msg
     assert "KL-01-AB-1234" in msg
     assert "Person dumping waste" in msg
 

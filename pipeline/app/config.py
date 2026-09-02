@@ -31,7 +31,30 @@ class PipelineSettings(BaseSettings):
     # Dwell thresholds — narrow-road deployment
     dwell_enter_threshold_s: float = 1.0      # 1s — brief stop
     dwell_observe_threshold_s: float = 3.0    # 3s — suspicious, start VLM
-    dwell_violation_threshold_s: float = 5.0  # 5s — confirmed violation
+    dwell_violation_threshold_s: float = 15.0 # 15s in ROI before VIOLATION/alert
+
+    # How long a "waste" detection must persist before it's treated as an
+    # actually-dumped object (vs. a person's carried bag briefly clipping
+    # the waste class mid-motion, or a one-frame false positive) and
+    # triggers the blinking OSD highlight + dumper-attribution alert.
+    # Independent of the person-in-ROI thresholds above -- waste tracking
+    # isn't ROI-gated, it's presence-based.
+    # Runtime clamps per-camera overrides to <=1.0s so paired waste/person
+    # identification can never fall back to a long dwell delay.
+    waste_dump_alert_threshold_s: float = 0.5
+    # Maximum edge-to-edge gap between the new waste bbox and the person
+    # bbox on the waste object's first frame, measured in source-image pixels
+    # after compensating for streammux resizing. Center distance is unsuitable
+    # because a person's center is their torso, far above an item at their feet.
+    waste_proximity_px: float = 40.0
+
+    # A waste object still in VIOLATION/alerting/escalated state keeps
+    # re-alerting at this interval instead of firing once and going
+    # silent forever -- real, unresolved dumping should keep reminding
+    # operators; also matters for looping test video sources (DeepStream's
+    # tracker doesn't treat a video loop as a scene change, so the same
+    # track_id can persist indefinitely across every loop iteration).
+    waste_repeat_alert_interval_s: float = 37.0
 
     model_config = {"env_prefix": "WW_"}
 

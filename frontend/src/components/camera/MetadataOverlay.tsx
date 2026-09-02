@@ -106,9 +106,11 @@ function buildEnrichedLabel(det: BBoxDetection, allDetections: BBoxDetection[]):
   const trackTag = formatTrackId(det.track_id);
   const isSuspect = (det as any).is_suspect === true;
 
-  // Suspect highlight — escalated person now outside ROI
-  if (isSuspect && (fsmState === "idle" || fsmState === "exited")) {
-    return { label: `${trackTag} ${det.class_name} | SUSPECT`, isSuspect: true };
+  // A confirmed person/waste pair keeps the same violation label even after
+  // leaving the ROI; do not regress it to an amber/orange suspect marker.
+  if (isSuspect) {
+    const violationLabel = det.category === "waste_object" ? "WASTE VIOLATION" : "VIOLATED";
+    return { label: `${trackTag} ${det.class_name} | ${violationLabel}`, isSuspect: true };
   }
 
   const isMinimal = !det.in_roi && fsmState === "idle";
@@ -159,8 +161,8 @@ function DetectionBox({ detection, width, height, allDetections }: { detection: 
 
   const { label: enrichedLabel, isSuspect } = buildEnrichedLabel(detection, allDetections);
   const isViolation = isSuspect || fsmState === "violation" || fsmState === "alerting" || fsmState === "escalated";
-  const effectiveBorderColor = isSuspect ? "#f97316" : borderColor; // Orange for suspects
-  const borderWidth = isSuspect ? 3 : (FSM_BORDER_WIDTHS[fsmState] ?? 2);
+  const effectiveBorderColor = isSuspect ? "#ef4444" : borderColor;
+  const borderWidth = isSuspect ? 4 : (FSM_BORDER_WIDTHS[fsmState] ?? 2);
 
   // --- Secondary label: dwell time only ---
   const secondaryParts = [
@@ -199,7 +201,7 @@ function DetectionBox({ detection, width, height, allDetections }: { detection: 
         {/* Row 1: Action/class + track ID */}
         <div
           style={{
-            backgroundColor: borderColor,
+            backgroundColor: isSuspect ? "#ef4444" : borderColor,
             color: isViolation ? "#fff" : "#000",
             fontSize: "11px",
             fontFamily: "'Poppins', sans-serif",

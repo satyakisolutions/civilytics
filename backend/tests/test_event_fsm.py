@@ -78,3 +78,17 @@ def test_violation_exits_on_roi_leave():
     assert event is not None
     assert event.state == FSMState.EXITED
     assert event.prev_state == FSMState.VIOLATION
+
+
+def test_force_violation_overrides_dwell_fsm_and_persists_marker():
+    mgr = EventFSMManager(
+        enter_threshold_s=1.0,
+        observe_threshold_s=3.0,
+        violation_threshold_s=15.0,
+    )
+    mgr.update("cam-01", 878, "person", in_roi=True, dwell_time_s=0.0)
+
+    mgr.force_violation("cam-01", 878, "person", dwell_time_s=0.5)
+
+    assert mgr.get_fsm_state("cam-01", 878) == "violation"
+    assert mgr.is_escalated("cam-01", 878) is True

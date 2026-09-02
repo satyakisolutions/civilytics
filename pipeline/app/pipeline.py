@@ -19,7 +19,10 @@ import base64
 import logging
 import os
 import sys
+import math
+import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 import gi
@@ -30,6 +33,7 @@ from gi.repository import GLib, Gst  # noqa: E402
 
 import pyds  # noqa: E402 — provided by the DeepStream Docker image
 
+from app.command_receiver import CommandHandler, CommandReceiver
 from app.config import pipeline_settings
 from app.connection_monitor import ConnectionMonitor
 from app.event_fsm import EventFSMManager, FSMState
@@ -40,7 +44,6 @@ from app.output_manager import OutputStreamManager
 from app.preprocessor import ROIPreprocessor
 from app.roi import ROIManager
 from app.source_manager import SourceManager
-from app.stream_watcher import StreamWatcher
 from app.tracking import TrackStateManager
 from app.vlm_grpc_client import VLMGrpcClient
 
@@ -57,7 +60,7 @@ logger = logging.getLogger(__name__)
 # person = 1. Previous version of this file used COCO80 indices
 # (person = 0) which silently filtered every real detection.
 # Keep in lock-step with pipeline/configs/labels.txt.
-COCO_CLASS_MAP: dict[int, str] = {
+BBOX_CLASS_MAP: dict[int, str] = {
     # Fine-tuned 2-class RFDETR-Nano indices (see training/finetune_rfdetr.py).
     # Training used 0=person, 1=handbag — DeepStreamOutput argmax returns
     # those indices directly, and labels.txt is now `person\nhandbag` in
@@ -67,6 +70,20 @@ COCO_CLASS_MAP: dict[int, str] = {
     0: "person",
     1: "handbag",
 }
+
+# RF-DETR-Seg-Nano 3-class indices (post class-0-background-drop, see
+# nvdsinfer_custom_impl_Seg/nvdsparseseg_RfdetrSeg.cpp and
+# pipeline/configs/labels_seg.txt / nvinfer_rfdetr_seg.txt). Selected
+# instead of BBOX_CLASS_MAP when WW_USE_SEG_MODEL=1.
+SEG_CLASS_MAP: dict[int, str] = {
+    0: "bag",
+    1: "person",
+    2: "waste",
+}
+
+COCO_CLASS_MAP: dict[int, str] = (
+    SEG_CLASS_MAP if os.environ.get("WW_USE_SEG_MODEL", "0") == "1" else BBOX_CLASS_MAP
+)
 
 # Per-category OSD colour (r, g, b, a) used by the pre-nvosd decoration
 # probe. Keeps the rendered bbox colour semantically meaningful so an
@@ -87,6 +104,13 @@ CLASS_CATEGORIES: dict[str, str] = {
     "bus": "vehicle", "truck": "vehicle",
     "backpack": "carried_item", "umbrella": "carried_item",
     "handbag": "carried_item", "suitcase": "carried_item",
+    # RF-DETR-Seg-Nano (WW_USE_SEG_MODEL=1) classes: "bag" is the seg
+    # model's carried-item equivalent of the bbox model's "handbag";
+    # "waste" is a directly-detected dumped-waste object (new — the bbox
+    # model had no equivalent class, only inferred waste_object COCO
+    # furniture/appliance classes below).
+    "bag": "carried_item",
+    "waste": "waste_object",
     "bottle": "waste_object", "wine_glass": "waste_object", "cup": "waste_object",
     "bowl": "waste_object",
     "chair": "waste_object", "couch": "waste_object",
@@ -140,6 +164,85 @@ _ALERT_CONFIG: dict[str, dict] = {
     "observe":   {"level": "suspicious",  "color": "#f59e0b", "text": "Suspicious activity — monitoring"},
     "enter":     {"level": "monitoring",  "color": "#3b82f6", "text": "Object entered zone"},
 }
+
+
+_ALERT_SNAPSHOT_DIR = os.environ.get("WW_EVIDENCE_DIR", "/app/evidence") + "/alerts"
+
+
+def _alert_snapshot_url(camera_id: str, track_id: int, ts_ms: int) -> str:
+    """Deterministic URL/filename for an alert snapshot -- pure string
+    formatting, no I/O. Split out from the actual disk write so the
+    message payload (Kafka publish) never has to wait on JPEG write
+    latency to know the URL it should carry.
+    """
+    return f"/evidence/alerts/{camera_id}/alert_{track_id}_{ts_ms}.jpg"
+
+
+def _write_alert_snapshot(camera_id: str, track_id: int, ts_ms: int, jpeg_bytes: bytes | None) -> None:
+    """Write the JPEG for a fired alert to the path _alert_snapshot_url
+    already predicted (StaticFiles mounted at "/evidence" ->
+    backend/app/main.py). The async alert worker writes this before publishing
+    so downstream consumers cannot race the file and receive a transient 404.
+    """
+    if not jpeg_bytes or len(jpeg_bytes) < 1000:
+        return
+    try:
+        subdir = Path(_ALERT_SNAPSHOT_DIR) / camera_id
+        subdir.mkdir(parents=True, exist_ok=True)
+        fname = f"alert_{track_id}_{ts_ms}.jpg"
+        (subdir / fname).write_bytes(jpeg_bytes)
+    except Exception:
+        logger.exception("Failed to save alert snapshot for %s track=%d", camera_id, track_id)
+
+
+def _fire_waste_alert_async(
+    kafka_producer, camera_id: str, track_id: int, jpeg_bytes: bytes | None,
+    severity: str, title: str, message: str, dumped_by_track_id: int | None,
+    dwell_time_s: float, bbox: dict, detected_at: float,
+) -> None:
+    """Write the snapshot and publish the alert off the GStreamer pad probe.
+
+    Both used to run directly inside extract_metadata(), the pad-probe
+    callback on the pipeline's real-time frame-processing path -- any
+    stall there (slow disk, Kafka backpressure) delays the *next* frame,
+    producing "wrong person / wrong time" symptoms downstream (the whole
+    pipeline lags behind live video, so later frames' metadata no longer
+    lines up with when the event actually happened). `detected_at` is
+    captured on the pad-probe thread BEFORE handing off, so the alert's
+    timestamp reflects the real detection moment regardless of how long
+    this background thread takes to finish.
+
+    The URL is deterministic (track_id + timestamp, no I/O needed to know it).
+    The worker persists the JPEG first, then publishes that URL, preventing
+    Telegram/dashboard consumers from fetching an image that is not yet
+    available without stalling real-time frame processing.
+    """
+    has_snapshot = bool(jpeg_bytes) and len(jpeg_bytes) >= 1000
+    ts_ms = int(detected_at * 1000)
+    snap_url = _alert_snapshot_url(camera_id, track_id, ts_ms) if has_snapshot else None
+
+    def _run():
+        try:
+            # Persist first so Telegram cannot race the API and receive a
+            # transient 404 while trying to fetch the just-published URL.
+            if has_snapshot:
+                _write_alert_snapshot(camera_id, track_id, ts_ms, jpeg_bytes)
+            kafka_producer.send_alert(
+                camera_id=camera_id,
+                track_id=track_id,
+                severity=severity,
+                title=title,
+                message=message,
+                dumped_by_track_id=dumped_by_track_id,
+                dwell_time_s=round(dwell_time_s, 1),
+                bbox=bbox,
+                snapshot_url=snap_url,
+                detected_at=detected_at,
+            )
+        except Exception:
+            logger.exception("Async waste alert fire failed for %s track=%d", camera_id, track_id)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def _derive_camera_alert(camera_id: str, detections: list[dict]) -> dict | None:
@@ -290,7 +393,9 @@ def decorate_for_osd(
     fsm_mgr = ctx.get("fsm_manager")
     track_mgr = ctx.get("track_manager")
     roi_mgr = ctx.get("roi_manager")
-    _osd_pad_map = ctx.get("pad_to_camera", {})
+    _osd_sm = ctx.get("source_manager")
+    _osd_pad_map = _osd_sm.pad_to_camera if _osd_sm is not None else {}
+    _waste_pairs = ctx.get("waste_attribution_pair", {})
 
     frame_meta_list = batch_meta.frame_meta_list
     while frame_meta_list is not None:
@@ -301,8 +406,12 @@ def decorate_for_osd(
 
         camera_id = _osd_pad_map.get(frame_meta.source_id, f"cam-{frame_meta.source_id + 1:02d}")
 
-        # --- First pass: collect carried items ---------------------------------
+        # --- First pass: collect carried items + person positions --------------
+        # Person centers are gathered here so the second pass can attribute
+        # a dumped waste object to the nearest currently-tracked person
+        # without a third traversal.
         carried_items: list[tuple[str, object]] = []
+        person_centers: list[tuple[int, float, float]] = []  # (track_id, cx, cy)
         obj_meta_list = frame_meta.obj_meta_list
         while obj_meta_list is not None:
             try:
@@ -313,6 +422,11 @@ def decorate_for_osd(
             cname = COCO_CLASS_MAP.get(cid)
             if cname is not None and CLASS_CATEGORIES.get(cname) == "carried_item":
                 carried_items.append((cname, obj_meta.rect_params))
+            elif cname == "person":
+                _pt = int(obj_meta.object_id)
+                if _pt != 0xFFFFFFFFFFFFFFFF:
+                    _pr = obj_meta.rect_params
+                    person_centers.append((_pt, _pr.left + _pr.width / 2.0, _pr.top + _pr.height / 2.0))
             try:
                 obj_meta_list = obj_meta_list.next
             except StopIteration:
@@ -364,12 +478,30 @@ def decorate_for_osd(
             if fsm_mgr and track_id != 0xFFFFFFFFFFFFFFFF:
                 is_suspect = fsm_mgr.is_escalated(camera_id, track_id)
 
+            # As soon as attribution connects a person and waste object,
+            # recolour their existing NvOSD boxes.  This changes the original
+            # detector overlay in place; it does not draw a second rectangle.
+            _is_visual_pair = False
+            if track_id != 0xFFFFFFFFFFFFFFFF:
+                for (_pair_camera, _pair_waste_id), _pair in tuple(_waste_pairs.items()):
+                    if _pair_camera != camera_id:
+                        continue
+                    if track_id == _pair_waste_id or track_id == _pair.get("person_id"):
+                        _is_visual_pair = True
+                        break
+
             # --- Build label text ---
             if track_id == 0xFFFFFFFFFFFFFFFF:
                 label = cname
-            elif is_suspect and fsm_state in ("idle", "exited", None):
-                # Suspect highlight — person was escalated, still visible
-                label = f"#{track_id_short:03d} {cname} | SUSPECT"
+            elif is_suspect or _is_visual_pair:
+                # A confirmed dumper's persistent violation marker overrides
+                # transient ROI states such as ENTER/OBSERVE. Keep the linked
+                # person red and explicitly labelled VIOLATED even after they
+                # cross out of the ROI.
+                if category == "waste_object":
+                    label = f"#{track_id_short:03d} {cname} | WASTE VIOLATION"
+                else:
+                    label = f"#{track_id_short:03d} {cname} | VIOLATED"
                 fsm_state = "violation"  # Force red styling
             elif fsm_state == "idle" and not in_roi:
                 # Minimal label for idle objects outside ROI
@@ -411,12 +543,47 @@ def decorate_for_osd(
             elif category == "carried_item" and (is_suspect or fsm_state in ("violation", "alerting", "escalated")):
                 _highlight = True
             if _highlight:
-                rect.has_bg_color = 1
+                # Confirmed/escalated tracks (violation, alerting, escalated,
+                # or already flagged suspect) get a SOLID highlight instead
+                # of blinking. This is deliberate, not just cosmetic: the
+                # evidence keyframe saved for timeline playback
+                # (evidence_writer.capture_violation_keyframe) is a single
+                # still frame grabbed from this same OSD-rendered buffer --
+                # if the highlight were still blinking, roughly half of all
+                # saved evidence frames would happen to land on the "off"
+                # phase and show the dumped item with no highlight at all.
+                # Blink is reserved for the pending/not-yet-confirmed state,
+                # where "flickering to grab attention" is the goal; once
+                # it's confirmed, the highlight needs to reliably show up in
+                # whatever single frame gets persisted as evidence.
+                _confirmed = is_suspect or fsm_state in ("violation", "alerting", "escalated")
+                _blink_on = _confirmed or (int(time.time() * 2) % 2 == 0)
+                rect.has_bg_color = 1 if _blink_on else 0
                 rect.bg_color.red = 1.0
                 rect.bg_color.green = 0.15
                 rect.bg_color.blue = 0.15
-                rect.bg_color.alpha = 0.35
-                rect.border_width = max(border_w, 3)
+                rect.bg_color.alpha = 0.5 if _confirmed else (0.45 if _blink_on else 0.0)
+                rect.border_width = max(border_w, 3) if _blink_on else max(border_w, 1)
+                if _blink_on:
+                    rect.border_color.red = 1.0
+                    rect.border_color.green = 0.0
+                    rect.border_color.blue = 0.0
+                    rect.border_color.alpha = 1.0
+
+            # NOTE: waste dwell -> dumper attribution + alert lives in
+            # extract_metadata() below (the "suspicious proximity" and
+            # "waste dumping confirmed" blocks), not here. A duplicate
+            # threshold-based alert used to also fire from this OSD
+            # decoration function (ctx["waste_alert_fired"], severity
+            # always "warning", no snapshot attached) -- it ran earlier in
+            # the per-buffer processing order than extract_metadata, so it
+            # always won the race and fired first, meaning every waste
+            # alert silently lacked a snapshot_url and duplicated whatever
+            # extract_metadata's FSM-driven alert produced a moment later.
+            # Removed; extract_metadata's version is the complete
+            # implementation (per-camera configurable thresholds, FSM
+            # state integration, one-shot guard via fsm_manager, and a
+            # real snapshot saved via _save_alert_snapshot).
 
             # --- Text params ---
             txt = obj_meta.text_params
@@ -467,57 +634,9 @@ def decorate_for_osd(
         except Exception:
             pass
 
-        # --- ROI bounding rectangle overlay ------------------------------------
-        # Draw a rect encapsulating each ROI polygon so operators can see the
-        # monitored zone on the stream. Cyan dashed border + "ROI: name" label.
-        if roi_mgr is not None:
-            _mw = pipeline_settings.muxer_output_width
-            _mh = pipeline_settings.muxer_output_height
-            roi_polys = roi_mgr.get_polygons(camera_id)
-            for poly in roi_polys:
-                if not poly.points:
-                    continue
-                xs = [p[0] for p in poly.points]
-                ys = [p[1] for p in poly.points]
-                rx = int(min(xs) * _mw)
-                ry = int(min(ys) * _mh)
-                rw = int((max(xs) - min(xs)) * _mw)
-                rh = int((max(ys) - min(ys)) * _mh)
-                if rw < 10 or rh < 10:
-                    continue
-                try:
-                    roi_disp = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
-                    roi_disp.num_rects = 1
-                    rp = roi_disp.rect_params[0]
-                    rp.left = rx
-                    rp.top = ry
-                    rp.width = rw
-                    rp.height = rh
-                    rp.border_width = 2
-                    rp.border_color.red = 0.0
-                    rp.border_color.green = 0.75
-                    rp.border_color.blue = 1.0
-                    rp.border_color.alpha = 0.6
-                    rp.has_bg_color = 0
-                    roi_disp.num_labels = 1
-                    rtp = roi_disp.text_params[0]
-                    rtp.display_text = f"ROI: {poly.name}"
-                    rtp.x_offset = rx
-                    rtp.y_offset = max(0, ry - 18)
-                    rtp.font_params.font_name = "Serif"
-                    rtp.font_params.font_size = 11
-                    rtp.font_params.font_color.red = 0.0
-                    rtp.font_params.font_color.green = 0.75
-                    rtp.font_params.font_color.blue = 1.0
-                    rtp.font_params.font_color.alpha = 0.8
-                    rtp.set_bg_clr = 1
-                    rtp.text_bg_clr.red = 0.0
-                    rtp.text_bg_clr.green = 0.0
-                    rtp.text_bg_clr.blue = 0.0
-                    rtp.text_bg_clr.alpha = 0.5
-                    pyds.nvds_add_display_meta_to_frame(frame_meta, roi_disp)
-                except Exception:
-                    pass
+        # ROI bounding rectangle overlay removed -- baked into every stream,
+        # recording, and saved evidence snapshot (runs pre-nvosd), showing
+        # an unwanted cyan "ROI: name" box on all output images.
 
         try:
             frame_meta_list = frame_meta_list.next
@@ -541,6 +660,22 @@ def decorate_for_osd(
 
 _CAPTURE_DIAG = {"n": 0, "ok": 0, "no_batch": 0, "no_map": 0, "sz_mismatch": 0, "last_err": ""}
 
+# Min gap between JPEG re-encodes per source_id. This probe used to encode
+# every single frame (RGBA->numpy->PIL resize->JPEG, pure CPU, no GPU
+# accel) just to keep a cache warm in case an alert fires -- that's a lot
+# of steady-state CPU/GIL contention spent on frames that are thrown away
+# unused. Alert freshness only needs sub-second granularity (the leaky=1
+# queue fix already guarantees "the latest frame that got encoded", not
+# "every frame"), so throttling the encode itself to this interval cuts
+# CPU roughly proportional to source FPS / this interval while keeping
+# the cached image well within any noticeable staleness.
+_CAPTURE_MIN_INTERVAL_S = 0.2
+_capture_last_ts: dict[int, float] = {}
+
+# Scene-cut (looping test source) detection state -- see capture_frame_probe.
+_SCENE_SIG: dict[int, "object"] = {}  # source_id -> 16x16 grayscale numpy array
+_SCENE_CUT_DIFF_THRESHOLD = 35.0  # mean abs diff (0-255 scale) to call it a cut
+
 
 def capture_frame_probe(
     pad: Gst.Pad,
@@ -548,7 +683,7 @@ def capture_frame_probe(
     ctx: dict,
 ) -> Gst.PadProbeReturn:
     """Pull RGBA bytes from nvvideoconvert's system-mem buffer, encode JPEG,
-    cache per source_id. Runs synchronous with detection metadata."""
+    cache per source_id (throttled to _CAPTURE_MIN_INTERVAL_S)."""
     _CAPTURE_DIAG["n"] += 1
     if _CAPTURE_DIAG["n"] % 50 == 1:
         logger.info("capture probe tick n=%d ok=%d no_batch=%d no_map=%d sz_mismatch=%d last_err=%r",
@@ -564,6 +699,26 @@ def capture_frame_probe(
 
     cache: dict[int, bytes] = ctx.get("frame_jpeg_cache", {})
     if cache is None:
+        return Gst.PadProbeReturn.OK
+
+    now = time.monotonic()
+    # Cheap pass first: is ANY source in this batch actually due for a
+    # re-encode? If not, skip the buffer map + PIL work entirely.
+    due_sources: set[int] = set()
+    frame_meta_list = batch_meta.frame_meta_list
+    while frame_meta_list is not None:
+        try:
+            frame_meta = pyds.NvDsFrameMeta.cast(frame_meta_list.data)
+        except StopIteration:
+            break
+        sid = frame_meta.source_id
+        if now - _capture_last_ts.get(sid, 0.0) >= _CAPTURE_MIN_INTERVAL_S:
+            due_sources.add(sid)
+        try:
+            frame_meta_list = frame_meta_list.next
+        except StopIteration:
+            break
+    if not due_sources:
         return Gst.PadProbeReturn.OK
 
     success, map_info = buf.map(Gst.MapFlags.READ)
@@ -591,6 +746,12 @@ def capture_frame_probe(
                 frame_meta = pyds.NvDsFrameMeta.cast(frame_meta_list.data)
             except StopIteration:
                 break
+            if frame_meta.source_id not in due_sources:
+                try:
+                    frame_meta_list = frame_meta_list.next
+                except StopIteration:
+                    break
+                continue
             batch_id = frame_meta.batch_id
             offset = batch_id * frame_size
             if offset + frame_size > len(raw):
@@ -599,6 +760,26 @@ def capture_frame_probe(
             try:
                 arr = np.frombuffer(raw[offset:offset + frame_size], dtype=np.uint8).reshape((h, w, 4))
                 bgr = arr[:, :, :3]
+
+                # Scene-cut detection: a looping RTSP test source (mediamtx
+                # replaying a file) gives no EOS/discontinuity signal and
+                # RTSP frame numbering stays continuous across the loop, so
+                # this is the only way to notice it. Downsample to a tiny
+                # grayscale grid and compare mean abs diff against the
+                # previous tick's grid for this source -- a real loop cut
+                # (end of clip -> start of clip) produces a large jump;
+                # normal motion/lighting between throttled ticks
+                # (_CAPTURE_MIN_INTERVAL_S apart) does not.
+                _sid = frame_meta.source_id
+                _small = np.asarray(Image.fromarray(bgr).resize((16, 16), Image.BILINEAR).convert("L"), dtype=np.float32)
+                _prev_sig = _SCENE_SIG.get(_sid)
+                if _prev_sig is not None:
+                    _diff = float(np.abs(_small - _prev_sig).mean())
+                    if _diff >= _SCENE_CUT_DIFF_THRESHOLD:
+                        ctx.setdefault("scene_cut_flags", {})[_sid] = True
+                        logger.info("Scene cut detected on source_id=%d (mean diff=%.1f)", _sid, _diff)
+                _SCENE_SIG[_sid] = _small
+
                 img = Image.fromarray(bgr)
                 if img.width > 1280:
                     new_h = int(img.height * (1280 / img.width))
@@ -606,6 +787,7 @@ def capture_frame_probe(
                 out = io.BytesIO()
                 img.save(out, format="JPEG", quality=70)
                 cache[frame_meta.source_id] = out.getvalue()
+                _capture_last_ts[frame_meta.source_id] = now
                 _CAPTURE_DIAG["ok"] += 1
             except Exception as exc:
                 _CAPTURE_DIAG["last_err"] = str(exc)[:200]
@@ -636,6 +818,7 @@ def extract_metadata(
     track_manager: TrackStateManager = ctx["track_manager"]
     roi_manager: ROIManager = ctx["roi_manager"]
     fsm_manager: EventFSMManager = ctx["fsm_manager"]
+    action_fsm = ctx.get("action_fsm")
     frame_batcher: FrameBatcher = ctx["frame_batcher"]
 
     gst_buffer = info.get_buffer()
@@ -653,20 +836,67 @@ def extract_metadata(
         except StopIteration:
             break
 
-        # Look up the actual camera name from the source_id via source_manager
-        _pad_map = ctx.get("pad_to_camera", {}) if isinstance(ctx, dict) else {}
+        # Look up the actual camera name from the source_id via source_manager.
+        # Read the live pad_to_camera property each frame (see comment at
+        # probe_ctx construction) rather than a frozen snapshot dict.
+        _sm = ctx.get("source_manager") if isinstance(ctx, dict) else None
+        _pad_map = _sm.pad_to_camera if _sm is not None else {}
         camera_id = _pad_map.get(frame_meta.source_id, f"cam-{frame_meta.source_id + 1:02d}")
+
+        # Consume a scene-cut flag raised by capture_frame_probe (pixel-diff
+        # based, since a looping RTSP test source gives no EOS/discontinuity
+        # signal). Reset this camera's track/FSM/escalation state so both
+        # person AND waste tracks get fresh lifecycles on the new footage
+        # instead of the same track_id carrying stale dwell/VIOLATION state
+        # across the cut forever.
+        if ctx.get("scene_cut_flags", {}).pop(frame_meta.source_id, False):
+            logger.info("Resetting track/FSM state for %s after scene cut", camera_id)
+            track_manager.reset_camera(camera_id)
+            fsm_manager.reset_camera(camera_id)
+            for _d in (
+                ctx.get("waste_dumper_map"),
+                ctx.get("waste_attribution_pair"),
+                ctx.get("waste_attribution_started_at"),
+                ctx.get("waste_repeat_alert_at"),
+            ):
+                if _d:
+                    for _k in [k for k in _d if k[0] == camera_id]:
+                        del _d[_k]
         # nvinfer outputs bbox coords in muxer resolution, NOT source resolution.
         # source_frame_width may be 1280 (original) while rect.left is in 1920 (muxer).
         # Always use muxer dimensions for normalization.
         frame_width = pipeline_settings.muxer_output_width
         frame_height = pipeline_settings.muxer_output_height
 
+        # Per-camera detection threshold overrides (cameras.detection_config,
+        # set via PATCH /api/cameras/{id}). Missing keys fall back to the
+        # pipeline-wide defaults in pipeline_settings.
+        _rs = ctx.get("roi_syncer") if isinstance(ctx, dict) else None
+        _dcfg = _rs.get_detection_config(camera_id) if _rs is not None else {}
+        _cam_violation_threshold_s = _dcfg.get(
+            "dwell_violation_threshold_s", pipeline_settings.dwell_violation_threshold_s
+        )
+        # Attribution is spatial: on the waste track's FIRST observed frame,
+        # the new waste bbox must be within 40 source-image pixels of a
+        # person's bbox. This is edge-to-edge distance (not center-to-center,
+        # which incorrectly measures from the person's torso). The detector
+        # bboxes are in muxer coordinates, so the gap is converted back to
+        # source-image pixels below before applying this threshold.
+        _cam_waste_proximity_px = _dcfg.get(
+            "waste_proximity_px", pipeline_settings.waste_proximity_px
+        )
+        _cam_waste_proximity_window_s = max(0.0, min(1.0, float(_dcfg.get(
+            "waste_proximity_alert_window_s", pipeline_settings.waste_dump_alert_threshold_s
+        ))))
+
         detections: list[dict] = []
 
-        # --- Pre-scan: collect carried_item bboxes for person association ---
-        # Used to detect "person carrying item" for fast-track FSM trigger
+        # --- Pre-scan: collect carried_item bboxes for person association,
+        # and person bboxes for first-frame "who dumped it" attribution on
+        # waste tracks below. ---
         carried_item_bboxes: list[tuple[str, dict]] = []  # (class_name, bbox_dict)
+        carried_item_rects: list[tuple[float, float, float, float]] = []
+        person_bboxes: list[tuple[int, tuple[float, float, float, float]]] = []
         _prescan = frame_meta.obj_meta_list
         while _prescan is not None:
             try:
@@ -675,18 +905,45 @@ def extract_metadata(
                 break
             _cid = int(_om.class_id)
             _cn = COCO_CLASS_MAP.get(_cid)
+            _r = _om.rect_params
             if _cn and CLASS_CATEGORIES.get(_cn) == "carried_item":
-                _r = _om.rect_params
+                carried_item_rects.append((
+                    _r.left, _r.top, _r.left + _r.width, _r.top + _r.height,
+                ))
                 carried_item_bboxes.append((_cn, {
                     "x": _r.left / (frame_meta.source_frame_width or pipeline_settings.input_width),
                     "y": _r.top / (frame_meta.source_frame_height or pipeline_settings.input_height),
                     "w": _r.width / (frame_meta.source_frame_width or pipeline_settings.input_width),
                     "h": _r.height / (frame_meta.source_frame_height or pipeline_settings.input_height),
                 }))
+            elif _cn == "person":
+                _pt = None if int(_om.object_id) == 0xFFFFFFFFFFFFFFFF else int(_om.object_id)
+                if _pt is not None:
+                    person_bboxes.append((
+                        _pt,
+                        (_r.left, _r.top, _r.left + _r.width, _r.top + _r.height),
+                    ))
             try:
                 _prescan = _prescan.next
             except StopIteration:
                 break
+
+        # Track which current-frame people overlap a carried item. This is
+        # stronger release evidence than generic proximity and lets a new
+        # placement episode be recognised even when ByteTrack reuses an old,
+        # previously-unmatched waste ID across a looping/occluded sequence.
+        _carrying_person_ids: set[int] = set()
+        for _pid0, _pbox0 in person_bboxes:
+            for _ibox0 in carried_item_rects:
+                _ix1 = max(_pbox0[0], _ibox0[0])
+                _iy1 = max(_pbox0[1], _ibox0[1])
+                _ix2 = min(_pbox0[2], _ibox0[2])
+                _iy2 = min(_pbox0[3], _ibox0[3])
+                _iarea = max(0.0, _ibox0[2] - _ibox0[0]) * max(0.0, _ibox0[3] - _ibox0[1])
+                if _iarea > 0 and _ix2 > _ix1 and _iy2 > _iy1:
+                    if ((_ix2 - _ix1) * (_iy2 - _iy1)) / _iarea > 0.3:
+                        _carrying_person_ids.add(_pid0)
+                        break
 
         # Diagnostic: count ALL raw nvinfer objects before any filtering,
         # so we can tell at a glance whether nvinfer is producing 0 boxes
@@ -727,10 +984,182 @@ def extract_metadata(
                     # bbox center (normalized)
                     bbox_center_x = bbox_dict["x"] + bbox_dict["w"] / 2
                     bbox_center_y = bbox_dict["y"] + bbox_dict["h"] / 2
-                    in_roi = roi_manager.is_in_any_roi(camera_id, bbox_center_x, bbox_center_y)
+                    # ROI presence/dwell tracking runs for person AND waste.
+                    # Carried items (bag) still don't get their own dwell/FSM
+                    # -- a bag sitting in the zone geometrically isn't a
+                    # person occupying it, and it flows through
+                    # carried_item_bboxes for person-carrying-item
+                    # association above, independent of in_roi. Waste DOES
+                    # need its own dwell tracking (previously excluded
+                    # entirely, so a dumped item's own on-screen timer/FSM
+                    # state never advanced past IDLE no matter how long it
+                    # sat there).
+                    in_roi = (
+                        class_name in ("person", "waste")
+                        and roi_manager.is_in_any_roi(camera_id, bbox_center_x, bbox_center_y)
+                    )
 
                     track_info = track_manager.update_track(camera_id, track_id, class_name, bbox_dict, in_roi)
 
+                    # Capture attribution on a new waste track's first observed
+                    # frame. A recycled unmatched waste ID gets one safe retry
+                    # only when a current-frame person is visibly carrying an
+                    # item; generic later bystanders remain ineligible. Only
+                    # current-frame tracker metadata is considered.
+                    _dumper_map = ctx.setdefault("waste_dumper_map", {})
+                    _attribution_started_map = ctx.setdefault("waste_attribution_started_at", {})
+                    _waste_key = (camera_id, track_id)
+                    _retry_recycled_waste = (
+                        _waste_key in _dumper_map
+                        and _dumper_map[_waste_key] is None
+                        and bool(_carrying_person_ids)
+                    )
+                    if (
+                        class_name == "waste"
+                        and (_waste_key not in _dumper_map or _retry_recycled_waste)
+                        and not fsm_manager.is_escalated(camera_id, track_id)
+                    ):
+                        _wbox0 = (
+                            rect.left, rect.top,
+                            rect.left + rect.width, rect.top + rect.height,
+                        )
+                        _best_d0, _best_pid0, _best_pbox0 = None, None, None
+                        _source_w0 = float(frame_meta.source_frame_width or frame_width)
+                        _source_h0 = float(frame_meta.source_frame_height or frame_height)
+                        _x_to_source0 = _source_w0 / float(frame_width)
+                        _y_to_source0 = _source_h0 / float(frame_height)
+                        for _pid0, _pbox0 in person_bboxes:
+                            # Retrying an old unmatched waste ID is allowed
+                            # only for a person carrying an item on this frame;
+                            # this prevents a later ordinary bystander from
+                            # inheriting the incident.
+                            if _retry_recycled_waste and _pid0 not in _carrying_person_ids:
+                                continue
+                            _dx0 = max(_pbox0[0] - _wbox0[2], _wbox0[0] - _pbox0[2], 0.0)
+                            _dy0 = max(_pbox0[1] - _wbox0[3], _wbox0[1] - _pbox0[3], 0.0)
+                            # Calibrate from muxer coordinates to the source
+                            # image: "20px" now means 20px in the camera frame
+                            # regardless of streammux scaling/resolution.
+                            _d0 = math.hypot(
+                                _dx0 * _x_to_source0,
+                                _dy0 * _y_to_source0,
+                            )
+                            if _best_d0 is None or _d0 < _best_d0:
+                                _best_d0, _best_pid0, _best_pbox0 = _d0, _pid0, _pbox0
+                        if _best_d0 is None or _best_d0 > _cam_waste_proximity_px:
+                            _best_pid0, _best_pbox0 = None, None
+                        # Freeze the result for this placement attempt.
+                        _dumper_map[_waste_key] = _best_pid0
+                        if _best_pid0 is not None:
+                            # The 500ms persistence clock belongs to this
+                            # placement episode, not the possibly-recycled
+                            # waste track's original first_seen timestamp.
+                            _attribution_started_map[_waste_key] = time.monotonic()
+                            ctx.setdefault("waste_attribution_pair", {})[_waste_key] = {
+                                "person_id": _best_pid0,
+                                "waste_id": track_id,
+                                "person_bbox": {
+                                    "x": _best_pbox0[0] / frame_width,
+                                    "y": _best_pbox0[1] / frame_height,
+                                    "w": (_best_pbox0[2] - _best_pbox0[0]) / frame_width,
+                                    "h": (_best_pbox0[3] - _best_pbox0[1]) / frame_height,
+                                },
+                                "waste_bbox": dict(bbox_dict),
+                            }
+                            logger.info(
+                                "WASTE ATTRIBUTION CAPTURE %s frame=%d waste=%d person=%d "
+                                "gap=%.1fpx threshold=%.1fpx source=%dx%d",
+                                camera_id, int(frame_meta.frame_num), track_id, _best_pid0,
+                                _best_d0, _cam_waste_proximity_px,
+                                int(_source_w0), int(_source_h0),
+                            )
+                        else:
+                            logger.info(
+                                "WASTE ATTRIBUTION CAPTURE %s frame=%d waste=%d person=none "
+                                "nearest_gap=%s threshold=%.1fpx source=%dx%d",
+                                camera_id, int(frame_meta.frame_num), track_id,
+                                "n/a" if _best_d0 is None else f"{_best_d0:.1f}px",
+                                _cam_waste_proximity_px,
+                                int(_source_w0), int(_source_h0),
+                            )
+
+                    # Ground-confirmed violation: fire the full confirmed/
+                    # critical alert once a waste object has persisted for
+                    # _cam_waste_proximity_window_s (default
+                    # 500ms, config: waste_proximity_alert_window_s) -- NOT at
+                    # age_s==0 (raw track creation), since a
+                    # single-frame detector blip can spawn a track_id that
+                    # never really represents an object on the ground.
+                    # Also NOT the full 15s dwell_violation_threshold_s,
+                    # which is for PERSON loitering/dwell behavior
+                    # (unrelated FSM, still intact below) -- a waste
+                    # object doesn't need 15s to confirm it's a violation,
+                    # just long enough to debounce detector noise.
+                    if (
+                        class_name == "waste"
+                        and _attribution_started_map.get(_waste_key) is not None
+                        and time.monotonic() - _attribution_started_map[_waste_key]
+                            >= _cam_waste_proximity_window_s
+                        and _dumper_map.get(_waste_key) is not None
+                        and not fsm_manager.is_escalated(camera_id, track_id)
+                    ):
+                        # This paired spatial/persistence rule overrides the
+                        # normal dwell FSM for BOTH tracks. The waste and its
+                        # frozen first-frame person turn solid red together
+                        # within 500ms (hard-capped at 1s for camera overrides).
+                        fsm_manager.force_violation(
+                            camera_id, track_id, class_name,
+                            dwell_time_s=track_info.dwell_time_s,
+                            bbox=bbox_dict,
+                        )
+                        # Seed the periodic-reminder timer here too -- same
+                        # bug class as the dwell-confirm path: an unseeded
+                        # entry defaults to 0.0, so the periodic-reminder
+                        # check fires again as soon as the FSM naturally
+                        # reaches VIOLATION/ALERTING (dwell_violation_
+                        # threshold_s later), producing a second alert
+                        # ~15-25s after this immediate one instead of
+                        # waiting a full waste_repeat_alert_interval_s.
+                        ctx.setdefault("waste_repeat_alert_at", {})[(camera_id, track_id)] = time.monotonic()
+                        _cache = ctx.get("frame_jpeg_cache", {})
+                        # Use the proximity attribution captured during the
+                        # 500ms placement window, never a later bystander.
+                        _nearest_pid = _dumper_map.get((camera_id, track_id))
+                        if _nearest_pid is not None:
+                            # The dumper remains a suspect after crossing the
+                            # ROI boundary; only losing the track/explicit
+                            # resolution clears the persistent marker.
+                            _person_track = track_manager.get_track(camera_id, _nearest_pid)
+                            _person_bbox = (
+                                _person_track.bbox_history[-1]
+                                if _person_track is not None and _person_track.bbox_history
+                                else None
+                            )
+                            fsm_manager.force_violation(
+                                camera_id, _nearest_pid, "person",
+                                dwell_time_s=(
+                                    _person_track.dwell_time_s if _person_track is not None else 0.0
+                                ),
+                                bbox=_person_bbox,
+                            )
+                        # The paired-alert condition above guarantees an ID;
+                        # never send a misleading "unidentified person" alert.
+                        _who = f"person #{_nearest_pid % 1000:03d}"
+                        _fire_waste_alert_async(
+                            kafka_producer, camera_id, track_id,
+                            _cache.get(frame_meta.source_id),
+                            severity="critical",
+                            title="Waste dumping confirmed",
+                            message=f"Waste dumped by {_who} — item detected in monitored zone",
+                            dumped_by_track_id=_nearest_pid,
+                            dwell_time_s=track_info.dwell_time_s,
+                            bbox=bbox_dict,
+                            detected_at=time.time(),
+                        )
+                        logger.info(
+                            "WASTE ALERT (immediate) %s track=%d: dumped by %s",
+                            camera_id, track_id, _who,
+                        )
                     # Check if this person has a carried_item overlapping
                     has_carried = False
                     if class_name == "person" and carried_item_bboxes:
@@ -746,13 +1175,32 @@ def extract_metadata(
                                     has_carried = True
                                     break
 
-                    fsm_event = fsm_manager.update(
-                        camera_id, track_id, class_name,
-                        in_roi=in_roi,
-                        dwell_time_s=track_info.dwell_time_s,
-                        bbox=bbox_dict,
-                        has_carried_item=has_carried,
-                    )
+                    # Waste does not participate in the legacy 15-second
+                    # ROI-dwell FSM. Its only violation path is the paired
+                    # first-frame person association + <=1s persistence rule
+                    # above; otherwise an unmatched waste track would turn
+                    # red 15 seconds later and look like a delayed alert.
+                    if class_name == "waste":
+                        fsm_event = None
+                    elif action_fsm is not None:
+                        fsm_event = action_fsm.update(
+                            camera_id, track_id, class_name,
+                            obj_meta=obj_meta,
+                            in_roi=in_roi,
+                            dwell_time_s=track_info.dwell_time_s,
+                            bbox=bbox_dict,
+                            has_carried_item=has_carried,
+                            violation_threshold_s=_cam_violation_threshold_s,
+                        )
+                    else:
+                        fsm_event = fsm_manager.update(
+                            camera_id, track_id, class_name,
+                            in_roi=in_roi,
+                            dwell_time_s=track_info.dwell_time_s,
+                            bbox=bbox_dict,
+                            violation_threshold_s=_cam_violation_threshold_s,
+                            has_carried_item=has_carried,
+                        )
 
                     if fsm_event:
                         kafka_producer.send_event(fsm_event)
@@ -839,10 +1287,90 @@ def extract_metadata(
                                     vehicle_bbox=bbox_dict,
                                     class_name=class_name,
                                 )
-
+                            elif (
+                                class_name == "waste"
+                                and not fsm_manager.is_escalated(camera_id, track_id)
+                                and ctx.get("waste_dumper_map", {}).get((camera_id, track_id)) is not None
+                            ):
+                                # Dwell-confirmed dumped item -- only reached
+                                # for a track that somehow wasn't already
+                                # escalated by the immediate-fire check above
+                                # (e.g. detector missed it on the very first
+                                # frames it appeared). Guarded on
+                                # is_escalated so it never duplicates the
+                                # immediate alert, which now fires the
+                                # moment the waste object is first detected
+                                # instead of waiting for this 15s dwell
+                                # confirmation. Attribution was frozen when
+                                # this waste track first appeared; the person
+                                # nearest now may only be a bystander.
+                                fsm_manager.force_violation(
+                                    camera_id, track_id, class_name,
+                                    dwell_time_s=track_info.dwell_time_s,
+                                    bbox=bbox_dict,
+                                )
+                                # Use only the first-seen attribution. A
+                                # cached None deliberately means the first
+                                # frame had no attributable person.
+                                _nearest_pid = ctx.get("waste_dumper_map", {}).get((camera_id, track_id))
+                                if _nearest_pid is not None:
+                                    _person_track = track_manager.get_track(camera_id, _nearest_pid)
+                                    _person_bbox = (
+                                        _person_track.bbox_history[-1]
+                                        if _person_track is not None and _person_track.bbox_history
+                                        else None
+                                    )
+                                    fsm_manager.force_violation(
+                                        camera_id, _nearest_pid, "person",
+                                        dwell_time_s=(
+                                            _person_track.dwell_time_s if _person_track is not None else 0.0
+                                        ),
+                                        bbox=_person_bbox,
+                                    )
+                                _who = f"person #{_nearest_pid % 1000:03d}"
+                                _msg = (
+                                    f"Waste dumped by {_who} — item remains in monitored zone"
+                                )
+                                _cache = ctx.get("frame_jpeg_cache", {})
+                                _fire_waste_alert_async(
+                                    kafka_producer, camera_id, track_id,
+                                    _cache.get(frame_meta.source_id),
+                                    severity="critical",
+                                    title="Waste dumping confirmed",
+                                    message=_msg,
+                                    dumped_by_track_id=_nearest_pid,
+                                    dwell_time_s=track_info.dwell_time_s,
+                                    bbox=bbox_dict,
+                                    detected_at=time.time(),
+                                )
+                                logger.info(
+                                    "WASTE ALERT %s track=%d: %s", camera_id, track_id, _msg
+                                )
+                                # Seed the periodic-reminder timer now -- it
+                                # was never touched by this confirm-alert
+                                # path before, so a brand-new track's entry
+                                # defaulted to 0.0 and the periodic-reminder
+                                # check (below) fired immediately on the
+                                # same or next tick, sending a duplicate
+                                # Telegram message ~1s after the confirm
+                                # alert instead of waiting a full
+                                # waste_repeat_alert_interval_s.
+                                ctx.setdefault("waste_repeat_alert_at", {})[(camera_id, track_id)] = time.monotonic()
                         # Flush partial batch on track exit — keep batcher clean but
                         # do NOT dispatch VLM for non-escalated tracks (noise).
                         if fsm_event.state.value == "exited":
+                            # A dumper leaving the ROI does not end the waste
+                            # incident or reset its 500ms placement timer.
+                            if CLASS_CATEGORIES.get(class_name) == "waste_object":
+                                # class_name is the raw COCO label (e.g.
+                                # "bottle", "cup"), never the literal string
+                                # "waste" -- the old `== "waste"` check never
+                                # matched a real detection, so this map entry
+                                # was never cleaned up on the waste object's
+                                # own exit.
+                                ctx.get("waste_dumper_map", {}).pop((camera_id, track_id), None)
+                                ctx.get("waste_attribution_pair", {}).pop((camera_id, track_id), None)
+                                ctx.get("waste_attribution_started_at", {}).pop((camera_id, track_id), None)
                             frame_batcher.on_track_exit(camera_id, track_id)
                             # Finalize evidence in background — finalize sleeps
                             # SEGMENT_SECS+2 to flush the trailing segment, so
@@ -874,6 +1402,57 @@ def extract_metadata(
                     detection_dict["fsm_state"] = _current_fsm
                     # Suspect flag — persists after leaving ROI until track lost
                     detection_dict["is_suspect"] = fsm_manager.is_escalated(camera_id, track_id)
+
+                    # --- Periodic re-alert for a still-unresolved waste VIOLATION ---
+                    # The confirmed-dump alert above (kafka_producer.send_alert,
+                    # severity="critical") fires exactly once, on the FSM's
+                    # transition INTO VIOLATION -- fsm_manager.update() only
+                    # returns an FSMEvent on a state CHANGE, never for a track
+                    # that's still sitting in the same state frame after
+                    # frame. That's correct for a real, one-time dump, but a
+                    # dumped item that's still there 5 minutes later and
+                    # nobody's dealt with it should keep reminding operators,
+                    # not alert once and go silent forever. (Also literally
+                    # what surfaced this: this camera's RTSP source is a
+                    # looping test video -- DeepStream's tracker doesn't
+                    # detect the loop as a scene change, so the same
+                    # track_id and its VIOLATION state persist indefinitely
+                    # across every loop instead of resetting.)
+                    if (
+                        CLASS_CATEGORIES.get(class_name, "unknown") == "waste_object"
+                        and _current_fsm in ("violation", "alerting", "escalated")
+                        and track_id != 0xFFFFFFFFFFFFFFFF
+                        and ctx.get("waste_dumper_map", {}).get((camera_id, track_id)) is not None
+                    ):
+                        _repeat_key = (camera_id, track_id)
+                        _repeat_state = ctx.setdefault("waste_repeat_alert_at", {})
+                        _now_mono = time.monotonic()
+                        _last_fire = _repeat_state.get(_repeat_key, 0.0)
+                        if _now_mono - _last_fire >= pipeline_settings.waste_repeat_alert_interval_s:
+                            _repeat_state[_repeat_key] = _now_mono
+                            # Reminders retain the original placement-time
+                            # attribution; never substitute a later bystander.
+                            _nid2 = ctx.get("waste_dumper_map", {}).get(_repeat_key)
+                            _who2 = f"person #{_nid2 % 1000:03d}"
+                            _cache2 = ctx.get("frame_jpeg_cache", {})
+                            _fire_waste_alert_async(
+                                kafka_producer, camera_id, track_id,
+                                _cache2.get(frame_meta.source_id),
+                                severity="critical",
+                                title="Waste dumping confirmed",
+                                message=(
+                                    f"Reminder: waste dumped by {_who2} still not cleared "
+                                    f"in monitored zone"
+                                ),
+                                dumped_by_track_id=_nid2,
+                                dwell_time_s=track_info.dwell_time_s,
+                                bbox=bbox_dict,
+                                detected_at=time.time(),
+                            )
+                            logger.info(
+                                "WASTE ALERT (repeat) %s track=%d: still unresolved after %.0fs",
+                                camera_id, track_id, track_info.dwell_time_s,
+                            )
 
                     # Track evidence bbox path for active events
                     _ew = ctx.get("evidence_writer")
@@ -970,8 +1549,17 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     pipeline.add(streammux)
 
     # --- Inference (RF-DETR via nvinfer) ------------------------------------
+    # WW_USE_SEG_MODEL=1 switches the primary GIE to RF-DETR-Seg-Nano
+    # (bag/person/waste, instance-segmentation, network-type=3). Default
+    # OFF: keep the known-working 2-class bbox model
+    # (nvinfer_rfdetr.txt) live unless explicitly opted in. See
+    # pipeline/configs/nvinfer_rfdetr_seg.txt for the new model's
+    # class-index/mask-decode notes.
+    use_seg_model = os.environ.get("WW_USE_SEG_MODEL", "0") == "1"
+    pgie_config = "configs/nvinfer_rfdetr_seg.txt" if use_seg_model else "configs/nvinfer_rfdetr.txt"
+    logger.info(f"primary_infer config: {pgie_config} (WW_USE_SEG_MODEL={'1' if use_seg_model else '0'})")
     nvinfer = make_element("nvinfer", "primary_infer")
-    nvinfer.set_property("config-file-path", "configs/nvinfer_rfdetr.txt")
+    nvinfer.set_property("config-file-path", pgie_config)
     pipeline.add(nvinfer)
 
     # --- Object tracker (ByteTrack via nvtracker) ---------------------------
@@ -988,6 +1576,15 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     if "enable-batch-process" in _tracker_props:
         nvtracker.set_property("enable-batch-process", 1)
     pipeline.add(nvtracker)
+
+    # --- Action classification (SGIE, operates on tracked PGIE objects) -----
+    # Runs after the tracker so `operate-on-gie-id=1`/tracked object_id are
+    # stable. Feeds ActionAwareFSM's fast-alert path (see
+    # action_fsm_integration.py) — previously built but never linked into
+    # the pipeline, so the FSM only ever saw dwell time, never actions.
+    action_sgie = make_element("nvinfer", "action_classifier_sgie")
+    action_sgie.set_property("config-file-path", "configs/nvinfer_action_sgie.txt")
+    pipeline.add(action_sgie)
 
     # --- Analytics (ROI / line-crossing via nvdsanalytics) ------------------
     nvdsanalytics = make_element("nvdsanalytics", "analytics")
@@ -1090,7 +1687,14 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     # detection metadata; the extract_metadata probe (branch 2) reads
     # the cache when it needs to attach a frame to a VLM request.
     queue_capture = make_element("queue", "queue_capture")
-    queue_capture.set_property("leaky", 2)
+    # leaky=1 (upstream): when full, drop the OLDEST queued buffer so the
+    # JPEG-encode probe (PIL resize+encode is comparatively slow, see
+    # capture_frame_probe) always processes the freshest frame available
+    # instead of falling behind and serving a stale cached snapshot for
+    # alert evidence. leaky=2 (downstream) did the opposite -- it dropped
+    # incoming NEW frames and kept old ones queued, which is why the saved
+    # evidence image lagged behind the actual moment of the alert.
+    queue_capture.set_property("leaky", 1)
     queue_capture.set_property("max-size-buffers", 3)
     queue_capture.set_property("max-size-bytes", 0)
     queue_capture.set_property("max-size-time", 0)
@@ -1109,15 +1713,18 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
         pipeline.add(elem)
 
     # --- Link main chain ----------------------------------------------------
-    # streammux -> nvinfer -> nvtracker -> nvdsanalytics -> [wastewatchmeta] -> nvosd -> tee
+    # streammux -> nvinfer -> nvtracker -> action_sgie -> nvdsanalytics -> [wastewatchmeta] -> nvosd -> tee
     if not streammux.link(nvinfer):
         logger.critical("Failed to link streammux -> nvinfer")
         sys.exit(1)
     if not nvinfer.link(nvtracker):
         logger.critical("Failed to link nvinfer -> nvtracker")
         sys.exit(1)
-    if not nvtracker.link(nvdsanalytics):
-        logger.critical("Failed to link nvtracker -> nvdsanalytics")
+    if not nvtracker.link(action_sgie):
+        logger.critical("Failed to link nvtracker -> action_sgie")
+        sys.exit(1)
+    if not action_sgie.link(nvdsanalytics):
+        logger.critical("Failed to link action_sgie -> nvdsanalytics")
         sys.exit(1)
 
     if ww_meta_elem is not None:
@@ -1195,10 +1802,19 @@ def main() -> None:
     # capture_frame_probe in microseconds (Python encodes RGBA → JPEG with
     # PIL), read by extract_metadata when OBSERVE/VIOLATION fires.
     frame_jpeg_cache: dict[int, bytes] = {}
+    # Shared with capture_frame_probe (separate tee branch, separate probe
+    # ctx dict) -- set True per source_id when a scene-cut is detected,
+    # consumed (and cleared) by extract_metadata to reset that camera's
+    # track/FSM state. See capture_frame_probe's scene-cut detection block.
+    scene_cut_flags: dict[int, bool] = {}
+    # Shared between metadata attribution and the pre-NvOSD decoration probe.
+    # It lets the original yellow box turn red on the first frame after the
+    # person/waste connection is established, before the 500ms alert fires.
+    waste_attribution_pair: dict[tuple[str, int], dict] = {}
 
     kafka_producer = PipelineKafkaProducer()
     vlm_client = VLMGrpcClient()
-    health = CameraHealth(timeout_s=30.0, max_retries=5)
+    health = CameraHealth(timeout_s=30.0)
     source_manager = SourceManager(pipeline, streammux)
 
     # Evidence writer — manages JSON metadata, keyframes, and recording retention
@@ -1225,6 +1841,7 @@ def main() -> None:
 
         probe_ctx = create_probe_context(kafka_producer, health)
         probe_ctx["frame_batcher"] = frame_batcher
+        probe_ctx["waste_attribution_pair"] = waste_attribution_pair
         fakesink_sink_pad.add_probe(
             Gst.PadProbeType.BUFFER,
             extract_metadata_v2,
@@ -1236,6 +1853,7 @@ def main() -> None:
         track_manager = None
         roi_manager = None
         fsm_manager = None
+        action_fsm = None
         roi_preprocessor = None
 
         logger.info("Metadata probe: using optimized extract_metadata_v2 (C plugin handles ROI/FSM/tracking)")
@@ -1263,6 +1881,14 @@ def main() -> None:
             observe_threshold_s=pipeline_settings.dwell_observe_threshold_s,
             violation_threshold_s=pipeline_settings.dwell_violation_threshold_s,
         )
+        # Action-classifier fast path — wraps fsm_manager so a confident
+        # dumping_waste classification from action_sgie skips the dwell
+        # timer entirely, and suspicious actions (carrying_object,
+        # loading_unloading) temporarily lower the OBSERVE threshold.
+        from app.action_classifier import ActionClassifierExtractor
+        from app.action_fsm_integration import ActionAwareFSM
+        action_extractor = ActionClassifierExtractor()
+        action_fsm = ActionAwareFSM(fsm_manager, action_extractor)
         roi_preprocessor = ROIPreprocessor(
             roi_manager,
             frame_width=pipeline_settings.input_width,
@@ -1276,11 +1902,23 @@ def main() -> None:
             "track_manager": track_manager,
             "roi_manager": roi_manager,
             "fsm_manager": fsm_manager,
+            "action_fsm": action_fsm,
             "roi_preprocessor": roi_preprocessor,
             "frame_batcher": frame_batcher,
-            "pad_to_camera": source_manager.pad_to_camera,
+            # NOT a snapshot: pad_to_camera is a computed property (fresh
+            # dict per access) on source_manager. Storing source_manager.
+            # pad_to_camera here would freeze it at pipeline-startup time —
+            # empty, since no camera is registered yet on cold start — and
+            # every later dynamic camera add would never be reflected,
+            # silently falling back to the "cam-XX" default below and
+            # mislabeling every real camera's metadata. Store the manager
+            # itself so callers read the live property each frame.
+            "source_manager": source_manager,
             "evidence_writer": evidence_writer,
             "frame_jpeg_cache": frame_jpeg_cache,
+            "roi_syncer": roi_syncer,
+            "scene_cut_flags": scene_cut_flags,
+            "waste_attribution_pair": waste_attribution_pair,
         }
         fakesink_sink_pad.add_probe(
             Gst.PadProbeType.BUFFER,
@@ -1294,7 +1932,7 @@ def main() -> None:
             capture_sink.add_probe(
                 Gst.PadProbeType.BUFFER,
                 capture_frame_probe,
-                {"frame_jpeg_cache": frame_jpeg_cache},
+                {"frame_jpeg_cache": frame_jpeg_cache, "scene_cut_flags": scene_cut_flags},
             )
             logger.info("Frame capture probe attached to fakesink_capture.sink")
 
@@ -1313,7 +1951,13 @@ def main() -> None:
             osd_sink.add_probe(
                 Gst.PadProbeType.BUFFER,
                 decorate_for_osd,
-                {"fsm_manager": fsm_manager, "track_manager": track_manager, "roi_manager": roi_manager, "pad_to_camera": source_manager.pad_to_camera},
+                {
+                    "fsm_manager": fsm_manager,
+                    "track_manager": track_manager,
+                    "roi_manager": roi_manager,
+                    "source_manager": source_manager,
+                    "waste_attribution_pair": waste_attribution_pair,
+                },
             )
             logger.info("OSD decoration probe attached to nvdsosd.sink")
 
@@ -1327,17 +1971,24 @@ def main() -> None:
         poll_interval_s=10.0,
     )
 
-    # Legacy stream watcher kept for backward compatibility (used in health_check_cb)
-    stream_watcher = StreamWatcher(
-        source_manager=source_manager,
-        health=health,
-        poll_interval_s=10.0,
-        probe_timeout_s=5.0,
+    # Redis command channel — backend publishes add_camera/remove_camera/
+    # update_camera/clear_violation/etc, this pipeline process consumes
+    # them. Previously built but never instantiated here, so dynamic
+    # camera management from the UI silently did nothing: the backend's
+    # POST /api/cameras published to Redis, but nothing was listening.
+    command_receiver = CommandReceiver(redis_url=os.environ.get("WW_REDIS_URL", "redis://localhost:6379/0"))
+    command_handler = CommandHandler(
+        fsm_manager=fsm_manager,
+        kafka_producer=kafka_producer,
+        connection_monitor=connection_monitor,
+        frame_batcher=frame_batcher,
     )
+    command_receiver.start()
 
     # Load initial sources from WW_SOURCES env var
     # Format: "cam-01=rtsp://mediamtx:8554/cam-01,cam-02=rtsp://mediamtx:8554/cam-02"
     sources_env = os.environ.get("WW_SOURCES", "")
+    static_cam_ids: set[str] = set()
     if sources_env:
         for entry in sources_env.split(","):
             entry = entry.strip()
@@ -1349,10 +2000,35 @@ def main() -> None:
             uri = uri.strip()
             if cam_id and uri:
                 connection_monitor.register_camera(cam_id, uri)
+                static_cam_ids.add(cam_id)
     else:
         logger.warning(
-            "No WW_SOURCES configured — pipeline will run with no input sources."
+            "No WW_SOURCES configured — checking backend for dynamically-added cameras."
         )
+
+    # Restore dynamically-added cameras (created via POST /api/cameras ->
+    # add_camera Redis command while a previous pipeline process was
+    # running) from the backend on startup. Without this, ConnectionMonitor
+    # starts with an empty _connections dict every restart and any camera
+    # added through the UI is silently dropped from the pipeline forever
+    # until someone re-adds it -- its ROI still gets polled by ROISyncer
+    # (which reads straight from the backend), giving the false impression
+    # it's still tracked, but it was never re-registered as an input source.
+    try:
+        import httpx
+        api_base = os.environ.get("WW_API_BASE", "http://api:8080")
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.get(f"{api_base}/api/cameras")
+            resp.raise_for_status()
+            for cam in resp.json() or []:
+                cam_id = cam.get("id")
+                uri = cam.get("stream_url")
+                if not cam_id or not uri or cam_id in static_cam_ids:
+                    continue
+                logger.info("Restoring dynamically-added camera %s (%s) from backend", cam_id, uri)
+                connection_monitor.register_camera(cam_id, uri)
+    except Exception:
+        logger.exception("Failed to restore dynamically-added cameras from backend")
 
     # Initial ROI preprocessor update after sources are registered (fallback path only)
     if roi_preprocessor is not None:
@@ -1378,8 +2054,40 @@ def main() -> None:
             loop.quit()
         elif msg_type == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
-            logger.error("GStreamer error: %s | debug: %s", err.message, debug)
-            loop.quit()
+            src_name = message.src.get_name() if message.src is not None else ""
+            logger.error("GStreamer error: %s | debug: %s | src=%s", err.message, debug, src_name)
+            # A single dead/misconfigured camera's RTSP source (its
+            # URIDecodeBin is named "src_<camera_id>", see source_manager.py)
+            # or its output rtspclientsink (named "rtspsink_<camera_id>",
+            # see output_manager.py — e.g. mediamtx being briefly
+            # unreachable when a camera's output branch tries to connect)
+            # must not take down the whole pipeline -- every other camera
+            # would go dark too. Isolate the failure to that one camera and
+            # keep running; only a truly pipeline-wide error (not tied to a
+            # per-camera element) is fatal.
+            if src_name.startswith("src_"):
+                cam_id = src_name[len("src_"):]
+                logger.error(
+                    "Source error isolated to camera %s — removing that source, pipeline continues",
+                    cam_id,
+                )
+                try:
+                    connection_monitor.unregister_camera(cam_id)
+                except Exception:
+                    logger.exception("Failed to remove failed camera %s after source error", cam_id)
+            elif src_name.startswith("rtspsink_"):
+                cam_id = src_name[len("rtspsink_"):]
+                logger.error(
+                    "Output sink error isolated to camera %s — removing that camera, pipeline continues",
+                    cam_id,
+                )
+                try:
+                    connection_monitor.unregister_camera(cam_id)
+                except Exception:
+                    logger.exception("Failed to remove failed camera %s after output sink error", cam_id)
+            else:
+                logger.critical("Fatal pipeline-wide GStreamer error — shutting down")
+                loop.quit()
         elif msg_type == Gst.MessageType.WARNING:
             warn, debug = message.parse_warning()
             logger.warning("GStreamer warning: %s | debug: %s", warn.message, debug)
@@ -1389,19 +2097,43 @@ def main() -> None:
 
     # Periodic health check — runs every 10 seconds
     def health_check_cb() -> bool:
+        # Drain and apply any queued commands from the backend (add/remove/
+        # update camera, clear violation, etc) before the rest of this
+        # tick's housekeeping, so a just-added camera is picked up promptly.
+        for cmd in command_receiver.drain():
+            try:
+                command_handler.handle(cmd)
+            except Exception:
+                logger.exception("Failed to handle command: %s", cmd)
+
         # Connection monitor handles health checks, reconnection, and
         # per-camera output stream lifecycle
         connection_monitor.poll()
 
         if fsm_manager is not None and track_manager is not None:
-            # Python fallback path — prune stale FSM entries and lost tracks
-            stale_events = fsm_manager.prune_stale()
+            # Python fallback path — prune stale FSM entries and lost tracks.
+            # Must go through action_fsm (when action classification is
+            # active) rather than the raw fsm_manager directly — timeout
+            # pruning bypasses ActionAwareFSM.update(), so calling the raw
+            # manager here leaked entries in action_fsm._fast_alerted and
+            # action_extractor's per-track history for any track that timed
+            # out instead of exiting normally through in_roi=False.
+            if action_fsm is not None:
+                stale_events = action_fsm.prune_stale()
+            else:
+                stale_events = fsm_manager.prune_stale()
             for evt in stale_events:
                 kafka_producer.send_event(evt)
             lost_tracks = track_manager.prune_lost()
             # Clear suspect highlight when tracker fully loses the object
             for lost in lost_tracks:
                 fsm_manager.clear_escalated(lost.camera_id, lost.track_id)
+                if CLASS_CATEGORIES.get(lost.class_name) == "waste_object":
+                    _lost_key = (lost.camera_id, lost.track_id)
+                    probe_ctx.get("waste_dumper_map", {}).pop(_lost_key, None)
+                    probe_ctx.get("waste_attribution_pair", {}).pop(_lost_key, None)
+                    probe_ctx.get("waste_attribution_started_at", {}).pop(_lost_key, None)
+                    probe_ctx.get("waste_repeat_alert_at", {}).pop(_lost_key, None)
 
         # Prune stale frame batchers. No VLM dispatch here either —
         # stale-timeout batches are pre-red and never needed alert-level review.
@@ -1435,6 +2167,7 @@ def main() -> None:
         logger.info("Interrupted by user")
     finally:
         logger.info("Shutting down pipeline")
+        command_receiver.stop()
         pipeline.set_state(Gst.State.NULL)
         kafka_producer.flush()
         logger.info("Shutdown complete")
