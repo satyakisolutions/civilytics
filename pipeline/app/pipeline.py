@@ -479,14 +479,16 @@ def decorate_for_osd(
                 is_suspect = fsm_mgr.is_escalated(camera_id, track_id)
 
             # As soon as attribution connects a person and waste object,
-            # recolour their existing NvOSD boxes.  This changes the original
-            # detector overlay in place; it does not draw a second rectangle.
+            # recolour only the waste object's existing NvOSD box. The person
+            # intentionally stays in their normal colour during the 500ms
+            # placement-confirmation window; force_violation() marks them red
+            # only after that timer completes. No second rectangle is drawn.
             _is_visual_pair = False
             if track_id != 0xFFFFFFFFFFFFFFFF:
                 for (_pair_camera, _pair_waste_id), _pair in tuple(_waste_pairs.items()):
                     if _pair_camera != camera_id:
                         continue
-                    if track_id == _pair_waste_id or track_id == _pair.get("person_id"):
+                    if track_id == _pair_waste_id:
                         _is_visual_pair = True
                         break
 
@@ -1808,8 +1810,9 @@ def main() -> None:
     # track/FSM state. See capture_frame_probe's scene-cut detection block.
     scene_cut_flags: dict[int, bool] = {}
     # Shared between metadata attribution and the pre-NvOSD decoration probe.
-    # It lets the original yellow box turn red on the first frame after the
-    # person/waste connection is established, before the 500ms alert fires.
+    # It lets the waste object's original box turn red immediately. The
+    # person's box is deliberately left unchanged until the 500ms FSM
+    # confirmation completes.
     waste_attribution_pair: dict[tuple[str, int], dict] = {}
 
     kafka_producer = PipelineKafkaProducer()
