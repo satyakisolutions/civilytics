@@ -168,6 +168,7 @@ _ALERT_CONFIG: dict[str, dict] = {
 
 _ALERT_SNAPSHOT_DIR = os.environ.get("WW_EVIDENCE_DIR", "/app/evidence") + "/alerts"
 _PERSON_HIGHLIGHT_DELAY_FRAMES = 15
+_EVIDENCE_CAPTURE_DELAY_FRAMES = 20
 
 
 def _alert_snapshot_url(camera_id: str, track_id: int, ts_ms: int) -> str:
@@ -204,6 +205,9 @@ def _fire_waste_alert_async(
     snapshot_captured_at: dict[int, float] | None = None,
     snapshot_source_id: int | None = None,
     snapshot_visual_pair: dict | None = None,
+    snapshot_exact_cache: dict[tuple[int, int], bytes] | None = None,
+    snapshot_target_frame: int | None = None,
+    snapshot_capture_requests: set[tuple[int, int]] | None = None,
 ) -> None:
     """Write the snapshot and publish the alert off the GStreamer pad probe.
 
@@ -232,7 +236,27 @@ def _fire_waste_alert_async(
     def _run():
         try:
             snapshot_bytes = jpeg_bytes
-            if snapshot_visual_pair is not None:
+            if (
+                snapshot_exact_cache is not None
+                and snapshot_source_id is not None
+                and snapshot_target_frame is not None
+            ):
+                # The metadata probe registers this future frame before the
+                # capture tee reaches it. Wait off-thread for that exact JPEG
+                # instead of using whichever throttled cache entry happens to
+                # be newest when the alert fires.
+                _target_key = (snapshot_source_id, snapshot_target_frame)
+                refresh_deadline = time.monotonic() + 8.0
+                while time.monotonic() < refresh_deadline:
+                    refreshed = snapshot_exact_cache.pop(_target_key, None)
+                    if refreshed and len(refreshed) >= 1000:
+                        snapshot_bytes = refreshed
+                        break
+                    time.sleep(0.01)
+                if snapshot_capture_requests is not None:
+                    snapshot_capture_requests.discard(_target_key)
+                snapshot_exact_cache.pop(_target_key, None)
+            elif snapshot_visual_pair is not None:
                 # This is a background worker, never the GStreamer probe.
                 # Wait for OSD to report that it actually rendered the red
                 # person box, then for the capture branch to encode that frame.
@@ -742,6 +766,8 @@ def capture_frame_probe(
     cache: dict[int, bytes] = ctx.get("frame_jpeg_cache", {})
     if cache is None:
         return Gst.PadProbeReturn.OK
+    exact_cache: dict[tuple[int, int], bytes] = ctx.get("frame_jpeg_exact_cache", {})
+    capture_requests: set[tuple[int, int]] = ctx.get("frame_capture_requests", set())
 
     now = time.monotonic()
     # Cheap pass first: is ANY source in this batch actually due for a
@@ -754,7 +780,15 @@ def capture_frame_probe(
         except StopIteration:
             break
         sid = frame_meta.source_id
-        if now - _capture_last_ts.get(sid, 0.0) >= _CAPTURE_MIN_INTERVAL_S:
+        _frame_key = (int(sid), int(frame_meta.frame_num))
+        _requested_now = any(
+            _requested_sid == int(sid) and _requested_frame <= int(frame_meta.frame_num)
+            for _requested_sid, _requested_frame in tuple(capture_requests)
+        )
+        if (
+            now - _capture_last_ts.get(sid, 0.0) >= _CAPTURE_MIN_INTERVAL_S
+            or _requested_now
+        ):
             due_sources.add(sid)
         try:
             frame_meta_list = frame_meta_list.next
@@ -828,8 +862,27 @@ def capture_frame_probe(
                     img = img.resize((1280, new_h), Image.BILINEAR)
                 out = io.BytesIO()
                 img.save(out, format="JPEG", quality=70)
-                cache[frame_meta.source_id] = out.getvalue()
+                _jpeg_bytes = out.getvalue()
+                cache[frame_meta.source_id] = _jpeg_bytes
                 _capture_last_ts[frame_meta.source_id] = now
+                _frame_key = (int(frame_meta.source_id), int(frame_meta.frame_num))
+                _fulfilled_requests = [
+                    _request_key
+                    for _request_key in tuple(capture_requests)
+                    if _request_key[0] == _frame_key[0] and _request_key[1] <= _frame_key[1]
+                ]
+                for _request_key in _fulfilled_requests:
+                    # Store under the requested target key so the waiting
+                    # alert worker can consume it. Under normal flow the
+                    # actual and target frame are identical; if the leaky
+                    # capture queue dropped that one frame, use the very next
+                    # available frame rather than falling back to stale JPEG.
+                    exact_cache[_request_key] = _jpeg_bytes
+                    capture_requests.discard(_request_key)
+                    logger.info(
+                        "Captured requested evidence source_id=%d target_frame=%d actual_frame=%d",
+                        _request_key[0], _request_key[1], _frame_key[1],
+                    )
                 _CAPTURE_DIAG["ok"] += 1
             except Exception as exc:
                 _CAPTURE_DIAG["last_err"] = str(exc)[:200]
@@ -1199,6 +1252,16 @@ def extract_metadata(
                         _person_violation_frames_map[_waste_key] = _PERSON_HIGHLIGHT_DELAY_FRAMES
                         _visual_pair = ctx.get("waste_attribution_pair", {}).get(_waste_key)
                         _cache = ctx.get("frame_jpeg_cache", {})
+                        _snapshot_source_id = int(frame_meta.source_id)
+                        _snapshot_target_frame = (
+                            int(frame_meta.frame_num) + _EVIDENCE_CAPTURE_DELAY_FRAMES
+                        )
+                        _snapshot_target_key = (
+                            _snapshot_source_id, _snapshot_target_frame
+                        )
+                        ctx.setdefault("frame_capture_requests", set()).add(
+                            _snapshot_target_key
+                        )
                         # Use the proximity attribution captured during the
                         # 500ms placement window, never a later bystander.
                         _nearest_pid = _dumper_map.get((camera_id, track_id))
@@ -1217,12 +1280,16 @@ def extract_metadata(
                             detected_at=time.time(),
                             snapshot_cache=_cache,
                             snapshot_captured_at=_capture_last_ts,
-                            snapshot_source_id=int(frame_meta.source_id),
+                            snapshot_source_id=_snapshot_source_id,
                             snapshot_visual_pair=_visual_pair,
+                            snapshot_exact_cache=ctx.get("frame_jpeg_exact_cache"),
+                            snapshot_target_frame=_snapshot_target_frame,
+                            snapshot_capture_requests=ctx.get("frame_capture_requests"),
                         )
                         logger.info(
-                            "WASTE ALERT (immediate) %s track=%d: dumped by %s",
-                            camera_id, track_id, _who,
+                            "WASTE ALERT (immediate) %s track=%d: dumped by %s; "
+                            "evidence_frame=%d",
+                            camera_id, track_id, _who, _snapshot_target_frame,
                         )
                     # Check if this person has a carried_item overlapping
                     has_carried = False
@@ -1867,6 +1934,11 @@ def main() -> None:
     # capture_frame_probe in microseconds (Python encodes RGBA → JPEG with
     # PIL), read by extract_metadata when OBSERVE/VIOLATION fires.
     frame_jpeg_cache: dict[int, bytes] = {}
+    # One-shot exact-frame evidence. Metadata schedules frame N+20, the
+    # capture branch stores that JPEG here even if its normal 200ms cache
+    # throttle would skip it, and the async alert worker consumes it.
+    frame_jpeg_exact_cache: dict[tuple[int, int], bytes] = {}
+    frame_capture_requests: set[tuple[int, int]] = set()
     # Shared with capture_frame_probe (separate tee branch, separate probe
     # ctx dict) -- set True per source_id when a scene-cut is detected,
     # consumed (and cleared) by extract_metadata to reset that camera's
@@ -1982,6 +2054,8 @@ def main() -> None:
             "source_manager": source_manager,
             "evidence_writer": evidence_writer,
             "frame_jpeg_cache": frame_jpeg_cache,
+            "frame_jpeg_exact_cache": frame_jpeg_exact_cache,
+            "frame_capture_requests": frame_capture_requests,
             "roi_syncer": roi_syncer,
             "scene_cut_flags": scene_cut_flags,
             "waste_attribution_pair": waste_attribution_pair,
@@ -1998,7 +2072,12 @@ def main() -> None:
             capture_sink.add_probe(
                 Gst.PadProbeType.BUFFER,
                 capture_frame_probe,
-                {"frame_jpeg_cache": frame_jpeg_cache, "scene_cut_flags": scene_cut_flags},
+                {
+                    "frame_jpeg_cache": frame_jpeg_cache,
+                    "frame_jpeg_exact_cache": frame_jpeg_exact_cache,
+                    "frame_capture_requests": frame_capture_requests,
+                    "scene_cut_flags": scene_cut_flags,
+                },
             )
             logger.info("Frame capture probe attached to fakesink_capture.sink")
 
