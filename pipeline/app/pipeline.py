@@ -199,6 +199,10 @@ def _fire_waste_alert_async(
     kafka_producer, camera_id: str, track_id: int, jpeg_bytes: bytes | None,
     severity: str, title: str, message: str, dumped_by_track_id: int | None,
     dwell_time_s: float, bbox: dict, detected_at: float,
+    snapshot_cache: dict[int, bytes] | None = None,
+    snapshot_captured_at: dict[int, float] | None = None,
+    snapshot_source_id: int | None = None,
+    snapshot_not_before_monotonic: float | None = None,
 ) -> None:
     """Write the snapshot and publish the alert off the GStreamer pad probe.
 
@@ -217,16 +221,43 @@ def _fire_waste_alert_async(
     Telegram/dashboard consumers from fetching an image that is not yet
     available without stalling real-time frame processing.
     """
-    has_snapshot = bool(jpeg_bytes) and len(jpeg_bytes) >= 1000
+    has_snapshot = (
+        (bool(jpeg_bytes) and len(jpeg_bytes) >= 1000)
+        or (snapshot_cache is not None and snapshot_source_id is not None)
+    )
     ts_ms = int(detected_at * 1000)
     snap_url = _alert_snapshot_url(camera_id, track_id, ts_ms) if has_snapshot else None
 
     def _run():
         try:
+            snapshot_bytes = jpeg_bytes
+            if snapshot_not_before_monotonic is not None:
+                # This is a background worker, never the GStreamer probe.
+                # Wait for a cache entry whose capture time is definitively
+                # after the person's delayed red NvOSD transition. A bounded
+                # poll avoids guessing from a fixed sleep while never holding
+                # up the real-time pipeline thread.
+                refresh_deadline = time.monotonic() + 2.0
+                while (
+                    snapshot_captured_at is not None
+                    and snapshot_source_id is not None
+                    and snapshot_captured_at.get(snapshot_source_id, 0.0)
+                        < snapshot_not_before_monotonic
+                    and time.monotonic() < refresh_deadline
+                ):
+                    time.sleep(0.02)
+                refreshed = (
+                    snapshot_cache.get(snapshot_source_id)
+                    if snapshot_cache is not None and snapshot_source_id is not None
+                    else None
+                )
+                if refreshed and len(refreshed) >= 1000:
+                    snapshot_bytes = refreshed
+            snapshot_available = bool(snapshot_bytes) and len(snapshot_bytes) >= 1000
             # Persist first so Telegram cannot race the API and receive a
             # transient 404 while trying to fetch the just-published URL.
-            if has_snapshot:
-                _write_alert_snapshot(camera_id, track_id, ts_ms, jpeg_bytes)
+            if snapshot_available:
+                _write_alert_snapshot(camera_id, track_id, ts_ms, snapshot_bytes)
             kafka_producer.send_alert(
                 camera_id=camera_id,
                 track_id=track_id,
@@ -236,7 +267,7 @@ def _fire_waste_alert_async(
                 dumped_by_track_id=dumped_by_track_id,
                 dwell_time_s=round(dwell_time_s, 1),
                 bbox=bbox,
-                snapshot_url=snap_url,
+                snapshot_url=snap_url if snapshot_available else None,
                 detected_at=detected_at,
             )
         except Exception:
@@ -486,10 +517,21 @@ def decorate_for_osd(
             # rectangle is drawn.
             _is_visual_pair = False
             if track_id != 0xFFFFFFFFFFFFFFFF:
+                _visual_now = time.monotonic()
                 for (_pair_camera, _pair_waste_id), _pair in tuple(_waste_pairs.items()):
                     if _pair_camera != camera_id:
                         continue
                     if track_id == _pair_waste_id:
+                        _is_visual_pair = True
+                        break
+                    if (
+                        track_id == _pair.get("person_id")
+                        and _pair.get("person_visual_after") is not None
+                        and _visual_now >= _pair["person_visual_after"]
+                    ):
+                        # Once the delayed person highlight starts, keep it
+                        # red across ROI/FSM changes until the tracker truly
+                        # loses that person from the video frame.
                         _is_visual_pair = True
                         break
 
@@ -1155,7 +1197,11 @@ def extract_metadata(
                         # ~15-25s after this immediate one instead of
                         # waiting a full waste_repeat_alert_interval_s.
                         ctx.setdefault("waste_repeat_alert_at", {})[(camera_id, track_id)] = time.monotonic()
-                        _person_violation_due_map[_waste_key] = time.monotonic() + 0.5
+                        _person_visual_due_at = time.monotonic() + 0.5
+                        _person_violation_due_map[_waste_key] = _person_visual_due_at
+                        _visual_pair = ctx.get("waste_attribution_pair", {}).get(_waste_key)
+                        if _visual_pair is not None:
+                            _visual_pair["person_visual_after"] = _person_visual_due_at
                         _cache = ctx.get("frame_jpeg_cache", {})
                         # Use the proximity attribution captured during the
                         # 500ms placement window, never a later bystander.
@@ -1173,6 +1219,15 @@ def extract_metadata(
                             dwell_time_s=track_info.dwell_time_s,
                             bbox=bbox_dict,
                             detected_at=time.time(),
+                            snapshot_cache=_cache,
+                            snapshot_captured_at=_capture_last_ts,
+                            snapshot_source_id=int(frame_meta.source_id),
+                            # Select an actual JPEG captured after the person
+                            # turns red, plus one cache interval so the frame
+                            # necessarily passed through NvOSD in that state.
+                            snapshot_not_before_monotonic=(
+                                _person_visual_due_at + _CAPTURE_MIN_INTERVAL_S
+                            ),
                         )
                         logger.info(
                             "WASTE ALERT (immediate) %s track=%d: dumped by %s",
@@ -2155,6 +2210,13 @@ def main() -> None:
                     probe_ctx.get("waste_attribution_started_at", {}).pop(_lost_key, None)
                     probe_ctx.get("waste_person_violation_due_at", {}).pop(_lost_key, None)
                     probe_ctx.get("waste_repeat_alert_at", {}).pop(_lost_key, None)
+                elif CLASS_CATEGORIES.get(lost.class_name) == "person":
+                    # Preserve waste attribution for reminders, but end the
+                    # visual lifetime when this person actually leaves the
+                    # frame so a future recycled tracker ID is not coloured.
+                    for _pair in probe_ctx.get("waste_attribution_pair", {}).values():
+                        if _pair.get("person_id") == lost.track_id:
+                            _pair.pop("person_visual_after", None)
 
         # Prune stale frame batchers. No VLM dispatch here either —
         # stale-timeout batches are pre-red and never needed alert-level review.
