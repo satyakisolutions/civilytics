@@ -150,7 +150,6 @@ function getAnimation(detection: BBoxDetection): string | undefined {
 function DetectionBox({ detection, width, height, allDetections }: { detection: BBoxDetection; width: number; height: number; allDetections: BBoxDetection[] }) {
   const [x1, y1, x2, y2] = detection.bbox;
   const borderColor = getBboxColor(detection);
-  const animation = getAnimation(detection);
   const fsmState = detection.fsm_state ?? "idle";
   const fsmLabel = FSM_LABELS[fsmState];
 
@@ -161,6 +160,10 @@ function DetectionBox({ detection, width, height, allDetections }: { detection: 
 
   const { label: enrichedLabel, isSuspect } = buildEnrichedLabel(detection, allDetections);
   const isViolation = isSuspect || fsmState === "violation" || fsmState === "alerting" || fsmState === "escalated";
+  // Confirmed tracks must remain solid red. Pulsing opacity exposed the
+  // pre-confirmation yellow NvOSD box baked into the video underneath and
+  // made a correctly-confirmed person look yellow throughout.
+  const animation = isViolation ? undefined : getAnimation(detection);
   const effectiveBorderColor = isSuspect ? "#ef4444" : borderColor;
   const borderWidth = isSuspect ? 4 : (FSM_BORDER_WIDTHS[fsmState] ?? 2);
 
