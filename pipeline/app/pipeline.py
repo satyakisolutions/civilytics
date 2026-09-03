@@ -34,7 +34,9 @@ from gi.repository import GLib, Gst  # noqa: E402
 import pyds  # noqa: E402 — provided by the DeepStream Docker image
 
 from app.command_receiver import CommandHandler, CommandReceiver
+from app.confirmation import RollingConfirmation
 from app.config import pipeline_settings
+from app.overlay import resolve_person_overlay
 from app.connection_monitor import ConnectionMonitor
 from app.event_fsm import EventFSMManager, FSMState
 from app.frame_batcher import FrameBatcher
@@ -48,10 +50,15 @@ from app.tracking import TrackStateManager
 from app.vlm_grpc_client import VLMGrpcClient
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.environ.get("WW_LOG_LEVEL", "INFO").upper(), logging.INFO),
     format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+# httpx logs "HTTP Request: GET ... 200 OK" at INFO for every request (ROI
+# sync polls every 10s, camera-info lookups, etc.) -- pure noise next to
+# the staging/checkpoint logs (STAGE_TIMING, ATTRIBUTION_SELECTED,
+# PERSON_FORCE_VIOLATION, EVIDENCE_CAPTURED). Push it down to DEBUG.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Relevant COCO classes for waste dumping surveillance.
 # COCO 91-index class mapping. RF-DETR's DeepStream output head
@@ -167,8 +174,63 @@ _ALERT_CONFIG: dict[str, dict] = {
 
 
 _ALERT_SNAPSHOT_DIR = os.environ.get("WW_EVIDENCE_DIR", "/app/evidence") + "/alerts"
-_PERSON_HIGHLIGHT_DELAY_FRAMES = 15
-_EVIDENCE_CAPTURE_DELAY_FRAMES = 20
+_PERSON_HIGHLIGHT_DELAY_FRAMES = 7
+# Frame spacing between attribution RETRIES when nobody was within
+# waste_proximity_px on the previous attempt. The FIRST attempt happens
+# immediately on the waste object's first-seen frame (the dumper is most
+# likely still right there); only a failed attempt waits this long before
+# checking again, instead of retrying every single frame (10x cheaper).
+_WASTE_ATTRIBUTION_DELAY_FRAMES = 11  # was 10, +5%
+# N-of-M rolling waste confirmation (RollingConfirmation, app/confirmation.py).
+# WASTE_CONFIRM_FRAMES=1 (the old value) was not a confirmation at all -- a
+# single misclassified frame immediately kicked off the full alert flow.
+# Requires the object to be detector-confirmed as "waste" on at least N of
+# the M most recent ELIGIBLE observations for this waste_key (an observation
+# is recorded once per inference pass where this track_id's frame_num
+# advanced -- a gap in frame_num between two sightings backfills that many
+# misses, bounded, so an occasional single missed detection doesn't erase
+# progress, but a track that's mostly absent still fails to confirm).
+# Full confidence/mask-area/position-stability checks are a larger follow-up
+# (see deepstream-dev production-hardening audit).
+_WASTE_CONFIRM_N = 3
+_WASTE_CONFIRM_M = 5
+assert 1 <= _WASTE_CONFIRM_N <= _WASTE_CONFIRM_M
+# Compact 4-line diagnostic overlay (ATTR/FSM/OSD/CAPTURE) -- always drawn
+# on the actual alert-evidence capture window for an active incident; set
+# WW_DEBUG_OVERLAY=1 to also draw it continuously for every active incident
+# regardless of capture timing (verbose, for live debugging only).
+_DEBUG_OVERLAY_ALWAYS = os.environ.get("WW_DEBUG_OVERLAY", "0") == "1"
+# Kill switch for alert delivery (Kafka/Telegram) -- default disabled so
+# attribution can be observed in isolation via logs/overlay without live
+# alert noise while the person-force-violation/evidence path is under
+# investigation. Set WW_ALERTS_DISABLED=0 to re-enable.
+_ALERTS_DISABLED = os.environ.get("WW_ALERTS_DISABLED", "1") == "1"
+# Above this many frames of lateness, a "captured requested evidence" match
+# is flagged as degraded (queue drop, not the exact target) instead of
+# logged as a routine success.
+_MAX_EVIDENCE_LATENESS_FRAMES = 30
+# Give up retrying attribution after this long since the waste object was
+# first seen -- previously unbounded, retrying every 10 frames forever if
+# nobody ever came within waste_proximity_px. Kept short relative to a
+# short looping test source (~37s) so a track that's genuinely never
+# approached gives up within roughly half a loop instead of spanning
+# almost the entire clip.
+_WASTE_ATTRIBUTION_TIMEOUT_S = 15.0
+_EVIDENCE_CAPTURE_DELAY_FRAMES = 10
+# Hard safety-net: force-expire a waste track_id (as if the tracker had
+# lost it) once it's been alive this long, regardless of whether
+# DeepStream's tracker naturally reports it lost. A looping test source
+# can keep the same track_id continuously alive forever (no last_seen
+# gap for prune_lost to ever catch), so age is the only reliable signal
+# left to guarantee eventual cleanup.
+#
+# Deliberately treated as a brand-new incident (full attribution reset,
+# not just dwell/bbox bookkeeping) -- explicit product decision: after
+# this long, re-open attribution to whoever is nearest now rather than
+# keeping the original dumper forever. Chosen knowingly; this is the
+# opposite of the "preserve original attribution" fix from earlier this
+# session, done here on purpose for this specific timeout.
+_WASTE_TRACK_MAX_LIFETIME_S = 35.0
 
 
 def _alert_snapshot_url(camera_id: str, track_id: int, ts_ms: int) -> str:
@@ -197,6 +259,33 @@ def _write_alert_snapshot(camera_id: str, track_id: int, ts_ms: int, jpeg_bytes:
         logger.exception("Failed to save alert snapshot for %s track=%d", camera_id, track_id)
 
 
+def _log_stage(ctx: dict, waste_key: tuple, stage: str, frame_num: int | None = None) -> None:
+    """Record and log one incident-lifecycle stage's wall-clock timing.
+
+    Logs elapsed time since the incident's first_seen stage AND since the
+    immediately preceding stage, so a slow leg is visible directly in the
+    log line instead of requiring manual timestamp subtraction across
+    scattered log lines.
+    """
+    stage_ts = ctx.setdefault("stage_timestamps", {})
+    timings = stage_ts.setdefault(waste_key, {})
+    now = time.monotonic()
+    first_seen = timings.get("first_seen", now)
+    prev_stage, prev_ts = None, None
+    for _s, _t in timings.items():
+        if prev_ts is None or _t > prev_ts:
+            prev_stage, prev_ts = _s, _t
+    timings[stage] = now
+    since_start = now - first_seen
+    since_prev = now - prev_ts if prev_ts is not None else 0.0
+    logger.debug(
+        "STAGE_TIMING waste_key=%s stage=%s frame=%s elapsed_since_start=%.3fs "
+        "elapsed_since_prev_stage(%s)=%.3fs",
+        waste_key, stage, frame_num if frame_num is not None else "?",
+        since_start, prev_stage or "first_seen", since_prev,
+    )
+
+
 def _fire_waste_alert_async(
     kafka_producer, camera_id: str, track_id: int, jpeg_bytes: bytes | None,
     severity: str, title: str, message: str, dumped_by_track_id: int | None,
@@ -210,6 +299,11 @@ def _fire_waste_alert_async(
     snapshot_capture_requests: set[tuple[int, int]] | None = None,
 ) -> None:
     """Write the snapshot and publish the alert off the GStreamer pad probe.
+
+    No-ops entirely when _ALERTS_DISABLED (WW_ALERTS_DISABLED=1, default)
+    -- attribution/FSM/OSD/evidence-capture logic upstream of this call all
+    still run unaffected, only Kafka delivery and snapshot writing are
+    skipped, so attribution can be observed via logs/overlay in isolation.
 
     Both used to run directly inside extract_metadata(), the pad-probe
     callback on the pipeline's real-time frame-processing path -- any
@@ -226,6 +320,8 @@ def _fire_waste_alert_async(
     Telegram/dashboard consumers from fetching an image that is not yet
     available without stalling real-time frame processing.
     """
+    if _ALERTS_DISABLED:
+        return
     has_snapshot = (
         (bool(jpeg_bytes) and len(jpeg_bytes) >= 1000)
         or (snapshot_cache is not None and snapshot_source_id is not None)
@@ -233,34 +329,74 @@ def _fire_waste_alert_async(
     ts_ms = int(detected_at * 1000)
     snap_url = _alert_snapshot_url(camera_id, track_id, ts_ms) if has_snapshot else None
 
+    def _publish(snapshot_bytes: bytes | None) -> None:
+        snapshot_available = bool(snapshot_bytes) and len(snapshot_bytes) >= 1000
+        # Persist first so Telegram cannot race the API and receive a
+        # transient 404 while trying to fetch the just-published URL.
+        if snapshot_available:
+            _write_alert_snapshot(camera_id, track_id, ts_ms, snapshot_bytes)
+        kafka_producer.send_alert(
+            camera_id=camera_id,
+            track_id=track_id,
+            severity=severity,
+            title=title,
+            message=message,
+            dumped_by_track_id=dumped_by_track_id,
+            dwell_time_s=round(dwell_time_s, 1),
+            bbox=bbox,
+            snapshot_url=snap_url if snapshot_available else None,
+            detected_at=detected_at,
+        )
+
     def _run():
         try:
-            snapshot_bytes = jpeg_bytes
+            # Publish the alert NOW with whatever was already captured
+            # synchronously on the pad-probe thread -- delivery must never
+            # wait on evidence. A capture-branch stall, a dropped frame, a
+            # disk error, or the source stopping mid-wait previously meant
+            # the operational alert itself was delayed up to 8s (or lost
+            # entirely on exception) behind a snapshot that hadn't arrived
+            # yet. `jpeg_bytes` is the immediate frame_jpeg_cache entry
+            # frozen at fire time -- often not the confirmed red-box frame.
+            #
+            # `jpeg_bytes` is the immediate frame_jpeg_cache entry frozen at
+            # fire time -- often not the confirmed red-box frame, but always
+            # available and always timely. A prior attempt to wait briefly
+            # for the confirmed frame here made things worse for fast
+            # walk-away dumpers: by the time the wait elapsed, the person
+            # had already left frame, so the photo showed an empty scene
+            # instead of at least showing them (wrong box color but present).
+            # Reverted -- publish immediately, unchanged from before.
+            _publish(jpeg_bytes)
+        except Exception:
+            logger.exception("Async waste alert publish failed for %s track=%d", camera_id, track_id)
+            return
+
+        # Best-effort evidence upgrade: if a better (exact target-frame, or
+        # OSD-confirmed) JPEG becomes available shortly after, overwrite the
+        # SAME deterministic file path with it. snap_url never changes, so
+        # any consumer that already fetched the immediate frame just gets a
+        # sharper/more-accurate one on a later re-fetch; nothing re-publishes
+        # to Kafka -- this thread never blocks the alert that already went out.
+        try:
+            upgraded_bytes: bytes | None = None
             if (
                 snapshot_exact_cache is not None
                 and snapshot_source_id is not None
                 and snapshot_target_frame is not None
             ):
-                # The metadata probe registers this future frame before the
-                # capture tee reaches it. Wait off-thread for that exact JPEG
-                # instead of using whichever throttled cache entry happens to
-                # be newest when the alert fires.
                 _target_key = (snapshot_source_id, snapshot_target_frame)
                 refresh_deadline = time.monotonic() + 8.0
                 while time.monotonic() < refresh_deadline:
                     refreshed = snapshot_exact_cache.pop(_target_key, None)
                     if refreshed and len(refreshed) >= 1000:
-                        snapshot_bytes = refreshed
+                        upgraded_bytes = refreshed
                         break
                     time.sleep(0.01)
                 if snapshot_capture_requests is not None:
                     snapshot_capture_requests.discard(_target_key)
                 snapshot_exact_cache.pop(_target_key, None)
             elif snapshot_visual_pair is not None:
-                # This is a background worker, never the GStreamer probe.
-                # Wait for OSD to report that it actually rendered the red
-                # person box, then for the capture branch to encode that frame.
-                # This follows frame order instead of guessing with wall time.
                 refresh_deadline = time.monotonic() + 3.0
                 while time.monotonic() < refresh_deadline:
                     rendered_at = snapshot_visual_pair.get("person_visual_rendered_at")
@@ -278,26 +414,11 @@ def _fire_waste_alert_async(
                     else None
                 )
                 if refreshed and len(refreshed) >= 1000:
-                    snapshot_bytes = refreshed
-            snapshot_available = bool(snapshot_bytes) and len(snapshot_bytes) >= 1000
-            # Persist first so Telegram cannot race the API and receive a
-            # transient 404 while trying to fetch the just-published URL.
-            if snapshot_available:
-                _write_alert_snapshot(camera_id, track_id, ts_ms, snapshot_bytes)
-            kafka_producer.send_alert(
-                camera_id=camera_id,
-                track_id=track_id,
-                severity=severity,
-                title=title,
-                message=message,
-                dumped_by_track_id=dumped_by_track_id,
-                dwell_time_s=round(dwell_time_s, 1),
-                bbox=bbox,
-                snapshot_url=snap_url if snapshot_available else None,
-                detected_at=detected_at,
-            )
+                    upgraded_bytes = refreshed
+            if upgraded_bytes and len(upgraded_bytes) >= 1000:
+                _write_alert_snapshot(camera_id, track_id, ts_ms, upgraded_bytes)
         except Exception:
-            logger.exception("Async waste alert fire failed for %s track=%d", camera_id, track_id)
+            logger.exception("Evidence upgrade failed for %s track=%d (alert already sent)", camera_id, track_id)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -453,6 +574,8 @@ def decorate_for_osd(
     _osd_sm = ctx.get("source_manager")
     _osd_pad_map = _osd_sm.pad_to_camera if _osd_sm is not None else {}
     _waste_pairs = ctx.get("waste_attribution_pair", {})
+    _overlay_causes = ctx.get("person_overlay_causes", {})
+    _osd_overlay_confirmed = ctx.get("osd_overlay_confirmed")
 
     frame_meta_list = batch_meta.frame_meta_list
     while frame_meta_list is not None:
@@ -492,6 +615,13 @@ def decorate_for_osd(
         # --- Second pass: decorate each object ---------------------------------
         total_objects = 0
         escalated_count = 0
+        # Per-frame overlay completeness, accumulated across this frame's
+        # objects and published to the shared osd_overlay_confirmed dict
+        # once the loop finishes -- capture_frame_probe (a different probe,
+        # no object-metadata access) reads this to classify a capture as
+        # complete (both waste and attributed-person overlays confirmed
+        # applied on the SAME rendered buffer) vs PARTIAL.
+        _frame_overlay_state: dict[tuple, dict] = {}
         obj_meta_list = frame_meta.obj_meta_list
         while obj_meta_list is not None:
             try:
@@ -527,9 +657,6 @@ def decorate_for_osd(
                     dwell_time_s = track_info.dwell_time_s
                     in_roi = track_info.in_roi
 
-            if fsm_state in ("escalated", "alerting"):
-                escalated_count += 1
-
             # --- Check suspect flag (escalated track outside ROI) ---
             is_suspect = False
             if fsm_mgr and track_id != 0xFFFFFFFFFFFFFFFF:
@@ -542,23 +669,68 @@ def decorate_for_osd(
             # force_violation() marks them red only afterward. No second
             # rectangle is drawn.
             _is_visual_pair = False
+            _waste_overlay_key_here = None
+            # Set whenever this person IS an attribution target for some
+            # waste pair, regardless of is_suspect -- used below to report
+            # the ACTUAL rendered state even when it's still wrong (e.g.
+            # still yellow OBSERVE), not just when it's already correct.
+            _attribution_target_waste_key = None
             if track_id != 0xFFFFFFFFFFFFFFFF:
                 for (_pair_camera, _pair_waste_id), _pair in tuple(_waste_pairs.items()):
                     if _pair_camera != camera_id:
                         continue
                     if track_id == _pair_waste_id:
                         _is_visual_pair = True
+                        _waste_overlay_key_here = (int(frame_meta.source_id), "waste", _pair_waste_id)
                         break
-                    if track_id == _pair.get("person_id") and is_suspect:
-                        # Record the exact first OSD render for the evidence
-                        # worker. Persistent redness itself comes from the FSM
-                        # escalation and lasts until this person track is lost.
-                        _pair.setdefault("person_visual_rendered_at", time.monotonic())
+                    if track_id == _pair.get("person_id"):
+                        _attribution_target_waste_key = (int(frame_meta.source_id), "waste", _pair_waste_id)
+                        if is_suspect:
+                            # Record the exact first OSD render for the
+                            # evidence worker. Persistent redness itself
+                            # comes from the FSM escalation and lasts until
+                            # this person track is lost.
+                            _pair.setdefault("person_visual_rendered_at", time.monotonic())
                         break
+
+            # --- Incident-linked overlay cause (independent of fsm_mgr) ---
+            # person_overlay_causes[(source_id, "person", track_id)] is a SET
+            # of waste_keys currently forcing this person red -- set at the
+            # exact moment force_violation(person) fires (pipeline.py's
+            # extract_metadata), keyed by the raw source_id int rather than
+            # the derived camera_id string both probes independently resolve
+            # (a mismatch there -- e.g. a pad_to_camera registration race --
+            # would make `is_suspect` alone silently never match here even
+            # though the person WAS escalated). This does not replace
+            # is_suspect; it's an OR, so either mechanism can force red.
+            _person_causes = None
+            if category == "person" and track_id != 0xFFFFFFFFFFFFFFFF:
+                _person_causes = _overlay_causes.get((int(frame_meta.source_id), "person", track_id))
+            # resolve_person_overlay (app/overlay.py) is the actual,
+            # independently-unit-tested decision -- pure, no pyds
+            # dependency, order-independent (see test_overlay.py).
+            _person_decision = resolve_person_overlay(is_suspect, _person_causes) if category == "person" else None
+            _has_overlay_cause = bool(_person_causes)
+
+            if _osd_overlay_confirmed is not None:
+                if _is_visual_pair and _waste_overlay_key_here is not None:
+                    _frame_overlay_state.setdefault(_waste_overlay_key_here, {})["waste_ok"] = True
+                if _has_overlay_cause:
+                    for _wk in _person_causes:
+                        _frame_overlay_state.setdefault(_wk, {})["person_ok"] = True
+                        _frame_overlay_state[_wk]["person_track_id"] = track_id
 
             # --- Build label text ---
             if track_id == 0xFFFFFFFFFFFFFFFF:
                 label = cname
+            elif category == "person" and _person_decision is not None and _person_decision.is_red:
+                # Incident-linked (or generic FSM) violation, decided by
+                # resolve_person_overlay -- takes priority over the waste's
+                # own _is_visual_pair path below so the label always names
+                # the cause explicitly when one exists.
+                label = f"#{track_id_short:03d} {cname} | {_person_decision.label_suffix}"
+                fsm_state = "violation"
+                escalated_count += 1
             elif is_suspect or _is_visual_pair:
                 # A confirmed dumper's persistent violation marker overrides
                 # transient ROI states such as ENTER/OBSERVE. Keep the linked
@@ -569,10 +741,13 @@ def decorate_for_osd(
                 else:
                     label = f"#{track_id_short:03d} {cname} | VIOLATED"
                 fsm_state = "violation"  # Force red styling
+                escalated_count += 1
             elif fsm_state == "idle" and not in_roi:
                 # Minimal label for idle objects outside ROI
                 label = f"#{track_id_short:03d} {cname}"
             else:
+                if fsm_state in ("escalated", "alerting"):
+                    escalated_count += 1
                 # Enriched label: #042 ROI | waiting | 12s OBSERVE
                 carried = _find_carried_item(rect, carried_items) if category == "person" else None
                 action = _derive_action_text(cname, category, dwell_time_s, carried)
@@ -597,6 +772,28 @@ def decorate_for_osd(
             rect.border_color.blue = bb
             rect.border_color.alpha = ba
             rect.has_bg_color = 0
+
+            # PERSON_OSD_DECORATION: report the ACTUAL rendered state for
+            # any person that IS an attribution target (regardless of
+            # whether that ended up red or is still stuck yellow -- that's
+            # exactly the mismatch this checkpoint exists to catch).
+            if category == "person" and _attribution_target_waste_key is not None:
+                _rendered_red = fsm_state == "violation"
+                _color_word = "RED" if _rendered_red else "YELLOW"
+                _overlay_state_word = (
+                    "ATTRIBUTED_VIOLATION" if _has_overlay_cause
+                    else ("VIOLATED" if _rendered_red else (_STATE_LABEL.get(fsm_state, fsm_state) or fsm_state).upper().replace(" ", "_"))
+                )
+                logger.debug(
+                    "PERSON_OSD_DECORATION source_id=%d frame_num=%d person_track_id=%d "
+                    "person_key=%s is_escalated=%s has_overlay_cause=%s final_label=%s final_border=%s",
+                    int(frame_meta.source_id), int(frame_meta.frame_num), track_id,
+                    (int(frame_meta.source_id), "person", track_id), is_suspect, _has_overlay_cause,
+                    label, _color_word.lower(),
+                )
+                ctx.setdefault("diagnostic_lines", {}).setdefault(_attribution_target_waste_key, {})["osd"] = (
+                    f"OSD: P{track_id % 1000} {_color_word} {_overlay_state_word}"
+                )
 
             # --- Dumped item / waste zone highlight ---
             # Fill the bbox with semi-transparent red for:
@@ -673,6 +870,115 @@ def decorate_for_osd(
                 obj_meta_list = obj_meta_list.next
             except StopIteration:
                 break
+
+        # Publish this frame's overlay confirmation for any active waste
+        # incident touched this frame -- capture_frame_probe (a different
+        # probe, pixels only, no object metadata) reads this to classify a
+        # capture as complete only when BOTH the waste and its attributed
+        # person were actually rendered with their violation overlay on
+        # THIS exact buffer, instead of assuming force_violation() having
+        # been called implies the render succeeded.
+        if _osd_overlay_confirmed is not None:
+            _visible_person_ids = [pid for pid, _, _ in person_centers]
+            for _wk, _state in _frame_overlay_state.items():
+                _osd_overlay_confirmed[(int(frame_meta.source_id), int(frame_meta.frame_num), _wk)] = {
+                    "waste_ok": _state.get("waste_ok", False),
+                    "person_ok": _state.get("person_ok", False),
+                    "person_track_id": _state.get("person_track_id"),
+                    "visible_person_ids": _visible_person_ids,
+                }
+
+        # --- Compact diagnostic overlay (alert-evidence frames only, or
+        # WW_DEBUG_OVERLAY=1) -----------------------------------------------
+        # Four lines, one per correlated checkpoint (ATTR/FSM/OSD/CAPTURE),
+        # reporting the actual observed state at each -- not the expected
+        # one. Rendered via NvDsDisplayMeta text (DeepStream OSD), never
+        # OpenCV, so it only ever exists for the lifetime of this buffer
+        # callback -- no pyds metadata is retained past this frame.
+        _diag_lines_map = ctx.get("diagnostic_lines")
+        _pending_captures = ctx.get("frame_capture_requests")
+        if _diag_lines_map:
+            _sid_now = int(frame_meta.source_id)
+            _fnum_now = int(frame_meta.frame_num)
+            for _dk, _dlines in list(_diag_lines_map.items()):
+                if _dk[0] != _sid_now:
+                    continue
+                _in_capture_window = bool(_pending_captures) and any(
+                    sid == _sid_now and target <= _fnum_now <= target + _MAX_EVIDENCE_LATENESS_FRAMES
+                    for sid, target in _pending_captures
+                )
+                if not (_DEBUG_OVERLAY_ALWAYS or _in_capture_window):
+                    continue
+                _diag_text = "\n".join([
+                    _dlines.get("attr", "ATTR: NONE"),
+                    _dlines.get("fsm", "FSM: NONE"),
+                    _dlines.get("osd", "OSD: NONE"),
+                    _dlines.get("capture", "CAPTURE: PENDING"),
+                ])
+                try:
+                    _diag_disp = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+                    _diag_disp.num_labels = 1
+                    _dtp = _diag_disp.text_params[0]
+                    _dtp.display_text = _diag_text
+                    # Top-left, below the camera timestamp overlay; font
+                    # size scales with source resolution so it stays
+                    # readable without covering tracked objects on either a
+                    # 480p or 4K source.
+                    _src_h = int(frame_meta.source_frame_height or pipeline_settings.input_height)
+                    _dtp.x_offset = 10
+                    _dtp.y_offset = 40
+                    _dtp.font_params.font_name = "Monospace"
+                    _dtp.font_params.font_size = max(9, min(14, _src_h // 60))
+                    _dtp.font_params.font_color.red = 1.0
+                    _dtp.font_params.font_color.green = 1.0
+                    _dtp.font_params.font_color.blue = 1.0
+                    _dtp.font_params.font_color.alpha = 1.0
+                    _dtp.set_bg_clr = 1
+                    _dtp.text_bg_clr.red = 0.0
+                    _dtp.text_bg_clr.green = 0.0
+                    _dtp.text_bg_clr.blue = 0.0
+                    _dtp.text_bg_clr.alpha = 0.55
+                    pyds.nvds_add_display_meta_to_frame(frame_meta, _diag_disp)
+                except Exception:
+                    pass
+
+        # --- "Attributed" overlay (always on, top-left) ---------------------
+        # Lightweight, non-debug indicator: whenever this camera has an
+        # active waste-to-person attribution, show who it is -- independent
+        # of the WW_DEBUG_OVERLAY-gated 4-line diagnostic block above, and
+        # independent of whether that person is currently in frame.
+        _dumper_map_now = ctx.get("waste_dumper_map")
+        if _dumper_map_now:
+            _attributed_here = [
+                (wk[1], pid) for wk, pid in _dumper_map_now.items()
+                if wk[0] == camera_id and pid is not None
+            ]
+            if _attributed_here:
+                _attr_text = "\n".join(
+                    f"Attributed: waste #{wtid % 1000} -> person #{pid % 1000}"
+                    for wtid, pid in _attributed_here
+                )
+                try:
+                    _attr_disp = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+                    _attr_disp.num_labels = 1
+                    _atp = _attr_disp.text_params[0]
+                    _atp.display_text = _attr_text
+                    _atp.x_offset = 10
+                    _atp.y_offset = 10
+                    _atp.font_params.font_name = "Serif"
+                    _atp.font_params.font_size = max(10, min(16, int(frame_meta.source_frame_height or pipeline_settings.input_height) // 45))
+                    _atp.font_params.font_color.red = 1.0
+                    _atp.font_params.font_color.green = 0.85
+                    _atp.font_params.font_color.blue = 0.0
+                    _atp.font_params.font_color.alpha = 1.0
+                    _atp.set_bg_clr = 1
+                    _atp.text_bg_clr.red = 0.0
+                    _atp.text_bg_clr.green = 0.0
+                    _atp.text_bg_clr.blue = 0.0
+                    _atp.text_bg_clr.alpha = 0.55
+                    pyds.nvds_add_display_meta_to_frame(frame_meta, _attr_disp)
+                except Exception:
+                    logger.exception("Attributed overlay render failed")
 
         # --- Top-right stats overlay -------------------------------------------
         frame_w = frame_meta.source_frame_width or pipeline_settings.input_width
@@ -752,7 +1058,7 @@ def capture_frame_probe(
     cache per source_id (throttled to _CAPTURE_MIN_INTERVAL_S)."""
     _CAPTURE_DIAG["n"] += 1
     if _CAPTURE_DIAG["n"] % 50 == 1:
-        logger.info("capture probe tick n=%d ok=%d no_batch=%d no_map=%d sz_mismatch=%d last_err=%r",
+        logger.debug("capture probe tick n=%d ok=%d no_batch=%d no_map=%d sz_mismatch=%d last_err=%r",
                     _CAPTURE_DIAG["n"], _CAPTURE_DIAG["ok"], _CAPTURE_DIAG["no_batch"],
                     _CAPTURE_DIAG["no_map"], _CAPTURE_DIAG["sz_mismatch"], _CAPTURE_DIAG["last_err"][:120])
     buf = info.get_buffer()
@@ -873,16 +1179,69 @@ def capture_frame_probe(
                 ]
                 for _request_key in _fulfilled_requests:
                     # Store under the requested target key so the waiting
-                    # alert worker can consume it. Under normal flow the
-                    # actual and target frame are identical; if the leaky
-                    # capture queue dropped that one frame, use the very next
-                    # available frame rather than falling back to stale JPEG.
+                    # alert worker can consume it. `requested_frame <=
+                    # actual_frame` means this is a nearest-FUTURE capture,
+                    # not necessarily an exact one -- if the leaky capture
+                    # queue dropped the exact target frame, this could be
+                    # many frames later. Report lateness explicitly rather
+                    # than implying "exact" for every match.
                     exact_cache[_request_key] = _jpeg_bytes
                     capture_requests.discard(_request_key)
-                    logger.info(
-                        "Captured requested evidence source_id=%d target_frame=%d actual_frame=%d",
-                        _request_key[0], _request_key[1], _frame_key[1],
-                    )
+                    _lateness = _frame_key[1] - _request_key[1]
+                    if _lateness > _MAX_EVIDENCE_LATENESS_FRAMES:
+                        logger.warning(
+                            "Captured requested evidence source_id=%d target_frame=%d "
+                            "actual_frame=%d lateness=%d frames (exceeds max %d -- "
+                            "degraded capture, likely queue drop)",
+                            _request_key[0], _request_key[1], _frame_key[1],
+                            _lateness, _MAX_EVIDENCE_LATENESS_FRAMES,
+                        )
+                    else:
+                        logger.info(
+                            "Captured requested evidence source_id=%d target_frame=%d "
+                            "actual_frame=%d lateness=%d frames",
+                            _request_key[0], _request_key[1], _frame_key[1], _lateness,
+                        )
+
+                    # EVIDENCE_CAPTURED: classify complete vs PARTIAL using
+                    # decorate_for_osd's own rendering confirmation for THIS
+                    # exact actual_frame -- not an assumption that
+                    # force_violation() having been called implies the
+                    # overlay was actually rendered on the captured buffer.
+                    _waste_overlay_key_req = ctx.get("frame_capture_waste_key", {}).pop(_request_key, None)
+                    if _waste_overlay_key_req is not None:
+                        _confirm_map = ctx.get("osd_overlay_confirmed", {})
+                        _confirm = _confirm_map.pop(
+                            (_request_key[0], _frame_key[1], _waste_overlay_key_req), None
+                        )
+                        _waste_ok = bool(_confirm and _confirm.get("waste_ok"))
+                        _person_ok = bool(_confirm and _confirm.get("person_ok"))
+                        _status = "READY" if (_waste_ok and _person_ok) else "PARTIAL"
+                        if _status == "PARTIAL":
+                            _missing = "ATTRIBUTED_PERSON" if not _person_ok else "WASTE_VIOLATION"
+                            logger.debug(
+                                "EVIDENCE_CAPTURED source_id=%d target_frame=%d actual_frame=%d "
+                                "waste_track_id=%s attributed_person_id=%s visible_person_ids=%s "
+                                "status=PARTIAL missing_overlay=%s",
+                                _request_key[0], _request_key[1], _frame_key[1],
+                                _waste_overlay_key_req[2],
+                                _confirm.get("person_track_id") if _confirm else None,
+                                _confirm.get("visible_person_ids") if _confirm else [],
+                                _missing,
+                            )
+                        else:
+                            logger.debug(
+                                "EVIDENCE_CAPTURED source_id=%d target_frame=%d actual_frame=%d "
+                                "waste_track_id=%s attributed_person_id=%s visible_person_ids=%s "
+                                "status=READY waste_overlay=WASTE_VIOLATION person_overlay=ATTRIBUTED_WASTE_VIOLATION",
+                                _request_key[0], _request_key[1], _frame_key[1],
+                                _waste_overlay_key_req[2], _confirm.get("person_track_id"),
+                                _confirm.get("visible_person_ids"),
+                            )
+                        ctx.setdefault("diagnostic_lines", {}).setdefault(_waste_overlay_key_req, {})["capture"] = (
+                            f"CAPTURE: F{_request_key[1]} TO F{_frame_key[1]} LATE {_lateness}"
+                        )
+                        _log_stage(ctx, _waste_overlay_key_req, f"evidence_captured_{_status.lower()}", _frame_key[1])
                 _CAPTURE_DIAG["ok"] += 1
             except Exception as exc:
                 _CAPTURE_DIAG["last_err"] = str(exc)[:200]
@@ -951,12 +1310,29 @@ def extract_metadata(
             for _d in (
                 ctx.get("waste_dumper_map"),
                 ctx.get("waste_attribution_pair"),
-                ctx.get("waste_attribution_started_at"),
+                ctx.get("waste_confirm_windows"),
+                ctx.get("waste_confirm_last_frame"),
+                ctx.get("waste_attribution_due_frame"),
                 ctx.get("waste_person_violation_frames_remaining"),
                 ctx.get("waste_repeat_alert_at"),
             ):
                 if _d:
                     for _k in [k for k in _d if k[0] == camera_id]:
+                        del _d[_k]
+            # person_overlay_causes/osd_overlay_confirmed are keyed by
+            # source_id, not camera_id -- clear this source's entries.
+            _sid = int(frame_meta.source_id)
+            _overlay_causes_map = ctx.get("person_overlay_causes")
+            if _overlay_causes_map:
+                for _pk in [k for k in _overlay_causes_map if k[0] == _sid]:
+                    del _overlay_causes_map[_pk]
+            _overlay_confirmed_map = ctx.get("osd_overlay_confirmed")
+            if _overlay_confirmed_map:
+                for _ck in [k for k in _overlay_confirmed_map if k[0] == _sid]:
+                    del _overlay_confirmed_map[_ck]
+            for _d in (ctx.get("stage_timestamps"), ctx.get("diagnostic_lines")):
+                if _d:
+                    for _k in [k for k in _d if k[0] == _sid]:
                         del _d[_k]
         # nvinfer outputs bbox coords in muxer resolution, NOT source resolution.
         # source_frame_width may be 1280 (original) while rect.left is in 1920 (muxer).
@@ -981,9 +1357,6 @@ def extract_metadata(
         _cam_waste_proximity_px = _dcfg.get(
             "waste_proximity_px", pipeline_settings.waste_proximity_px
         )
-        _cam_waste_proximity_window_s = max(0.0, min(1.0, float(_dcfg.get(
-            "waste_proximity_alert_window_s", pipeline_settings.waste_dump_alert_threshold_s
-        ))))
 
         detections: list[dict] = []
 
@@ -1097,27 +1470,41 @@ def extract_metadata(
 
                     track_info = track_manager.update_track(camera_id, track_id, class_name, bbox_dict, in_roi)
 
-                    # Capture attribution on a new waste track's first observed
-                    # frame. A recycled unmatched waste ID gets one safe retry
-                    # only when a current-frame person is visibly carrying an
-                    # item; generic later bystanders remain ineligible. Only
-                    # current-frame tracker metadata is considered.
+                    # Attribute to whoever is closest, resolved at a fixed
+                    # frame offset after the waste object was first seen --
+                    # no distance threshold. Waiting for someone to come
+                    # within a fixed px gap could take many seconds if the
+                    # dumper wanders (observed ~17s in practice), even
+                    # though the closest person at any given moment right
+                    # after the drop is virtually always the actual dumper.
+                    # This resolves deterministically ~_WASTE_ATTRIBUTION_
+                    # DELAY_FRAMES after first detection, always.
                     _dumper_map = ctx.setdefault("waste_dumper_map", {})
-                    _attribution_started_map = ctx.setdefault("waste_attribution_started_at", {})
+                    _waste_confirm_windows: dict[tuple, RollingConfirmation] = ctx.setdefault("waste_confirm_windows", {})
+                    _waste_confirm_last_frame = ctx.setdefault("waste_confirm_last_frame", {})
                     _person_violation_frames_map = ctx.setdefault(
                         "waste_person_violation_frames_remaining", {}
                     )
                     _waste_key = (camera_id, track_id)
-                    _retry_recycled_waste = (
-                        _waste_key in _dumper_map
-                        and _dumper_map[_waste_key] is None
-                        and bool(_carrying_person_ids)
-                    )
+                    _attrib_due_map = ctx.setdefault("waste_attribution_due_frame", {})
+                    if class_name == "waste" and _waste_key not in _attrib_due_map and _waste_key not in _dumper_map:
+                        # Check immediately on first sight -- this is when
+                        # the actual dumper is most likely still standing
+                        # right there. Delaying the FIRST check gives them
+                        # time to walk away, so a random nearby bystander
+                        # gets attributed instead once the delay elapses.
+                        # Only a failed attempt's RETRY (below) is spaced
+                        # out, not this initial one.
+                        _attrib_due_map[_waste_key] = int(frame_meta.frame_num)
+                        _log_stage(ctx, (int(frame_meta.source_id), "waste", track_id), "first_seen", int(frame_meta.frame_num))
+                    _already_attributed_once = _dumper_map.get(_waste_key) is not None
                     if (
                         class_name == "waste"
-                        and (_waste_key not in _dumper_map or _retry_recycled_waste)
+                        and _waste_key in _attrib_due_map
+                        and int(frame_meta.frame_num) >= _attrib_due_map[_waste_key]
                         and not fsm_manager.is_escalated(camera_id, track_id)
                     ):
+                        _attrib_due_map.pop(_waste_key, None)
                         _wbox0 = (
                             rect.left, rect.top,
                             rect.left + rect.width, rect.top + rect.height,
@@ -1128,32 +1515,93 @@ def extract_metadata(
                         _x_to_source0 = _source_w0 / float(frame_width)
                         _y_to_source0 = _source_h0 / float(frame_height)
                         for _pid0, _pbox0 in person_bboxes:
-                            # Retrying an old unmatched waste ID is allowed
-                            # only for a person carrying an item on this frame;
-                            # this prevents a later ordinary bystander from
-                            # inheriting the incident.
-                            if _retry_recycled_waste and _pid0 not in _carrying_person_ids:
-                                continue
                             _dx0 = max(_pbox0[0] - _wbox0[2], _wbox0[0] - _pbox0[2], 0.0)
                             _dy0 = max(_pbox0[1] - _wbox0[3], _wbox0[1] - _pbox0[3], 0.0)
                             # Calibrate from muxer coordinates to the source
-                            # image: "20px" now means 20px in the camera frame
-                            # regardless of streammux scaling/resolution.
+                            # image: distances are measured in the camera's
+                            # actual pixel space regardless of streammux
+                            # scaling/resolution.
                             _d0 = math.hypot(
                                 _dx0 * _x_to_source0,
                                 _dy0 * _y_to_source0,
                             )
                             if _best_d0 is None or _d0 < _best_d0:
                                 _best_d0, _best_pid0, _best_pbox0 = _d0, _pid0, _pbox0
-                        if _best_d0 is None or _best_d0 > _cam_waste_proximity_px:
+                        # Distance gate still applies -- closest-at-a-fixed-
+                        # frame without one confidently blamed people who
+                        # were genuinely far away (observed gap=130px+).
+                        # If nobody qualifies yet, re-arm for another check
+                        # _WASTE_ATTRIBUTION_DELAY_FRAMES later -- UNLESS
+                        # either give-up condition is met, in which case
+                        # stop retrying entirely (leave _waste_key out of
+                        # _attrib_due_map so this block never re-enters for
+                        # this track): (a) nobody is visible in frame at all
+                        # right now -- no point re-checking against an empty
+                        # scene, or (b) _WASTE_ATTRIBUTION_TIMEOUT_S has
+                        # elapsed since first_seen -- previously unbounded,
+                        # retrying every 10 frames forever for an item
+                        # nobody ever approaches.
+                        _prev_dumper_pid0 = _dumper_map.get(_waste_key)
+                        if _best_d0 is not None and _best_d0 <= _cam_waste_proximity_px:
+                            # Continuous re-attribution: overwrite on every
+                            # due check, not just the first success -- "no
+                            # static ID," keep picking whoever is CURRENTLY
+                            # nearest for as long as either the waste or a
+                            # person stays visible. Explicit choice: treat
+                            # EVERY due check as a fresh detection, even when
+                            # the same person/waste is picked again -- logging
+                            # and dumper_map/due-map still refresh every time,
+                            # on purpose.
+                            #
+                            # ONE targeted exception: the N-of-M confirmation
+                            # window (below) must NOT be recreated on a
+                            # repeat of the SAME person -- since this block
+                            # re-fires every ~0.4s, a brand new
+                            # RollingConfirmation every cycle can never
+                            # accumulate N-of-M, so waste_confirmed/violation
+                            # would structurally never fire. Only reset it on
+                            # a genuine change of attributed person.
+                            _dumper_map[_waste_key] = _best_pid0
+                            _attrib_due_map[_waste_key] = int(frame_meta.frame_num) + _WASTE_ATTRIBUTION_DELAY_FRAMES
+                        else:
                             _best_pid0, _best_pbox0 = None, None
-                        # Freeze the result for this placement attempt.
-                        _dumper_map[_waste_key] = _best_pid0
+                            if _already_attributed_once:
+                                # Already have a dumper on record -- keep
+                                # re-checking indefinitely while the waste
+                                # itself stays visible (this whole block only
+                                # runs when the waste object is detected in
+                                # THIS frame), no timeout/abandon. The prior
+                                # attribution is left untouched until a
+                                # closer match displaces it.
+                                _attrib_due_map[_waste_key] = int(frame_meta.frame_num) + _WASTE_ATTRIBUTION_DELAY_FRAMES
+                            else:
+                                _first_seen_ts = ctx.get("stage_timestamps", {}).get(
+                                    (int(frame_meta.source_id), "waste", track_id), {}
+                                ).get("first_seen")
+                                _timed_out = (
+                                    _first_seen_ts is not None
+                                    and time.monotonic() - _first_seen_ts >= _WASTE_ATTRIBUTION_TIMEOUT_S
+                                )
+                                # NOT gated on "no person visible this exact
+                                # frame" anymore -- on a short, sparse test
+                                # clip a momentary empty frame is normal.
+                                # Timeout is the only give-up condition for
+                                # the very FIRST attribution attempt; once
+                                # attributed at least once, the branch above
+                                # takes over and never abandons.
+                                if _timed_out:
+                                    logger.info(
+                                        "WASTE ATTRIBUTION ABANDONED %s frame=%d waste=%d "
+                                        "reason=timeout_%.0fs -- no longer retrying",
+                                        camera_id, int(frame_meta.frame_num), track_id,
+                                        _WASTE_ATTRIBUTION_TIMEOUT_S,
+                                    )
+                                else:
+                                    _attrib_due_map[_waste_key] = int(frame_meta.frame_num) + _WASTE_ATTRIBUTION_DELAY_FRAMES
                         if _best_pid0 is not None:
-                            # The 500ms persistence clock belongs to this
-                            # placement episode, not the possibly-recycled
-                            # waste track's original first_seen timestamp.
-                            _attribution_started_map[_waste_key] = time.monotonic()
+                            if _best_pid0 != _prev_dumper_pid0 or _waste_key not in _waste_confirm_windows:
+                                _waste_confirm_windows[_waste_key] = RollingConfirmation(_WASTE_CONFIRM_N, _WASTE_CONFIRM_M)
+                            _waste_confirm_last_frame[_waste_key] = int(frame_meta.frame_num)
                             ctx.setdefault("waste_attribution_pair", {})[_waste_key] = {
                                 "person_id": _best_pid0,
                                 "waste_id": track_id,
@@ -1169,18 +1617,90 @@ def extract_metadata(
                                 "WASTE ATTRIBUTION CAPTURE %s frame=%d waste=%d person=%d "
                                 "gap=%.1fpx threshold=%.1fpx source=%dx%d",
                                 camera_id, int(frame_meta.frame_num), track_id, _best_pid0,
-                                _best_d0, _cam_waste_proximity_px,
-                                int(_source_w0), int(_source_h0),
+                                _best_d0, _cam_waste_proximity_px, int(_source_w0), int(_source_h0),
                             )
+                            logger.info(
+                                "ATTRIBUTION_SELECTED source_id=%d frame_num=%d waste_track_id=%d "
+                                "attributed_person_id=%d waste_key=%s person_key=%s",
+                                int(frame_meta.source_id), int(frame_meta.frame_num), track_id, _best_pid0,
+                                _waste_key, (camera_id, "person", _best_pid0),
+                            )
+                            ctx.setdefault("diagnostic_lines", {}).setdefault(
+                                (int(frame_meta.source_id), "waste", track_id), {}
+                            )["attr"] = (
+                                f"ATTR: S{int(frame_meta.source_id)} F{int(frame_meta.frame_num)} "
+                                f"W{track_id % 1000} P{_best_pid0 % 1000}"
+                            )
+                            _log_stage(ctx, (int(frame_meta.source_id), "waste", track_id), "attributed", int(frame_meta.frame_num))
                         else:
                             logger.info(
                                 "WASTE ATTRIBUTION CAPTURE %s frame=%d waste=%d person=none "
-                                "nearest_gap=%s threshold=%.1fpx source=%dx%d",
+                                "nearest_gap=%s threshold=%.1fpx source=%dx%d -- retrying in %d frames",
                                 camera_id, int(frame_meta.frame_num), track_id,
                                 "n/a" if _best_d0 is None else f"{_best_d0:.1f}px",
-                                _cam_waste_proximity_px,
-                                int(_source_w0), int(_source_h0),
+                                _cam_waste_proximity_px, int(_source_w0), int(_source_h0),
+                                _WASTE_ATTRIBUTION_DELAY_FRAMES,
                             )
+
+                    # N-of-M rolling confirmation (RollingConfirmation): the
+                    # waste object must be detector-confirmed as "waste" on
+                    # at least _WASTE_CONFIRM_N of its last _WASTE_CONFIRM_M
+                    # eligible observations before its own FSM is forced into
+                    # VIOLATION -- NOT a bare 1-frame counter (a single
+                    # misclassified frame used to be enough), NOT wall-clock
+                    # time, and NOT the full 15s dwell_violation_threshold_s
+                    # (that's for PERSON loitering/dwell behavior, unrelated
+                    # FSM, still intact below). This step only marks the
+                    # waste track itself as confirmed and starts the
+                    # person's highlight countdown -- it does NOT fire the
+                    # alert. The alert fires later, exactly when the
+                    # person's red violation box actually renders (see the
+                    # highlight block below).
+                    #
+                    # This per-object loop only runs when class_name=="waste"
+                    # was actually detected this frame, so a genuine "miss"
+                    # (the object briefly not detected) can't be observed
+                    # directly here. Approximate it from the frame_num gap
+                    # since the last sighting: each skipped frame between
+                    # sightings backfills one miss (bounded to M so a scene
+                    # cut or long occlusion can't retroactively erase an
+                    # otherwise-confirmable window with an enormous gap).
+                    _window = _waste_confirm_windows.get(_waste_key)
+                    if (
+                        class_name == "waste"
+                        and _window is not None
+                        and not _window.already_fired
+                        and _dumper_map.get(_waste_key) is not None
+                        and not fsm_manager.is_escalated(camera_id, track_id)
+                    ):
+                        _cur_frame = int(frame_meta.frame_num)
+                        _last_frame = _waste_confirm_last_frame.get(_waste_key, _cur_frame)
+                        _gap_misses = min(max(_cur_frame - _last_frame - 1, 0), _WASTE_CONFIRM_M)
+                        for _ in range(_gap_misses):
+                            _window.observe(False)
+                        _window.observe(True)
+                        _waste_confirm_last_frame[_waste_key] = _cur_frame
+                        if _window.should_fire():
+                            _window.mark_fired()
+                            fsm_manager.force_violation(
+                                camera_id, track_id, class_name,
+                                dwell_time_s=track_info.dwell_time_s,
+                                bbox=bbox_dict,
+                            )
+                            _log_stage(ctx, (int(frame_meta.source_id), "waste", track_id), "waste_confirmed", int(frame_meta.frame_num))
+                            # Seed the repeat-reminder timer HERE, not only
+                            # when the alert eventually fires post-highlight
+                            # (~_PERSON_HIGHLIGHT_DELAY_FRAMES frames later).
+                            # force_violation() above immediately puts this
+                            # waste track's own FSM into "violation", which
+                            # the periodic repeat-reminder check (further
+                            # down, keyed on fsm_state in violation/alerting/
+                            # escalated) sees right away. An unseeded entry
+                            # in that gap defaults to 0.0, so the reminder
+                            # fired a "still unresolved" alert before the
+                            # actual first alert had even gone out.
+                            ctx.setdefault("waste_repeat_alert_at", {})[_waste_key] = time.monotonic()
+                            _person_violation_frames_map[_waste_key] = _PERSON_HIGHLIGHT_DELAY_FRAMES
 
                     # Count only frames where this exact waste track is
                     # actually detected. Global frame numbers can advance
@@ -1191,6 +1711,7 @@ def extract_metadata(
                     if class_name == "waste" and _person_frames_left is not None:
                         _person_frames_left -= 1
                         if _person_frames_left <= 0:
+                            _person_violation_frames_map.pop(_waste_key, None)
                             _person_pid = _dumper_map.get(_waste_key)
                             if _person_pid is not None:
                                 _person_track = track_manager.get_track(camera_id, _person_pid)
@@ -1199,6 +1720,20 @@ def extract_metadata(
                                     if _person_track is not None and _person_track.bbox_history
                                     else None
                                 )
+                                # Keyed by frame_meta.source_id (a raw int
+                                # intrinsic to the buffer) rather than the
+                                # derived camera_id string -- extract_metadata
+                                # and decorate_for_osd each independently
+                                # resolve camera_id from source_id via
+                                # source_manager.pad_to_camera, and if those
+                                # two resolutions ever disagreed for the same
+                                # physical source (registration race, stale
+                                # cache), a camera_id-keyed cause would never
+                                # be found by the other probe. source_id
+                                # itself can't disagree -- it's the same field
+                                # on the same buffer.
+                                _person_key = (int(frame_meta.source_id), "person", _person_pid)
+                                _state_before = fsm_manager.get_fsm_state(camera_id, _person_pid)
                                 fsm_manager.force_violation(
                                     camera_id, _person_pid, "person",
                                     dwell_time_s=(
@@ -1206,91 +1741,91 @@ def extract_metadata(
                                     ),
                                     bbox=_person_bbox,
                                 )
-                            _person_violation_frames_map.pop(_waste_key, None)
+                                _state_after = fsm_manager.get_fsm_state(camera_id, _person_pid)
+                                logger.debug(
+                                    "PERSON_FORCE_VIOLATION source_id=%d frame_num=%d "
+                                    "requested_person_key=%s fsm_key=(%s,%d) state_before=%s state_after=%s",
+                                    int(frame_meta.source_id), int(frame_meta.frame_num), _person_key,
+                                    camera_id, _person_pid, _state_before, _state_after,
+                                )
+                                _log_stage(ctx, (int(frame_meta.source_id), "waste", _waste_key[1]), "person_highlighted_alert_fired", int(frame_meta.frame_num))
+                                _waste_overlay_key = (int(frame_meta.source_id), "waste", _waste_key[1])
+                                ctx.setdefault("diagnostic_lines", {}).setdefault(_waste_overlay_key, {})["fsm"] = (
+                                    f"FSM: P{_person_pid % 1000} {(_state_before or 'NONE').upper()} "
+                                    f"TO {(_state_after or 'NONE').upper()}"
+                                )
+                                # Incident-linked overlay cause: independent of
+                                # the generic person FSM. Reference-counted by
+                                # set membership so a second, unrelated waste
+                                # incident later attributing the SAME person
+                                # remains independently represented. Once a
+                                # person is marked, waste exit/loss must NOT
+                                # clear their red box: its visual lifetime is
+                                # owned by the person's tracker lifetime and
+                                # ends only on person loss or a scene reset.
+                                _overlay_causes = ctx.setdefault("person_overlay_causes", {})
+                                _overlay_causes.setdefault(_person_key, set()).add(_waste_overlay_key)
+                                # Fire the alert HERE -- specifically right
+                                # after the red bbox + violation label just
+                                # rendered for the person. frame_num is
+                                # intrinsic to the buffer (assigned once by
+                                # the source), not branch-relative, so a
+                                # target of current_frame + _EVIDENCE_CAPTURE_
+                                # DELAY_FRAMES is always safely in the
+                                # pipeline's future relative to right now --
+                                # no extra wait needed before requesting it.
+                                # The alert payload is generated immediately
+                                # (message, severity, attribution -- all
+                                # already known); the evidence JPEG is
+                                # requested for a frame a few frames from now
+                                # and captured in parallel on a background
+                                # thread (_fire_waste_alert_async's worker
+                                # waits on snapshot_exact_cache for that exact
+                                # frame, writes it, THEN publishes the Kafka
+                                # message) -- so the payload and the evidence
+                                # image are produced concurrently, and the
+                                # alert is only actually sent once the image
+                                # is ready.
+                                ctx.setdefault("waste_repeat_alert_at", {})[(camera_id, track_id)] = time.monotonic()
+                                _visual_pair = ctx.get("waste_attribution_pair", {}).get(_waste_key)
+                                _cache = ctx.get("frame_jpeg_cache", {})
+                                _snapshot_source_id = int(frame_meta.source_id)
+                                _snapshot_target_frame = (
+                                    int(frame_meta.frame_num) + _EVIDENCE_CAPTURE_DELAY_FRAMES
+                                )
+                                _snapshot_target_key = (
+                                    _snapshot_source_id, _snapshot_target_frame
+                                )
+                                ctx.setdefault("frame_capture_requests", set()).add(
+                                    _snapshot_target_key
+                                )
+                                ctx.setdefault("frame_capture_waste_key", {})[_snapshot_target_key] = _waste_overlay_key
+                                _who = f"person #{_person_pid % 1000:03d}"
+                                _fire_waste_alert_async(
+                                    kafka_producer, camera_id, _waste_key[1], _cache.get(frame_meta.source_id),
+                                    severity="critical",
+                                    title="Waste dumping confirmed",
+                                    message=f"Waste dumped by {_who} — item detected in monitored zone",
+                                    dumped_by_track_id=_person_pid,
+                                    dwell_time_s=track_info.dwell_time_s,
+                                    bbox=bbox_dict,
+                                    detected_at=time.time(),
+                                    snapshot_cache=_cache,
+                                    snapshot_captured_at=_capture_last_ts,
+                                    snapshot_source_id=_snapshot_source_id,
+                                    snapshot_visual_pair=_visual_pair,
+                                    snapshot_exact_cache=ctx.get("frame_jpeg_exact_cache"),
+                                    snapshot_target_frame=_snapshot_target_frame,
+                                    snapshot_capture_requests=ctx.get("frame_capture_requests"),
+                                )
+                                logger.debug(
+                                    "WASTE ALERT (post-highlight) %s waste=%d person=%d: dumped by %s; "
+                                    "trigger_frame=%d evidence_frame=%d",
+                                    camera_id, _waste_key[1], _person_pid, _who,
+                                    int(frame_meta.frame_num), _snapshot_target_frame,
+                                )
                         else:
                             _person_violation_frames_map[_waste_key] = _person_frames_left
-
-                    # Ground-confirmed violation: fire the full confirmed/
-                    # critical alert once a waste object has persisted for
-                    # _cam_waste_proximity_window_s (default
-                    # 500ms, config: waste_proximity_alert_window_s) -- NOT at
-                    # age_s==0 (raw track creation), since a
-                    # single-frame detector blip can spawn a track_id that
-                    # never really represents an object on the ground.
-                    # Also NOT the full 15s dwell_violation_threshold_s,
-                    # which is for PERSON loitering/dwell behavior
-                    # (unrelated FSM, still intact below) -- a waste
-                    # object doesn't need 15s to confirm it's a violation,
-                    # just long enough to debounce detector noise.
-                    if (
-                        class_name == "waste"
-                        and _attribution_started_map.get(_waste_key) is not None
-                        and time.monotonic() - _attribution_started_map[_waste_key]
-                            >= _cam_waste_proximity_window_s
-                        and _dumper_map.get(_waste_key) is not None
-                        and not fsm_manager.is_escalated(camera_id, track_id)
-                    ):
-                        # This paired spatial/persistence rule overrides the
-                        # normal dwell FSM for the waste track. The frozen
-                        # first-frame person is promoted only after fifteen more
-                        # detections of this waste track, so their red box
-                        # cannot precede a visible waste detection.
-                        fsm_manager.force_violation(
-                            camera_id, track_id, class_name,
-                            dwell_time_s=track_info.dwell_time_s,
-                            bbox=bbox_dict,
-                        )
-                        # Seed the periodic-reminder timer here too -- same
-                        # bug class as the dwell-confirm path: an unseeded
-                        # entry defaults to 0.0, so the periodic-reminder
-                        # check fires again as soon as the FSM naturally
-                        # reaches VIOLATION/ALERTING (dwell_violation_
-                        # threshold_s later), producing a second alert
-                        # ~15-25s after this immediate one instead of
-                        # waiting a full waste_repeat_alert_interval_s.
-                        ctx.setdefault("waste_repeat_alert_at", {})[(camera_id, track_id)] = time.monotonic()
-                        _person_violation_frames_map[_waste_key] = _PERSON_HIGHLIGHT_DELAY_FRAMES
-                        _visual_pair = ctx.get("waste_attribution_pair", {}).get(_waste_key)
-                        _cache = ctx.get("frame_jpeg_cache", {})
-                        _snapshot_source_id = int(frame_meta.source_id)
-                        _snapshot_target_frame = (
-                            int(frame_meta.frame_num) + _EVIDENCE_CAPTURE_DELAY_FRAMES
-                        )
-                        _snapshot_target_key = (
-                            _snapshot_source_id, _snapshot_target_frame
-                        )
-                        ctx.setdefault("frame_capture_requests", set()).add(
-                            _snapshot_target_key
-                        )
-                        # Use the proximity attribution captured during the
-                        # 500ms placement window, never a later bystander.
-                        _nearest_pid = _dumper_map.get((camera_id, track_id))
-                        # The paired-alert condition above guarantees an ID;
-                        # never send a misleading "unidentified person" alert.
-                        _who = f"person #{_nearest_pid % 1000:03d}"
-                        _fire_waste_alert_async(
-                            kafka_producer, camera_id, track_id,
-                            _cache.get(frame_meta.source_id),
-                            severity="critical",
-                            title="Waste dumping confirmed",
-                            message=f"Waste dumped by {_who} — item detected in monitored zone",
-                            dumped_by_track_id=_nearest_pid,
-                            dwell_time_s=track_info.dwell_time_s,
-                            bbox=bbox_dict,
-                            detected_at=time.time(),
-                            snapshot_cache=_cache,
-                            snapshot_captured_at=_capture_last_ts,
-                            snapshot_source_id=_snapshot_source_id,
-                            snapshot_visual_pair=_visual_pair,
-                            snapshot_exact_cache=ctx.get("frame_jpeg_exact_cache"),
-                            snapshot_target_frame=_snapshot_target_frame,
-                            snapshot_capture_requests=ctx.get("frame_capture_requests"),
-                        )
-                        logger.info(
-                            "WASTE ALERT (immediate) %s track=%d: dumped by %s; "
-                            "evidence_frame=%d",
-                            camera_id, track_id, _who, _snapshot_target_frame,
-                        )
                     # Check if this person has a carried_item overlapping
                     has_carried = False
                     if class_name == "person" and carried_item_bboxes:
@@ -1474,7 +2009,7 @@ def extract_metadata(
                                     bbox=bbox_dict,
                                     detected_at=time.time(),
                                 )
-                                logger.info(
+                                logger.debug(
                                     "WASTE ALERT %s track=%d: %s", camera_id, track_id, _msg
                                 )
                                 # Seed the periodic-reminder timer now -- it
@@ -1491,7 +2026,7 @@ def extract_metadata(
                         # do NOT dispatch VLM for non-escalated tracks (noise).
                         if fsm_event.state.value == "exited":
                             # A dumper leaving the ROI does not end the waste
-                            # incident or reset its 500ms placement timer.
+                            # incident or reset its confirm-frame counter.
                             if CLASS_CATEGORIES.get(class_name) == "waste_object":
                                 # class_name is the raw COCO label (e.g.
                                 # "bottle", "cup"), never the literal string
@@ -1501,8 +2036,20 @@ def extract_metadata(
                                 # own exit.
                                 ctx.get("waste_dumper_map", {}).pop((camera_id, track_id), None)
                                 ctx.get("waste_attribution_pair", {}).pop((camera_id, track_id), None)
-                                ctx.get("waste_attribution_started_at", {}).pop((camera_id, track_id), None)
+                                ctx.get("waste_confirm_windows", {}).pop((camera_id, track_id), None)
+                                ctx.get("waste_confirm_last_frame", {}).pop((camera_id, track_id), None)
+                                ctx.get("waste_attribution_due_frame", {}).pop((camera_id, track_id), None)
                                 ctx.get("waste_person_violation_frames_remaining", {}).pop((camera_id, track_id), None)
+                                ctx.get("waste_reminders_suppressed", set()).discard((camera_id, track_id))
+                                _exited_waste_key = (int(frame_meta.source_id), "waste", track_id)
+                                # Deliberately retain person_overlay_causes.
+                                # The waste detector can briefly lose a small
+                                # or occluded item while its attributed person
+                                # is still plainly visible. Clearing the cause
+                                # here made the person's red box last only a
+                                # few frames. Person-track loss owns cleanup.
+                                ctx.get("stage_timestamps", {}).pop(_exited_waste_key, None)
+                                ctx.get("diagnostic_lines", {}).pop(_exited_waste_key, None)
                             frame_batcher.on_track_exit(camera_id, track_id)
                             # Finalize evidence in background — finalize sleeps
                             # SEGMENT_SECS+2 to flush the trailing segment, so
@@ -1555,6 +2102,7 @@ def extract_metadata(
                         and _current_fsm in ("violation", "alerting", "escalated")
                         and track_id != 0xFFFFFFFFFFFFFFFF
                         and ctx.get("waste_dumper_map", {}).get((camera_id, track_id)) is not None
+                        and (camera_id, track_id) not in ctx.get("waste_reminders_suppressed", set())
                     ):
                         _repeat_key = (camera_id, track_id)
                         _repeat_state = ctx.setdefault("waste_repeat_alert_at", {})
@@ -1581,7 +2129,7 @@ def extract_metadata(
                                 bbox=bbox_dict,
                                 detected_at=time.time(),
                             )
-                            logger.info(
+                            logger.debug(
                                 "WASTE ALERT (repeat) %s track=%d: still unresolved after %.0fs",
                                 camera_id, track_id, track_info.dwell_time_s,
                             )
@@ -1819,14 +2367,14 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
     # detection metadata; the extract_metadata probe (branch 2) reads
     # the cache when it needs to attach a frame to a VLM request.
     queue_capture = make_element("queue", "queue_capture")
-    # leaky=1 (upstream): when full, drop the OLDEST queued buffer so the
-    # JPEG-encode probe (PIL resize+encode is comparatively slow, see
-    # capture_frame_probe) always processes the freshest frame available
-    # instead of falling behind and serving a stale cached snapshot for
-    # alert evidence. leaky=2 (downstream) did the opposite -- it dropped
-    # incoming NEW frames and kept old ones queued, which is why the saved
-    # evidence image lagged behind the actual moment of the alert.
-    queue_capture.set_property("leaky", 1)
+    # leaky=2 (downstream): per `gst-inspect-1.0 queue`, "downstream"
+    # leaks/drops OLD buffers already queued, keeping the newest ones --
+    # "upstream" (1) does the opposite, dropping NEW arriving buffers and
+    # keeping stale ones queued. An earlier pass through this code had
+    # these backwards (set to 1, believing it dropped old buffers) --
+    # that actually made the capture branch prefer STALE frames under
+    # load, which is the wrong direction for alert-evidence freshness.
+    queue_capture.set_property("leaky", 2)
     queue_capture.set_property("max-size-buffers", 3)
     queue_capture.set_property("max-size-bytes", 0)
     queue_capture.set_property("max-size-time", 0)
@@ -1949,6 +2497,42 @@ def main() -> None:
     # person's box is deliberately left unchanged until fifteen further frames
     # containing the confirmed waste object have passed.
     waste_attribution_pair: dict[tuple[str, int], dict] = {}
+    # (camera_id, waste_track_id) -> attributed person_track_id. Written by
+    # extract_metadata at attribution time, read by decorate_for_osd for the
+    # always-on "Attributed" overlay -- pre-declared here (like the other
+    # shared dicts below) so both probes share the SAME object; extract_metadata
+    # still creates it lazily via ctx.setdefault(...), which is a no-op once
+    # this key is already present.
+    waste_dumper_map: dict[tuple[str, int], int] = {}
+    # Incident-linked overlay causes: person_key -> set of waste_keys
+    # currently forcing that person's box red. Reference-counted by
+    # incident (set membership) so clearing ONE waste incident (via
+    # person_overlay_remove_cause) never wipes out another active
+    # incident's claim on the same person, and the render decision never
+    # depends solely on the generic person FSM (fsm_manager.is_escalated).
+    # Keys are fully qualified: (camera_id, "person"|"waste", track_id).
+    person_overlay_causes: dict[tuple[str, str, int], set] = {}
+    # Per-frame overlay confirmation written by decorate_for_osd (which has
+    # object metadata) and read by capture_frame_probe (which only has raw
+    # pixels) to classify a capture as complete vs PARTIAL. Keyed by
+    # (source_id, frame_num, waste_key) -> {"waste_ok", "person_ok",
+    # "person_track_id"}. Bounded: only written for frames where an active
+    # waste incident's objects were actually seen, popped once consumed.
+    osd_overlay_confirmed: dict[tuple, dict] = {}
+    # (source_id, target_frame) -> waste_key, so capture_frame_probe can
+    # look up which incident a given evidence-capture request belongs to
+    # for the EVIDENCE_CAPTURED log and completeness check.
+    frame_capture_waste_key: dict[tuple[int, int], tuple] = {}
+    # Four-line diagnostic overlay text per waste_overlay_key, updated at
+    # each of the four correlated checkpoints (ATTR/FSM in extract_metadata,
+    # OSD in decorate_for_osd, CAPTURE in capture_frame_probe) and rendered
+    # by decorate_for_osd only on alert-evidence frames or when
+    # WW_DEBUG_OVERLAY=1 -- never on the normal production stream.
+    diagnostic_lines: dict[tuple, dict[str, str]] = {}
+    # Per-incident wall-clock stage timings (_log_stage), shared between
+    # extract_metadata and capture_frame_probe so "elapsed_since_prev_stage"
+    # spans both probes and actually shows where a slow leg is.
+    stage_timestamps: dict[tuple, dict[str, float]] = {}
 
     kafka_producer = PipelineKafkaProducer()
     vlm_client = VLMGrpcClient()
@@ -2059,6 +2643,12 @@ def main() -> None:
             "roi_syncer": roi_syncer,
             "scene_cut_flags": scene_cut_flags,
             "waste_attribution_pair": waste_attribution_pair,
+            "person_overlay_causes": person_overlay_causes,
+            "osd_overlay_confirmed": osd_overlay_confirmed,
+            "frame_capture_waste_key": frame_capture_waste_key,
+            "diagnostic_lines": diagnostic_lines,
+            "stage_timestamps": stage_timestamps,
+            "waste_dumper_map": waste_dumper_map,
         }
         fakesink_sink_pad.add_probe(
             Gst.PadProbeType.BUFFER,
@@ -2077,6 +2667,10 @@ def main() -> None:
                     "frame_jpeg_exact_cache": frame_jpeg_exact_cache,
                     "frame_capture_requests": frame_capture_requests,
                     "scene_cut_flags": scene_cut_flags,
+                    "osd_overlay_confirmed": osd_overlay_confirmed,
+                    "frame_capture_waste_key": frame_capture_waste_key,
+                    "diagnostic_lines": diagnostic_lines,
+                    "stage_timestamps": stage_timestamps,
                 },
             )
             logger.info("Frame capture probe attached to fakesink_capture.sink")
@@ -2102,6 +2696,12 @@ def main() -> None:
                     "roi_manager": roi_manager,
                     "source_manager": source_manager,
                     "waste_attribution_pair": waste_attribution_pair,
+                    "person_overlay_causes": person_overlay_causes,
+                    "osd_overlay_confirmed": osd_overlay_confirmed,
+                    "frame_capture_requests": frame_capture_requests,
+                    "frame_capture_waste_key": frame_capture_waste_key,
+                    "diagnostic_lines": diagnostic_lines,
+                    "waste_dumper_map": waste_dumper_map,
                 },
             )
             logger.info("OSD decoration probe attached to nvdsosd.sink")
@@ -2270,23 +2870,123 @@ def main() -> None:
             for evt in stale_events:
                 kafka_producer.send_event(evt)
             lost_tracks = track_manager.prune_lost()
+            # camera_id -> source_id, for translating TrackInfo.camera_id
+            # (that's all prune_lost gives us) into the source_id-qualified
+            # keys person_overlay_causes uses.
+            _cam_to_source = {v: k for k, v in source_manager.pad_to_camera.items()}
+            # Hard safety-net timeout: force-expire any waste track whose
+            # first_seen (stage_timestamps) is older than
+            # _WASTE_TRACK_MAX_LIFETIME_S, even if the DeepStream tracker
+            # itself never naturally loses it (prune_lost only fires on
+            # last_seen staleness -- a looping test source, or any object
+            # that just sits there, keeps the SAME track_id alive
+            # indefinitely, with no natural gap for prune_lost to catch).
+            #
+            # This does NOT feed into the standard lost_tracks cleanup
+            # loop below -- that loop clears waste_dumper_map/
+            # waste_attribution_pair -- deliberately, as of this version:
+            # after _WASTE_TRACK_MAX_LIFETIME_S the incident is treated as
+            # fully NEW, exactly as if the tracker had lost and re-found
+            # the object. The tracker itself never loses it (same
+            # track_id, continuously visible on a looping/static test
+            # source), so this is the only way to get a second, distinct
+            # attribution pass on the same physical item -- explicit
+            # product choice, not the earlier same-40s "preserve original
+            # attribution" behavior (that fix still applies to *unwanted*
+            # re-attribution churn; this is an intentional periodic reset).
+            _pad_to_cam = source_manager.pad_to_camera
+            for _wk in list(probe_ctx.get("stage_timestamps", {}).keys()):
+                if _wk[1] != "waste":
+                    continue
+                _first_seen_ts = probe_ctx["stage_timestamps"][_wk].get("first_seen")
+                if _first_seen_ts is None:
+                    continue
+                if time.monotonic() - _first_seen_ts < _WASTE_TRACK_MAX_LIFETIME_S:
+                    continue
+                _cam = _pad_to_cam.get(_wk[0])
+                if _cam is None:
+                    continue
+                if track_manager.force_expire(_cam, _wk[2]) is not None:
+                    logger.debug(
+                        "WASTE TRACK FORCE-EXPIRED %s track=%d after %.0fs (max lifetime) "
+                        "-- treated as new incident, attribution reopened",
+                        _cam, _wk[2], _WASTE_TRACK_MAX_LIFETIME_S,
+                    )
+                    _fe_key = (_cam, _wk[2])
+                    fsm_manager.clear_escalated(_cam, _wk[2])
+                    probe_ctx.get("waste_dumper_map", {}).pop(_fe_key, None)
+                    probe_ctx.get("waste_attribution_pair", {}).pop(_fe_key, None)
+                    probe_ctx.get("waste_confirm_windows", {}).pop(_fe_key, None)
+                    probe_ctx.get("waste_confirm_last_frame", {}).pop(_fe_key, None)
+                    probe_ctx.get("waste_attribution_due_frame", {}).pop(_fe_key, None)
+                    probe_ctx.get("waste_person_violation_frames_remaining", {}).pop(_fe_key, None)
+                    probe_ctx.get("waste_repeat_alert_at", {}).pop(_fe_key, None)
+                    probe_ctx.get("waste_reminders_suppressed", set()).discard(_fe_key)
+                    probe_ctx.get("stage_timestamps", {}).pop(_wk, None)
+                    probe_ctx.get("diagnostic_lines", {}).pop(_wk, None)
             # Clear suspect highlight when tracker fully loses the object
             for lost in lost_tracks:
                 fsm_manager.clear_escalated(lost.camera_id, lost.track_id)
+                _lost_source_id = _cam_to_source.get(lost.camera_id)
                 if CLASS_CATEGORIES.get(lost.class_name) == "waste_object":
                     _lost_key = (lost.camera_id, lost.track_id)
                     probe_ctx.get("waste_dumper_map", {}).pop(_lost_key, None)
                     probe_ctx.get("waste_attribution_pair", {}).pop(_lost_key, None)
-                    probe_ctx.get("waste_attribution_started_at", {}).pop(_lost_key, None)
+                    probe_ctx.get("waste_confirm_windows", {}).pop(_lost_key, None)
+                    probe_ctx.get("waste_confirm_last_frame", {}).pop(_lost_key, None)
+                    probe_ctx.get("waste_attribution_due_frame", {}).pop(_lost_key, None)
                     probe_ctx.get("waste_person_violation_frames_remaining", {}).pop(_lost_key, None)
                     probe_ctx.get("waste_repeat_alert_at", {}).pop(_lost_key, None)
+                    probe_ctx.get("waste_reminders_suppressed", set()).discard(_lost_key)
+                    if _lost_source_id is not None:
+                        _lost_waste_overlay_key = (_lost_source_id, "waste", lost.track_id)
+                        # Keep the attributed person's overlay cause until
+                        # that PERSON track is lost. Waste detections are
+                        # small and frequently disappear behind occlusion;
+                        # their loss must not turn a still-visible violator
+                        # yellow again.
+                        probe_ctx.get("stage_timestamps", {}).pop(_lost_waste_overlay_key, None)
+                        probe_ctx.get("diagnostic_lines", {}).pop(_lost_waste_overlay_key, None)
                 elif CLASS_CATEGORIES.get(lost.class_name) == "person":
-                    # Preserve waste attribution for reminders, but end the
-                    # visual lifetime when this person actually leaves the
-                    # frame so a future recycled tracker ID is not coloured.
+                    if _lost_source_id is not None:
+                        probe_ctx.get("person_overlay_causes", {}).pop(
+                            (_lost_source_id, "person", lost.track_id), None
+                        )
+                    # Preserve waste attribution (dumped_by_track_id stays
+                    # in the message/DB for the record), but end the visual
+                    # lifetime when this person actually leaves the frame so
+                    # a future recycled tracker ID is not coloured, AND stop
+                    # the repeat-reminder cycle for whichever waste_key they
+                    # were attributed for -- continuing to fire fresh
+                    # snapshots after the dumper is gone just captures
+                    # whichever unrelated bystander happens to walk by next,
+                    # which reads as a wrong-person alert even though
+                    # attribution itself was correct.
+                    for _wk, _dumper_pid in probe_ctx.get("waste_dumper_map", {}).items():
+                        if _dumper_pid == lost.track_id:
+                            # Add to the suppression set rather than popping
+                            # the repeat-alert timer -- the periodic check
+                            # (further up) defaults a MISSING timer to 0.0,
+                            # which would make it fire immediately instead
+                            # of stopping (same bug class fixed earlier this
+                            # session for the confirm-time seed). Explicit
+                            # suppression is checked before the timer at all.
+                            probe_ctx.setdefault("waste_reminders_suppressed", set()).add(_wk)
                     for _pair in probe_ctx.get("waste_attribution_pair", {}).values():
                         if _pair.get("person_id") == lost.track_id:
                             _pair.pop("person_visual_rendered_at", None)
+                    # Reset the attributed waste object's own dwell clock --
+                    # otherwise it keeps climbing for as long as its (often
+                    # static, looping-video) track persists, producing
+                    # nonsensical "stationary 800s+" reminders long after the
+                    # dumper who was actually present is gone. (This call
+                    # site was dropped during an earlier attribution rewrite
+                    # this session -- reset_dwell() existed but had zero
+                    # callers; re-added here against the current
+                    # waste_dumper_map-based attribution.)
+                    for _wc, _wt in list(probe_ctx.get("waste_dumper_map", {}).keys()):
+                        if _wc == lost.camera_id and probe_ctx["waste_dumper_map"].get((_wc, _wt)) == lost.track_id:
+                            track_manager.reset_dwell(lost.camera_id, _wt)
 
         # Prune stale frame batchers. No VLM dispatch here either —
         # stale-timeout batches are pre-red and never needed alert-level review.

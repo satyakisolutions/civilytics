@@ -98,6 +98,21 @@ class TrackStateManager:
     def get_track(self, camera_id: str, track_id: int) -> TrackInfo | None:
         return self._tracks.get((camera_id, track_id))
 
+    def reset_dwell(self, camera_id: str, track_id: int) -> None:
+        """Restart a track's dwell clock from now (age_s is untouched --
+        this only resets roi_entered_at, i.e. dwell_time_s).
+
+        Used when the person attributed as a waste object's dumper exits
+        the scene: the waste object's own dwell/age otherwise keeps
+        climbing for as long as its (often static, looping-video) track
+        persists, producing nonsensical "stationary 800s+" reminders long
+        after the actual incident context (the dumper being present) has
+        ended.
+        """
+        track = self._tracks.get((camera_id, track_id))
+        if track is not None and track.in_roi:
+            track.roi_entered_at = time.monotonic()
+
     def prune_lost(self) -> list[TrackInfo]:
         now = time.monotonic()
         lost = []
@@ -109,6 +124,34 @@ class TrackStateManager:
         for key in to_remove:
             del self._tracks[key]
         return lost
+
+    def force_expire(self, camera_id: str, track_id: int) -> TrackInfo | None:
+        """Forcibly drop one track's state, as if the tracker had lost it.
+
+        Used as a hard safety-net timeout: DeepStream's own tracker can
+        keep reporting the same track_id indefinitely on a looping test
+        source (no natural loss ever happens), so age alone -- not just
+        `last_seen` staleness -- needs a way to force termination.
+
+        Pops the track entirely (matches genuine tracker loss): the
+        pipeline's own force-expire cycle (health_check_cb, every
+        _WASTE_TRACK_MAX_LIFETIME_S) deliberately treats this as a brand
+        new incident and fully clears waste_dumper_map/waste_attribution_pair
+        alongside this call, so dropping in_roi continuity here is no
+        longer a problem -- a spurious FSM EXITED transition is the
+        desired outcome now, not a bug (an earlier version of this method
+        avoided that on purpose, back when force-expire was meant to
+        *preserve* attribution instead of resetting it).
+        """
+        return self._tracks.pop((camera_id, track_id), None)
+
+    def reset_camera(self, camera_id: str) -> None:
+        """Drop all track state for a camera -- used when a scene-cut
+        (looping test video source) is detected, since the tracker's own
+        track_ids persist unchanged across the cut and would otherwise
+        carry stale dwell/bbox history into the new footage."""
+        for key in [k for k in self._tracks if k[0] == camera_id]:
+            del self._tracks[key]
 
     def active_tracks(self, camera_id: str | None = None) -> list[TrackInfo]:
         if camera_id:
