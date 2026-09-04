@@ -71,6 +71,16 @@ class ROISyncer:
         self._last_signature: dict[str, str] = {}
         # Track the last written config hash to avoid unnecessary rewrites
         self._last_config_hash: str = ""
+        # Per-camera detection_config (dwell/proximity threshold overrides),
+        # keyed by cam_name -- populated in _sync_once from the same
+        # /api/cameras response already fetched for ROI polygons, so
+        # get_detection_config() never needs a separate request.
+        self._detection_configs: dict[str, dict] = {}
+
+    def get_detection_config(self, cam_name: str) -> dict:
+        """Per-camera detection_config overrides (dwell/proximity
+        thresholds), or {} if this camera has none configured."""
+        return self._detection_configs.get(cam_name, {})
 
     def start(self) -> None:
         if self._thread is not None:
@@ -116,6 +126,7 @@ class ROISyncer:
                 cam_name = cam.get("name")  # the pipeline's source key, e.g. "cam-01"
                 if not cam_id or not cam_name:
                     continue
+                self._detection_configs[cam_name] = cam.get("detection_config") or {}
                 try:
                     roi_resp = client.get(
                         f"{self._api_base}/api/cameras/{cam_id}/roi"

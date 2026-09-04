@@ -44,6 +44,10 @@ class TrackFSM:
     observe_threshold_s: float = 10.0
     violation_threshold_s: float = 15.0
     exit_timeout_s: float = 300.0
+    outside_roi_frames: int = 0
+    # A paired waste attribution owns its lifecycle by person visibility,
+    # not ROI membership. Track-loss cleanup clears the persistent marker.
+    forced_by_waste: bool = False
     # One-shot guards: each trigger fires exactly once per track lifecycle
     observe_triggered: bool = False
     violation_triggered: bool = False
@@ -51,12 +55,13 @@ class TrackFSM:
 
 
 class EventFSMManager:
-    def __init__(self, enter_threshold_s: float = 3.0, observe_threshold_s: float = 10.0, violation_threshold_s: float = 15.0, exit_timeout_s: float = 300.0):
+    def __init__(self, enter_threshold_s: float = 3.0, observe_threshold_s: float = 10.0, violation_threshold_s: float = 15.0, exit_timeout_s: float = 300.0, violation_exit_hysteresis_frames: int = 10):
         self._fsms: dict[tuple[str, int], TrackFSM] = {}
         self._enter_threshold = enter_threshold_s
         self._observe_threshold = observe_threshold_s
         self._violation_threshold = violation_threshold_s
         self._exit_timeout = exit_timeout_s
+        self._violation_exit_hysteresis_frames = max(1, violation_exit_hysteresis_frames)
         # Track IDs that reached VIOLATION — persists after FSM cleanup
         # so the OSD/frontend can highlight the suspect even outside ROI
         self._escalated_tracks: set[tuple[str, int]] = set()
@@ -109,6 +114,8 @@ class EventFSMManager:
                 self._fsms[key] = fsm
             previous = fsm.state
             fsm.state = FSMState.VIOLATION
+            fsm.outside_roi_frames = 0
+            fsm.forced_by_waste = True
             fsm.last_update = now
             fsm.dwell_time_s = dwell_time_s
             if bbox is not None:
@@ -172,13 +179,26 @@ class EventFSMManager:
                     fsm.state = FSMState.VIOLATION
                     self._escalated_tracks.add(key)
             elif fsm.state == FSMState.VIOLATION:
-                if not in_roi:
-                    fsm.state = FSMState.EXITED
+                if fsm.forced_by_waste:
+                    # A dumper may cross the ROI boundary while still plainly
+                    # visible. Keep the violation intact; TrackStateManager's
+                    # person-loss path is the sole owner of clearing it.
+                    fsm.outside_roi_frames = 0
+                elif not in_roi:
+                    fsm.outside_roi_frames += 1
+                    if fsm.outside_roi_frames >= self._violation_exit_hysteresis_frames:
+                        fsm.state = FSMState.EXITED
                 elif fsm.entered_at and (now - fsm.entered_at) > self._exit_timeout:
                     fsm.state = FSMState.EXITED
+                else:
+                    fsm.outside_roi_frames = 0
             elif fsm.state in (FSMState.ALERTING, FSMState.ESCALATED):
                 if not in_roi:
-                    fsm.state = FSMState.EXITED
+                    fsm.outside_roi_frames += 1
+                    if fsm.outside_roi_frames >= self._violation_exit_hysteresis_frames:
+                        fsm.state = FSMState.EXITED
+                else:
+                    fsm.outside_roi_frames = 0
             elif fsm.state == FSMState.EXITED:
                 self._cleanup(key)
 

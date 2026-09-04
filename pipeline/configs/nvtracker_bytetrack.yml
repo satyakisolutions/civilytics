@@ -19,16 +19,24 @@ BaseConfig:
   # If a detection's score is below this, it is NOT considered for tracking.
   # Calibrated for FP32 engine where real targets score 0.25+.
   minDetectorConfidence: 0.15
+  # Moved from DataAssociator (confirmed via runtime warning: "DataAssociator:
+  # checkClassMatch is ignored. Use BaseConfig:checkClassMatch instead." —
+  # and via the real DS9.1 sample config_tracker_NvDeepSORT.yml, which has
+  # it here, not under DataAssociator).
+  checkClassMatch: 1
 
 TargetManagement:
   enableBboxUnClipping: 1     # Keep the bbox visible when it touches the image border.
   maxTargetsPerStream: 200
 
   # Creation & termination policy
-  minIouDiff4NewTarget: 0.5   # New detection only spawns a target if IOU vs all existing tracks is below this.
+  minIouDiff4NewTarget: 0.6   # Raised from 0.5 — favors re-linking to an existing (possibly shadow-tracked) target over spawning
+                              # a fresh ID when a reappearing detection overlaps a track's Kalman-predicted position.
   minTrackerConfidence: 0.10  # Below this, the track goes into shadow mode (Kalman-only).
   probationAge: 1             # 1 frame confirmation — objects appear immediately. False positives die after earlyTerminationAge anyway.
-  maxShadowTrackingAge: 120   # ~4s @ 30fps / ~15s @ 8fps — survives extended occlusion and detector misses across multiple inference cycles.
+  maxShadowTrackingAge: 50    # Was 750 (~30s), then 375 (~15s) -- both cleared the mask later than the person's actual
+                              # exit. Explicit requirement: clear as close to real exit time as possible, with only a
+                              # short (~2s @ 25fps) grace period for brief real occlusion, not a loop-cycle-length one.
   earlyTerminationAge: 1
 
 TrajectoryManagement:
@@ -37,7 +45,6 @@ TrajectoryManagement:
 DataAssociator:
   dataAssociatorType: 0
   associationMatcherType: 1   # CASCADED — better when many similar-class targets share the frame.
-  checkClassMatch: 1
 
   # Thresholds for valid candidates (keep loose for sigmoid-low DETR scores).
   minMatchingScore4Overall:        0.20

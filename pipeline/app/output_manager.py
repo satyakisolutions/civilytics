@@ -32,6 +32,14 @@ from gi.repository import Gst  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+# Tried real GPU-adjacent pixelation here (NV12->RGBA sysmem -> numpy
+# block-average -> RGBA->I420 NVMM, per-camera post-nvstreamdemux). No
+# crash, but the pipeline silently STALLED -- source linked to streammux,
+# then nothing, mediamtx never got the stream (404). Same failure class as
+# the process-mode=0 nvosd attempt earlier this session. Reverted; see
+# add_output_branch below. Real pixelation on the main display chain
+# remains unsolved.
+
 
 @dataclass
 class OutputBranch:
@@ -145,6 +153,17 @@ class OutputStreamManager:
                 queue.set_property("max-size-buffers", 5)
                 queue.set_property("max-size-bytes", 0)
                 queue.set_property("max-size-time", 0)
+            # Tried a real-pixelation stage here (NV12->RGBA sysmem ->
+            # pixelate probe -> RGBA->I420 NVMM, per-camera post-demux).
+            # Confirmed live: no crash, but the pipeline silently STALLS --
+            # source links to streammux, then nothing, no output ever
+            # published (mediamtx 404), no error message either. Same
+            # failure class as the process-mode=0 nvosd attempt earlier
+            # this session (silent caps/negotiation stall). Reverted.
+            # Real pixelation on the main display chain remains unsolved --
+            # the OSD-metadata opaque face-cover (pipeline.py's
+            # _pending_face_covers, currently commented out) is the one
+            # confirmed-working privacy option; re-enable that if needed.
             nvvidconv = Gst.ElementFactory.make(
                 "nvvideoconvert", f"nvvidconv_out_{camera_id}"
             )
