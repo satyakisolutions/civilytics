@@ -1,0 +1,94 @@
+# WasteWatch Primary GIE — RF-DETR-Seg-Nano, instance segmentation
+# (bag + person + waste, with per-instance masks)
+#
+# Fine-tuned RFDETRSegNano (training/runs_seg_v2/checkpoint_best_ema.pth,
+# best EMA mAP 0.6167), 4 training classes:
+#   0 Waste-watch   (background/ignore — NOT in labels_seg.txt, see below)
+#   1 bag           -> labels_seg.txt line 0
+#   2 person        -> labels_seg.txt line 1
+#   3 waste         -> labels_seg.txt line 2
+#
+# RF-DETR class-index gotcha (same one nvinfer_rfdetr.txt's comments
+# warn about, this time in the *other* direction): this checkpoint DOES
+# have an explicit background row at class-index 0, unlike the bbox
+# model's 2-class training which had none. The custom parser
+# (nvdsinfer_custom_impl_Seg) drops channel 0 and re-bases the kept
+# channels (1,2,3) down by one so `classId` written into
+# NvDsInferInstanceMaskInfo lines up with labels_seg.txt's 0-based rows.
+# Getting this backwards (e.g. reusing raw channel index as classId)
+# silently reports "bag" detections as "person" and so on — verify
+# against a live frame before trusting alerts built on this config.
+#
+# Input: 384x384, same resolution as the bbox model, so infer-dims stays
+# in lock-step with the export in training/exported_seg_v2.
+#
+# Raw ONNX outputs consumed directly (no DeepStreamOutput fusion head —
+# see nvdsinfer_custom_impl_Seg/nvdsparseseg_RfdetrSeg.cpp for why):
+#   dets   [1,100,4]     cxcywh normalised
+#   labels [1,100,6]     per-query logits (channel 0 = background)
+#   masks  [1,100,96,96] per-query mask logits, full-frame 1/4 res grid
+#
+# Copyright (c) 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.
+
+[property]
+gpu-id=0
+net-scale-factor=0.00392156862745
+
+infer-dims=3;384;384
+
+model-engine-file=/app/models/rfdetr_seg/rfdetr_seg_fp32.engine
+onnx-file=/app/models/rfdetr_seg/rfdetr_seg.onnx
+labelfile-path=/app/configs/labels_seg.txt
+
+batch-size=1
+process-mode=1
+model-color-format=0
+# FP32 — same FP16-destroys-the-transformer-decoder finding as the bbox
+# model (nvinfer_rfdetr.txt). Not re-tested here; inherited deliberately.
+network-mode=0
+
+# 3 = bag + person + waste (post class-0-background-drop indices).
+num-detected-classes=3
+
+interval=0
+gie-unique-id=1
+
+output-blob-names=dets;labels;masks
+network-type=3
+output-instance-mask=1
+# Binarization threshold for the per-pixel sigmoid mask probabilities the
+# custom parser emits (was DeepStream's default 0.5) -- raised to cut
+# soft/blurry mask edges before they reach nvosd rendering / downstream
+# mask-area logic.
+segmentation-threshold=0.6
+parse-bbox-instance-mask-func-name=NvDsInferParseCustomRfdetrSeg
+custom-lib-path=/app/nvdsinfer_custom_impl_Seg/libnvdsinfer_custom_impl_Seg.so
+
+# cluster-mode=4 (NONE): same reasoning as the bbox model — this is a
+# query-based DETR decoder, not a dense-anchor grid. The parser already
+# emits final, deduplicated per-query boxes (DETR's bipartite matching
+# during training discourages duplicate queries per object), so
+# nvinfer's NMS-based clustering would misinterpret already-decoded
+# boxes as pre-NMS anchor data (see nvinfer_rfdetr.txt's identical note
+# about ~45 degree rotated/shifted boxes).
+cluster-mode=4
+maintain-aspect-ratio=0
+
+[class-attrs-all]
+pre-cluster-threshold=0.40
+topk=100
+
+# bag (0) — lowered from 0.40; v6 training set only had 11 bag
+# annotations, so confidence runs low on real footage same as waste did.
+[class-attrs-0]
+pre-cluster-threshold=0.20
+
+# person (1) — allow weaker tracks so tracker's hysteresis picks them up,
+# matching the bbox model's person threshold.
+[class-attrs-1]
+pre-cluster-threshold=0.30
+
+# waste (2) — kept at the default 0.40 pending live-traffic calibration;
+# no shadow-false-positive history yet for this class (new in seg-v2).
+[class-attrs-2]
+pre-cluster-threshold=0.9
