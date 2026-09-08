@@ -174,7 +174,7 @@ _ALERT_CONFIG: dict[str, dict] = {
 
 
 _ALERT_SNAPSHOT_DIR = os.environ.get("WW_EVIDENCE_DIR", "/app/evidence") + "/alerts"
-_PERSON_HIGHLIGHT_DELAY_FRAMES = 7
+_PERSON_HIGHLIGHT_DELAY_FRAMES = 0
 # Frame spacing between attribution RETRIES when nobody was within
 # waste_proximity_px on the previous attempt. The FIRST attempt happens
 # immediately on the waste object's first-seen frame (the dumper is most
@@ -192,8 +192,8 @@ _WASTE_ATTRIBUTION_DELAY_FRAMES = 11  # was 10, +5%
 # progress, but a track that's mostly absent still fails to confirm).
 # Full confidence/mask-area/position-stability checks are a larger follow-up
 # (see deepstream-dev production-hardening audit).
-_WASTE_CONFIRM_N = 3
-_WASTE_CONFIRM_M = 5
+_WASTE_CONFIRM_N = 1
+_WASTE_CONFIRM_M = 1
 assert 1 <= _WASTE_CONFIRM_N <= _WASTE_CONFIRM_M
 # Compact 4-line diagnostic overlay (ATTR/FSM/OSD/CAPTURE) -- always drawn
 # on the actual alert-evidence capture window for an active incident; set
@@ -216,6 +216,12 @@ _MAX_EVIDENCE_LATENESS_FRAMES = 30
 # approached gives up within roughly half a loop instead of spanning
 # almost the entire clip.
 _WASTE_ATTRIBUTION_TIMEOUT_S = 15.0
+
+# Same fixed phrase as backend/app/tts/engine.py's TTS_FIXED_DETERRENT --
+# kept as a separate literal (not a cross-service import) since pipeline
+# and backend are different containers/images. Used for the dashboard
+# alert message text, not audio.
+_KANNADA_DETERRENT_MESSAGE = "ಎಚ್ಚರಿಕೆ! ಕಸ ಎಸೆಯಬೇಡಿ. ನಿಮ್ಮ ಚಟುವಟಿಕೆ ಕ್ಯಾಮೆರಾದಲ್ಲಿ ದಾಖಲಾಗುತ್ತಿದೆ."
 _EVIDENCE_CAPTURE_DELAY_FRAMES = 10
 # Hard safety-net: force-expire a waste track_id (as if the tracker had
 # lost it) once it's been alive this long, regardless of whether
@@ -790,26 +796,40 @@ def decorate_for_osd(
                 label = " | ".join(parts[:2]) + " | " + " | ".join(parts[2:]) if len(parts) > 2 else " | ".join(parts)
 
             # --- Border ---
-            # Person boxes are never drawn -- privacy/minimal-UI: no
-            # outline, no label. All FSM/attribution logic above is
-            # untouched and keeps running; only the box/text RENDERING is
-            # suppressed here. The one exception: the attributed dumper
-            # gets a solid red mask over their whole bbox (still no
-            # border) -- pure OSD metadata (rect.bg_color), not real pixel
+            # Person boxes: yellow outline while merely suspicious
+            # (FSM OBSERVE -- in ROI, dwelling, no waste linked yet), solid
+            # red once escalated (attributed dumper: waste found close to
+            # them, waste itself inside the ROI). Otherwise no outline.
+            # The red case is a solid mask (has_bg_color), not just a
+            # border -- pure OSD metadata (rect.bg_color), not real pixel
             # blur, which crashed the pipeline earlier this session and
-            # was reverted. Everyone else stays fully invisible.
+            # was reverted.
             if category == "person":
                 rect.border_width = 0
                 _dumper_map_here = ctx.get("waste_dumper_map") or {}
                 _is_attributed_here = any(
                     wk[0] == camera_id and pid == track_id
                     for wk, pid in _dumper_map_here.items()
-                )
+                ) or (fsm_mgr is not None and fsm_mgr.is_forced_by_waste(camera_id, track_id))
+                # Red only when this person is actually tied to real
+                # evidence -- waste_dumper_map (attribution flow) OR
+                # fsm.forced_by_waste (bag proximity+dwell fast-track,
+                # which sets the same flag but never touches dumper_map)
+                # -- NOT on generic dwell-based FSM "violation" alone,
+                # which fires from loitering time only and isn't evidence
+                # anyone dumped anything.
                 if _is_attributed_here:
                     rect.has_bg_color = 0
                     rect.border_width = 8
                     rect.border_color.red = 1.0
                     rect.border_color.green = 0.0
+                    rect.border_color.blue = 0.0
+                    rect.border_color.alpha = 1.0
+                elif fsm_state == "observe":
+                    rect.has_bg_color = 0
+                    rect.border_width = 4
+                    rect.border_color.red = 1.0
+                    rect.border_color.green = 0.85
                     rect.border_color.blue = 0.0
                     rect.border_color.alpha = 1.0
                 else:
@@ -882,7 +902,11 @@ def decorate_for_osd(
             # so the operator sees WHAT was dumped, not just the person.
             _highlight = False
             if category == "waste_object":
-                _highlight = True
+                # Only mask/highlight waste sitting inside a monitored ROI
+                # -- waste outside every ROI is still detected/tracked and
+                # labeled, just not drawn or attributed, so the operator's
+                # attention stays on zones that actually matter.
+                _highlight = in_roi
             elif category == "carried_item" and (is_suspect or fsm_state in ("violation", "alerting", "escalated")):
                 _highlight = True
             if _highlight:
@@ -899,8 +923,12 @@ def decorate_for_osd(
                 # where "flickering to grab attention" is the goal; once
                 # it's confirmed, the highlight needs to reliably show up in
                 # whatever single frame gets persisted as evidence.
+                # Always solid, never blinking -- flicker on the pending
+                # state used to double as an evidence-keyframe hazard (a
+                # frame grabbed mid "off" phase showed no highlight at
+                # all); solid sidesteps that too.
                 _confirmed = is_suspect or fsm_state in ("violation", "alerting", "escalated")
-                _blink_on = _confirmed or (int(time.time() * 2) % 2 == 0)
+                _blink_on = True
                 rect.has_bg_color = 1 if _blink_on else 0
                 rect.bg_color.red = 1.0
                 rect.bg_color.green = 0.15
@@ -1480,22 +1508,15 @@ def extract_metadata(
             except StopIteration:
                 break
 
-        # Track which current-frame people overlap a carried item. This is
-        # stronger release evidence than generic proximity and lets a new
-        # placement episode be recognised even when ByteTrack reuses an old,
-        # previously-unmatched waste ID across a looping/occluded sequence.
-        _carrying_person_ids: set[int] = set()
-        for _pid0, _pbox0 in person_bboxes:
-            for _ibox0 in carried_item_rects:
-                _ix1 = max(_pbox0[0], _ibox0[0])
-                _iy1 = max(_pbox0[1], _ibox0[1])
-                _ix2 = min(_pbox0[2], _ibox0[2])
-                _iy2 = min(_pbox0[3], _ibox0[3])
-                _iarea = max(0.0, _ibox0[2] - _ibox0[0]) * max(0.0, _ibox0[3] - _ibox0[1])
-                if _iarea > 0 and _ix2 > _ix1 and _iy2 > _iy1:
-                    if ((_ix2 - _ix1) * (_iy2 - _iy1)) / _iarea > 0.3:
-                        _carrying_person_ids.add(_pid0)
-                        break
+        # bag_proximity_px setup -- edge-to-edge, source-pixel measurement,
+        # used below (per-person, main object loop) to gate has_carried.
+        _cam_bag_proximity_px = _dcfg.get(
+            "bag_proximity_px", pipeline_settings.bag_proximity_px
+        )
+        _bag_source_w = float(frame_meta.source_frame_width or frame_width)
+        _bag_source_h = float(frame_meta.source_frame_height or frame_height)
+        _bag_x_to_source = _bag_source_w / float(frame_width)
+        _bag_y_to_source = _bag_source_h / float(frame_height)
 
         # Diagnostic: count ALL raw nvinfer objects before any filtering,
         # so we can tell at a glance whether nvinfer is producing 0 boxes
@@ -1559,7 +1580,7 @@ def extract_metadata(
                     # sighting. person_bboxes is fully populated by this
                     # point (built in the pre-scan pass before this main
                     # per-object loop starts).
-                    if CLASS_CATEGORIES.get(class_name) == "waste_object" and person_bboxes:
+                    if CLASS_CATEGORIES.get(class_name) == "waste_object" and person_bboxes and in_roi:
                         _co_key = (camera_id, track_id)
                         _co_seen = ctx.setdefault("person_waste_co_seen", set())
                         if _co_key not in _co_seen:
@@ -1590,6 +1611,7 @@ def extract_metadata(
                     _attrib_due_map = ctx.setdefault("waste_attribution_due_frame", {})
                     if (
                         class_name == "waste"
+                        and in_roi
                         and _waste_key not in _attrib_due_map
                         and _waste_key not in _dumper_map
                         and _waste_key not in ctx.get("waste_reminders_suppressed", set())
@@ -1605,6 +1627,7 @@ def extract_metadata(
                         _log_stage(ctx, (int(frame_meta.source_id), "waste", track_id), "first_seen", int(frame_meta.frame_num))
                     if (
                         class_name == "waste"
+                        and in_roi
                         and _waste_key in _attrib_due_map
                         and int(frame_meta.frame_num) >= _attrib_due_map[_waste_key]
                         and _waste_key not in _dumper_map
@@ -1930,20 +1953,21 @@ def extract_metadata(
                                 )
                         else:
                             _person_violation_frames_map[_waste_key] = _person_frames_left
-                    # Check if this person has a carried_item overlapping
+                    # Check if this person is within bag_proximity_px of a
+                    # carried_item -- edge-to-edge, source-pixel space, same
+                    # measurement as the waste/person attribution gate
+                    # below (was a padded normalized-bbox overlap test,
+                    # which didn't match the configured px threshold at all).
                     has_carried = False
-                    if class_name == "person" and carried_item_bboxes:
-                        px, py, pw, ph = bbox_dict["x"], bbox_dict["y"], bbox_dict["w"], bbox_dict["h"]
-                        for _ci_name, _ci_bb in carried_item_bboxes:
-                            ix, iy, iw, ih = _ci_bb["x"], _ci_bb["y"], _ci_bb["w"], _ci_bb["h"]
-                            ox1 = max(px, ix); oy1 = max(py, iy)
-                            ox2 = min(px+pw, ix+iw); oy2 = min(py+ph, iy+ih)
-                            if ox2 > ox1 and oy2 > oy1:
-                                overlap = (ox2-ox1) * (oy2-oy1)
-                                item_area = iw * ih
-                                if item_area > 0 and overlap / item_area > 0.3:
-                                    has_carried = True
-                                    break
+                    if class_name == "person" and carried_item_rects:
+                        _person_box = (rect.left, rect.top, rect.left + rect.width, rect.top + rect.height)
+                        for _ibox1 in carried_item_rects:
+                            _dx1 = max(_person_box[0] - _ibox1[2], _ibox1[0] - _person_box[2], 0.0)
+                            _dy1 = max(_person_box[1] - _ibox1[3], _ibox1[1] - _person_box[3], 0.0)
+                            _d1 = math.hypot(_dx1 * _bag_x_to_source, _dy1 * _bag_y_to_source)
+                            if _d1 <= _cam_bag_proximity_px:
+                                has_carried = True
+                                break
 
                     # Waste does not participate in the legacy 15-second
                     # ROI-dwell FSM. Its only violation path is the paired
@@ -1961,10 +1985,12 @@ def extract_metadata(
                             bbox=bbox_dict,
                             has_carried_item=has_carried,
                             violation_threshold_s=_cam_violation_threshold_s,
+                            speed_px_s=track_info.speed_px_s,
                         )
                     else:
                         fsm_event = fsm_manager.update(
                             camera_id, track_id, class_name,
+                            speed_px_s=track_info.speed_px_s,
                             in_roi=in_roi,
                             dwell_time_s=track_info.dwell_time_s,
                             bbox=bbox_dict,
@@ -1988,31 +2014,36 @@ def extract_metadata(
                             if _ew:
                                 _ew.start_evidence(camera_id, track_id, class_name)
 
-                            _category = CLASS_CATEGORIES.get(class_name, "unknown")
-                            _actionable = (
-                                class_name in VEHICLE_CLASSES or
-                                _category in ("person", "carried_item", "waste_object")
-                            )
-                            if _actionable and _fsm_obj and not _fsm_obj.vlm_fired:
-                                _fsm_obj.vlm_fired = True
-                                _speed = track_info.speed_px_s
-                                _area = track_info.bbox_area
-                                _cache = ctx.get("frame_jpeg_cache", {})
-                                _jpeg = _cache.get(frame_meta.source_id)
-                                _vlm = ctx.get("vlm_client")
-                                if _vlm is not None:
-                                    _vlm.submit(
-                                        camera_id=camera_id, track_id=track_id,
-                                        class_name=class_name,
-                                        dwell_time_s=track_info.dwell_time_s,
-                                        path_summary=f"enter;speed_norm={_speed:.4f};area_norm={_area:.5f}",
-                                        trigger_bbox=bbox_dict,
-                                        jpeg_bytes=_jpeg,
-                                    )
+                            # VLM analysis disabled -- alerting is pure
+                            # logic (FSM/dwell/ROI/attribution) now, not
+                            # gated on a VLM confirmation. ENTER no longer
+                            # submits anything; the actual alert fires on
+                            # VIOLATION below.
+                            pass
 
-                        # VIOLATION (red bbox): VLM already fired on ENTER
-                        # (Phase 0.1). Capture keyframe for evidence only.
-                        # Re-fire VLM only if ENTER fire was skipped.
+                        # OBSERVE (yellow bbox, "suspicious"): fire a
+                        # warning-severity alert, one-shot per track.
+                        elif fsm_event.state == FSMState.OBSERVE and _fsm_obj and not _fsm_obj.observe_triggered:
+                            _fsm_obj.observe_triggered = True
+                            _cache = ctx.get("frame_jpeg_cache", {})
+                            _jpeg = _cache.get(frame_meta.source_id)
+                            _fire_waste_alert_async(
+                                kafka_producer,
+                                camera_id=camera_id,
+                                track_id=track_id,
+                                jpeg_bytes=_jpeg,
+                                severity="warning",
+                                title="Suspicious activity",
+                                message=f"{class_name} suspicious (loitering) at {camera_id}",
+                                dumped_by_track_id=None,
+                                dwell_time_s=fsm_event.dwell_time_s,
+                                bbox=bbox_dict,
+                                detected_at=time.time(),
+                            )
+
+                        # VIOLATION (red bbox): fire a critical alert
+                        # directly, one-shot per track -- pure logic, no
+                        # VLM confirmation required.
                         elif fsm_event.state == FSMState.VIOLATION and _fsm_obj and not _fsm_obj.violation_triggered:
                             _fsm_obj.violation_triggered = True
 
@@ -2024,20 +2055,29 @@ def extract_metadata(
                             _cache = ctx.get("frame_jpeg_cache", {})
                             _jpeg = _cache.get(frame_meta.source_id)
 
-                            if _actionable and not _fsm_obj.vlm_fired:
-                                _fsm_obj.vlm_fired = True
-                                _speed = track_info.speed_px_s
-                                _area = track_info.bbox_area
-                                _vlm = ctx.get("vlm_client")
-                                if _vlm is not None:
-                                    _vlm.submit(
-                                        camera_id=camera_id, track_id=track_id,
-                                        class_name=class_name,
-                                        dwell_time_s=track_info.dwell_time_s,
-                                        path_summary=f"violation_fallback;speed_norm={_speed:.4f};area_norm={_area:.5f}",
-                                        trigger_bbox=bbox_dict,
-                                        jpeg_bytes=_jpeg,
-                                    )
+                            # The waste-attribution flow above
+                            # (_fire_waste_alert_async triggered from actual
+                            # dumping evidence) still fires its own,
+                            # separately-attributed critical alert -- this
+                            # is the generic per-class dwell/bag-violation
+                            # path's own alert, covering the cases that
+                            # never went through waste attribution (bag
+                            # dwell, non-person classes, person dwell
+                            # fallback).
+                            _fire_waste_alert_async(
+                                kafka_producer,
+                                camera_id=camera_id,
+                                track_id=track_id,
+                                jpeg_bytes=_jpeg if _actionable else None,
+                                severity="critical",
+                                title="Violation confirmed",
+                                message=f"{class_name} confirmed in violation at {camera_id}",
+                                dumped_by_track_id=None,
+                                dwell_time_s=fsm_event.dwell_time_s,
+                                bbox=bbox_dict,
+                                detected_at=time.time(),
+                            )
+                            _fsm_obj.vlm_fired = True
 
                             _ew = ctx.get("evidence_writer")
                             if _ew:
@@ -2741,6 +2781,7 @@ def main() -> None:
             enter_threshold_s=pipeline_settings.dwell_enter_threshold_s,
             observe_threshold_s=pipeline_settings.dwell_observe_threshold_s,
             violation_threshold_s=pipeline_settings.dwell_violation_threshold_s,
+            person_violation_threshold_s=pipeline_settings.person_dwell_violation_threshold_s,
         )
         # Action-classifier fast path — wraps fsm_manager so a confident
         # dumping_waste classification from action_sgie skips the dwell

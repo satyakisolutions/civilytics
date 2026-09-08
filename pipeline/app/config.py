@@ -29,9 +29,13 @@ class PipelineSettings(BaseSettings):
     analytics_config_path: str = "configs/nvdsanalytics_config.txt"
 
     # Dwell thresholds — narrow-road deployment
-    dwell_enter_threshold_s: float = 1.0      # 1s — brief stop
-    dwell_observe_threshold_s: float = 3.0    # 3s — suspicious, start VLM
-    dwell_violation_threshold_s: float = 15.0 # 15s in ROI before VIOLATION/alert
+    dwell_enter_threshold_s: float = 3.0      # 3s in ROI — suspicious/yellow
+    dwell_observe_threshold_s: float = 5.0    # 5s — suspicious, start VLM
+    dwell_violation_threshold_s: float = 3.0  # 3s in ROI before VIOLATION/alert — fast-moving subjects (e.g. vehicles) don't linger 15s
+    # Person-only dwell-violation threshold, separate from the generic one
+    # above -- a person needs a real loitering window (not a 3s flash)
+    # before dwell time alone turns them red without bag/waste evidence.
+    person_dwell_violation_threshold_s: float = 10.0
 
     # How long a "waste" detection must persist before it's treated as an
     # actually-dumped object (vs. a person's carried bag briefly clipping
@@ -46,7 +50,11 @@ class PipelineSettings(BaseSettings):
     # bbox on the waste object's first frame, measured in source-image pixels
     # after compensating for streammux resizing. Center distance is unsuitable
     # because a person's center is their torso, far above an item at their feet.
-    waste_proximity_px: float = 40.0
+    waste_proximity_px: float = 60.0
+    # Maximum edge-to-edge gap between a carried-item (bag) bbox and a
+    # person bbox, same source-pixel measurement as waste_proximity_px,
+    # used to decide if a person is "carrying" that item this frame.
+    bag_proximity_px: float = 15.0
 
     # A waste object still in VIOLATION/alerting/escalated state keeps
     # re-alerting at this interval instead of firing once and going

@@ -1,0 +1,248 @@
+# Lightweight stack: core path only (no keycloak, no qdrant).
+# Run with: docker compose -f docker-compose.lite.yml up
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: wastewatch
+      POSTGRES_USER: wastewatch
+      POSTGRES_PASSWORD: wastewatch_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wastewatch"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:3.7.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: wastewatch-kafka-cluster-01
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:-changeme_in_production}
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme_in_production}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    ports:
+      - "8554:8554"
+      - "8889:8889"
+      - "8189:8189/udp"
+      - "9997:9997"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+
+  api:
+    build:
+      context: ./backend
+    ports:
+      - "8082:8080"
+    env_file:
+      - .env
+    environment:
+      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
+      WW_MEDIAMTX_API_URL: http://mediamtx:9997
+      WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - tts_data:/tmp/wastewatch/tts
+      - evidence_data:/app/evidence
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    restart: unless-stopped
+
+  vlm-worker:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WW_VLM_BASE_URL: http://vlm:8000/v1
+      WW_VLM_GRPC_PORT: "50061"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "50061:50061"
+    command: ["python3", "-m", "services.vlm.main"]
+    restart: unless-stopped
+
+  tts-worker:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - tts_data:/tmp/wastewatch/tts
+      - ./backend/models/piper:/tmp/piper_voices:ro
+      - pipeline_models:/models:ro
+    command: ["python3", "-m", "services.tts.main"]
+    restart: unless-stopped
+
+  backend-workers:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
+      WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
+      WW_MEDIAMTX_API_URL: http://mediamtx:9997
+      WW_VLM_BASE_URL: http://vlm:8000/v1
+      WW_DATABASE_URL: ${WW_DATABASE_URL}
+      WW_SMTP_ENABLED: ${WW_SMTP_ENABLED:-false}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - evidence_data:/tmp/wastewatch/evidence
+    ports:
+      - "9100:9100"
+    command: ["python3", "-m", "services.combined_workers.main"]
+    restart: unless-stopped
+
+  pipeline:
+    build:
+      context: ./pipeline
+    env_file:
+      - .env
+    environment:
+      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
+      WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
+      WW_EVIDENCE_DIR: /app/evidence
+      WW_VLM_GRPC_TARGET: vlm-worker:50061
+      WW_USE_SEG_MODEL: ${WW_USE_SEG_MODEL:-1}
+    volumes:
+      - evidence_data:/app/evidence
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mediamtx:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  vlm:
+    image: vllm/vllm-openai:latest
+    command: >
+      --model Qwen/Qwen2.5-VL-7B-Instruct-AWQ
+      --quantization awq
+      --dtype float16
+      --max-model-len 2048
+      --gpu-memory-utilization 0.90
+      --limit-mm-per-prompt '{"image": 4}'
+      --port 8000
+    ports:
+      - "8001:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  tts:
+    image: python:3.11-slim
+    command: >
+      bash -c "pip install piper-tts && python -m http.server 8100"
+    ports:
+      - "8100:8100"
+    volumes:
+      - tts_data:/tmp/wastewatch/tts
+    restart: unless-stopped
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: ["sh", "-c", "npm install --legacy-peer-deps --no-audit --no-fund && npm run dev -- --host 0.0.0.0 --port 8080"]
+    ports:
+      - "5174:8080"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+    restart: unless-stopped
+
+  rtsp-streamer:
+    image: jrottenberg/ffmpeg:6-alpine
+    depends_on:
+      mediamtx:
+        condition: service_started
+    volumes:
+      - ./sample_videos:/videos:ro
+    entrypoint: ["/bin/sh", "/videos/stream.sh"]
+    environment:
+      MEDIAMTX_HOST: mediamtx
+      MEDIAMTX_PORT: "8554"
+      VIDEO_DIR: /videos
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  kafka_data:
+  redis_data:
+  tts_data:
+  evidence_data:
+  pipeline_models:

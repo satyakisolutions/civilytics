@@ -43,6 +43,7 @@ class TrackFSM:
     enter_threshold_s: float = 3.0
     observe_threshold_s: float = 10.0
     violation_threshold_s: float = 15.0
+    person_violation_threshold_s: float = 10.0
     exit_timeout_s: float = 300.0
     outside_roi_frames: int = 0
     # A paired waste attribution owns its lifecycle by person visibility,
@@ -52,15 +53,26 @@ class TrackFSM:
     observe_triggered: bool = False
     violation_triggered: bool = False
     vlm_fired: bool = False
+    # Sticky: once a carried item has overlapped this person at all, a
+    # momentary occlusion/detector miss on later frames shouldn't drop
+    # the bag-violation trigger -- see _bag_violation in update().
+    ever_carried_item: bool = False
 
 
 class EventFSMManager:
-    def __init__(self, enter_threshold_s: float = 3.0, observe_threshold_s: float = 10.0, violation_threshold_s: float = 15.0, exit_timeout_s: float = 300.0, violation_exit_hysteresis_frames: int = 10):
+    def __init__(self, enter_threshold_s: float = 3.0, observe_threshold_s: float = 10.0, violation_threshold_s: float = 15.0, person_violation_threshold_s: float = 10.0, exit_timeout_s: float = 300.0, violation_exit_hysteresis_frames: int = 10, suspicious_speed_px_s: float = 7.5):
         self._fsms: dict[tuple[str, int], TrackFSM] = {}
         self._enter_threshold = enter_threshold_s
         self._observe_threshold = observe_threshold_s
         self._violation_threshold = violation_threshold_s
+        self._person_violation_threshold = person_violation_threshold_s
         self._exit_timeout = exit_timeout_s
+        # "Suspicious" also covers barely-moving, not just fully stationary
+        # (dwell_time_s only accrues while genuinely still) -- a person
+        # loitering at a slow shuffle wouldn't otherwise reach ENTER's
+        # dwell threshold. Centroid speed below this (px/s) counts as
+        # loitering once the track has enough history to be meaningful.
+        self._suspicious_speed_px_s = suspicious_speed_px_s
         self._violation_exit_hysteresis_frames = max(1, violation_exit_hysteresis_frames)
         # Track IDs that reached VIOLATION — persists after FSM cleanup
         # so the OSD/frontend can highlight the suspect even outside ROI
@@ -76,6 +88,16 @@ class EventFSMManager:
         """Check if a track was ever escalated to VIOLATION in this session."""
         with self._lock:
             return (camera_id, track_id) in self._escalated_tracks
+
+    def is_forced_by_waste(self, camera_id: str, track_id: int) -> bool:
+        """Check if this track's VIOLATION came from actual evidence (bag
+        proximity+dwell or waste-attribution force_violation), not generic
+        dwell time alone. OSD rendering uses this to decide the red border,
+        same evidence bar as waste_dumper_map, without depending on that
+        dict being populated (bag fast-track never touches it)."""
+        with self._lock:
+            fsm = self._fsms.get((camera_id, track_id))
+            return bool(fsm and fsm.forced_by_waste)
 
     def mark_escalated(self, camera_id: str, track_id: int) -> None:
         """Persist a violation/suspect marker independently of ROI state."""
@@ -109,6 +131,7 @@ class EventFSMManager:
                     enter_threshold_s=self._enter_threshold,
                     observe_threshold_s=self._observe_threshold,
                     violation_threshold_s=self._violation_threshold,
+                    person_violation_threshold_s=self._person_violation_threshold,
                     exit_timeout_s=self._exit_timeout,
                 )
                 self._fsms[key] = fsm
@@ -127,7 +150,7 @@ class EventFSMManager:
                     camera_id, track_id, previous.value,
                 )
 
-    def update(self, camera_id: str, track_id: int, class_name: str, in_roi: bool, dwell_time_s: float, bbox: dict | None = None, has_carried_item: bool = False, violation_threshold_s: float | None = None) -> FSMEvent | None:
+    def update(self, camera_id: str, track_id: int, class_name: str, in_roi: bool, dwell_time_s: float, bbox: dict | None = None, has_carried_item: bool = False, violation_threshold_s: float | None = None, speed_px_s: float | None = None) -> FSMEvent | None:
         with self._lock:
             key = (camera_id, track_id)
             now = time.monotonic()
@@ -138,6 +161,7 @@ class EventFSMManager:
                     enter_threshold_s=self._enter_threshold,
                     observe_threshold_s=self._observe_threshold,
                     violation_threshold_s=self._violation_threshold,
+                    person_violation_threshold_s=self._person_violation_threshold,
                     exit_timeout_s=self._exit_timeout,
                 )
 
@@ -152,39 +176,75 @@ class EventFSMManager:
                 fsm.violation_threshold_s = violation_threshold_s
             prev_state = fsm.state
 
+            # A carried bag/item on a person in the ROI, held for a real
+            # dwell (not just a one-frame pass-through) -- skip OBSERVE
+            # entirely and go straight to VIOLATION (same as a waste-
+            # attribution force_violation).
+            _bag_violation_now = has_carried_item and class_name == "person"
+            if _bag_violation_now:
+                fsm.ever_carried_item = True
+            # Sticky: a bag seen with them earlier still counts even if
+            # this exact frame missed the overlap (occlusion/detector
+            # flicker) -- dwell requirement is the same >=4s either way.
+            _bag_violation = (
+                (_bag_violation_now or fsm.ever_carried_item)
+                and class_name == "person"
+                and dwell_time_s >= 4.0
+            )
+            _is_slow = (
+                speed_px_s is not None
+                and 0.0 < speed_px_s <= self._suspicious_speed_px_s
+                and dwell_time_s >= 1.0  # ignore the first ~1s: too little
+                                          # bbox history for speed_px_s to
+                                          # mean anything, reads as 0/slow
+                                          # regardless of real motion
+            )
+
             if fsm.state == FSMState.IDLE:
                 if in_roi:
                     fsm.state = FSMState.ENTER
                     fsm.entered_at = now
-                    # Fast-track: person carrying item in ROI → immediate OBSERVE
-                    # Catches walk-by dumping where person never dwells long enough
-                    if has_carried_item and class_name == "person":
-                        fsm.state = FSMState.OBSERVE
-                        logger.info("FSM %s track=%d: fast-track IDLE→OBSERVE (carried item in ROI)", camera_id, track_id)
+                    if _bag_violation:
+                        fsm.state = FSMState.VIOLATION
+                        fsm.forced_by_waste = True
+                        self._escalated_tracks.add(key)
+                        logger.info("FSM %s track=%d: fast-track IDLE→VIOLATION (carried item in ROI)", camera_id, track_id)
             elif fsm.state == FSMState.ENTER:
                 if not in_roi:
                     fsm.state = FSMState.EXITED
                     self._cleanup(key)
                     return None  # Silent exit
-                elif has_carried_item and class_name == "person":
-                    # Fast-track: person picked up/still carrying item → OBSERVE
-                    fsm.state = FSMState.OBSERVE
-                    logger.info("FSM %s track=%d: fast-track ENTER→OBSERVE (carried item)", camera_id, track_id)
-                elif dwell_time_s >= self._enter_threshold:
+                elif _bag_violation:
+                    fsm.state = FSMState.VIOLATION
+                    fsm.forced_by_waste = True
+                    self._escalated_tracks.add(key)
+                    logger.info("FSM %s track=%d: fast-track ENTER→VIOLATION (carried item)", camera_id, track_id)
+                elif dwell_time_s >= self._enter_threshold or _is_slow:
                     fsm.state = FSMState.OBSERVE
             elif fsm.state == FSMState.OBSERVE:
                 if not in_roi:
                     fsm.state = FSMState.EXITED
-                elif dwell_time_s >= fsm.violation_threshold_s:
+                elif _bag_violation:
+                    fsm.state = FSMState.VIOLATION
+                    fsm.forced_by_waste = True
+                    self._escalated_tracks.add(key)
+                    logger.info("FSM %s track=%d: fast-track OBSERVE→VIOLATION (carried item)", camera_id, track_id)
+                elif (
+                    dwell_time_s >= (
+                        fsm.person_violation_threshold_s if class_name == "person"
+                        else fsm.violation_threshold_s
+                    )
+                ):
+                    # Person gets its own (longer) dwell-violation threshold
+                    # -- the generic one is tuned for fast-moving classes
+                    # (vehicles) that don't linger long, and applying it
+                    # to person flashed yellow->red in ~2s. Bag proximity+
+                    # dwell or waste proximity (force_violation) can still
+                    # escalate a person faster than this threshold.
                     fsm.state = FSMState.VIOLATION
                     self._escalated_tracks.add(key)
             elif fsm.state == FSMState.VIOLATION:
-                if fsm.forced_by_waste:
-                    # A dumper may cross the ROI boundary while still plainly
-                    # visible. Keep the violation intact; TrackStateManager's
-                    # person-loss path is the sole owner of clearing it.
-                    fsm.outside_roi_frames = 0
-                elif not in_roi:
+                if not in_roi:
                     fsm.outside_roi_frames += 1
                     if fsm.outside_roi_frames >= self._violation_exit_hysteresis_frames:
                         fsm.state = FSMState.EXITED

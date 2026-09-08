@@ -135,6 +135,7 @@ class AlertDispatcher:
         severity: str = str(payload.get("severity", "warning")).lower()
         track_id = payload.get("track_id")
         message: str = payload.get("message") or f"Alert at camera {camera_id}"
+        title: str | None = payload.get("title")
         dwell_time_s: float | None = payload.get("dwell_time_s")
         snapshot_url: str | None = payload.get("snapshot_url")
         detected_at: float | None = payload.get("detected_at") or payload.get("timestamp")
@@ -179,6 +180,9 @@ class AlertDispatcher:
                 track_id=track_id,
                 dwell_time_s=dwell_time_s,
                 snapshot_url=snapshot_url,
+                title=title,
+                zone=camera_info.get("zone") if camera_info else None,
+                detected_at=detected_at,
             ),
             self._ip_speaker.play_alert(
                 camera_id=camera_id,

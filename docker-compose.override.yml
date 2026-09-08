@@ -21,10 +21,13 @@ services:
       - ./pipeline/app:/app/app:rw
       - ./scripts:/scripts:ro
     environment:
-      # Comma-separated list of `cam-id=rtsp://...` pairs. cam-01 is
-      # the only live camera right now (the other sample clips are fed
-      # to the VLM worker as historical footage via history-publisher).
-      WW_SOURCES: "cam-01=rtsp://mediamtx:8554/cam-01"
+      # Comma-separated list of `cam-id=rtsp://...` pairs. Left empty --
+      # the actual test camera ("Entry", UUID 46230f99-...) is registered
+      # dynamically via the backend DB and carries the real ROI polygon;
+      # a static cam-01/cam-02 entry here has no ROI at all, so nothing
+      # can ever reach ENTER/VIOLATION on it (confirmed: zero FSM
+      # transitions for an entire test run while this was set).
+      WW_SOURCES: ""
       # Diagnostic: force nvinfer debug to level 5 so we can see parse
       # function resolution, custom-lib loading, and per-batch object
       # counts in the container logs.
@@ -141,4 +144,5 @@ services:
       MEDIAMTX_HOST: mediamtx
       MEDIAMTX_PORT: "8554"
       VIDEO_DIR: /videos
+      LSG_LIVE_SRC_2: VID-20260131-WA0006.mp4
     restart: unless-stopped

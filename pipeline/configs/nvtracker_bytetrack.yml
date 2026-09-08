@@ -37,7 +37,17 @@ TargetManagement:
   maxShadowTrackingAge: 50    # Was 750 (~30s), then 375 (~15s) -- both cleared the mask later than the person's actual
                               # exit. Explicit requirement: clear as close to real exit time as possible, with only a
                               # short (~2s @ 25fps) grace period for brief real occlusion, not a loop-cycle-length one.
-  earlyTerminationAge: 1
+  # Was 1, then 5 -- both tuned assuming ~25fps ("a few frames' grace" ==
+  # ~0.2-1s). Actual running cameras are 15fps (cam-02, confirmed via the
+  # rtsp-streamer's ffmpeg args), so 5 frames was only ~0.33s of real
+  # tolerance -- RF-DETR's low/noisy sigmoid scores (0.05-0.20) dip below
+  # minDetectorConfidence that often, constantly killing and respawning a
+  # NEW track_id for the SAME physical person: dwell time reset to 0, any
+  # OBSERVE/VIOLATION highlight and waste attribution lost mid-incident
+  # (operator sees the red/yellow box "jump" to a different id, or a
+  # confirmed dumper's box vanish right as they walk away). Raised to
+  # give ~1.3s of real grace at 15fps.
+  earlyTerminationAge: 20
 
 TrajectoryManagement:
   useUniqueID: 1              # 64-bit unique IDs across the run — needed for our FSM dwell counters.
@@ -47,10 +57,18 @@ DataAssociator:
   associationMatcherType: 1   # CASCADED — better when many similar-class targets share the frame.
 
   # Thresholds for valid candidates (keep loose for sigmoid-low DETR scores).
-  minMatchingScore4Overall:        0.20
+  # NvDCF visual-similarity matching was tried here to stop a nearby
+  # DIFFERENT person/vehicle stealing a track on IOU+size alone (confirmed
+  # live: a suspicious person's VIOLATION track got reassigned to a
+  # passing two-wheeler rider) -- reverted: the per-target correlation
+  # filter's extra GPU work corrupted encoder output under this box's
+  # load. Mitigated more cheaply instead: raised minMatchingScore4Overall
+  # so a poor-overlap candidate is rejected (spawns a fresh, honest ID)
+  # rather than silently accepted as the same target.
+  minMatchingScore4Overall:        0.35
   minMatchingScore4SizeSimilarity: 0.40
   minMatchingScore4Iou:            0.20
-  matchingScoreWeight4SizeSimilarity: 0.15
+  matchingScoreWeight4SizeSimilarity: 0.20
   matchingScoreWeight4Iou:            0.40
 
   # Tentative detections — anything between minDetectorConfidence (0.04)

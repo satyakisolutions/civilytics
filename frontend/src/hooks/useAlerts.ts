@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Alert } from '@/types/monitoring';
-import { API_BASE } from '@/lib/api-base';
+import { API_BASE, WS_BASE } from '@/lib/api-base';
 import { useToast } from '@/hooks/use-toast';
 import { useNotifications } from '@/hooks/useNotifications';
+
+const WS_RECONNECT_DELAY_MS = 2000;
+const WS_MAX_RECONNECT_DELAY_MS = 20_000;
 
 export function useAlerts() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -101,12 +104,105 @@ export function useAlerts() {
     } catch { /* API may not be available */ }
   }, [notifyViolation, toast]);
 
+  // Live push over /ws/alerts (backend's AlertConsumer broadcasts here,
+  // see backend/app/ws/alerts.py + app/services/alert_consumer.py) instead
+  // of blind interval polling. The WS payload already carries
+  // severity/title/message, so a genuinely-new CRITICAL alert triggers a
+  // toast/notification immediately on receipt; the list itself is then
+  // resynced from the REST endpoint (single source of truth for
+  // id/status/timestamp shaping) rather than hand-mapping the partial WS
+  // payload into local state.
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
+  const reconnectAttempts = useRef(0);
+  const fetchFromApiRef = useRef(fetchFromApi);
+  fetchFromApiRef.current = fetchFromApi;
+
+  const connectWs = useCallback(() => {
+    const ws = new WebSocket(`${WS_BASE}/alerts`);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      reconnectAttempts.current = 0;
+      // Reconnects (network blip, backend restart) can miss events —
+      // resync the list once the socket is back up.
+      fetchFromApiRef.current();
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.type !== 'alert' && payload?.type !== 'vlm_result') return;
+
+        const severity = payload.severity as Alert['severity'] | undefined;
+        const now = Date.now();
+        if (severity === 'critical' && now - lastNotifyTime.current >= 10_000) {
+          lastNotifyTime.current = now;
+          notifyViolation(
+            payload.title || 'Alert',
+            payload.message || '',
+            severity,
+            `alert-ws-${payload.id ?? now}`,
+            payload.tts_audio_url || undefined
+          );
+          toast({
+            title: payload.title || 'Alert',
+            description: payload.message,
+            variant: 'destructive',
+          });
+        }
+
+        if (payload.id) {
+          // Direct-alert path (pipeline.py's per-frame FSM alerts) has no
+          // DB row -- this WS payload is the sole source of truth for it,
+          // fully Alert-shaped (id/title/timestamp/status) by the backend.
+          // Render it live instead of waiting on a REST resync that would
+          // never find it.
+          knownAlertIds.current.add(payload.id);
+          const liveAlert: Alert = {
+            id: payload.id,
+            eventId: '',
+            severity: severity as Alert['severity'],
+            title: payload.title || 'Alert',
+            message: payload.message || '',
+            timestamp: new Date(payload.timestamp || now),
+            status: (payload.status as Alert['status']) || 'active',
+            cameraId: payload.camera_id,
+            zone: payload.zone,
+          };
+          setAlerts(prev => [liveAlert, ...prev].slice(0, 50));
+        } else {
+          // Older/partial payload shape -- resync the canonical list.
+          fetchFromApiRef.current();
+        }
+      } catch {
+        // Ignore malformed messages
+      }
+    };
+
+    ws.onclose = () => {
+      wsRef.current = null;
+      reconnectAttempts.current += 1;
+      const delay = Math.min(
+        WS_RECONNECT_DELAY_MS * reconnectAttempts.current,
+        WS_MAX_RECONNECT_DELAY_MS
+      );
+      reconnectTimer.current = setTimeout(connectWs, delay);
+    };
+
+    ws.onerror = () => {
+      ws.close();
+    };
+  }, [notifyViolation, toast]);
+
   useEffect(() => {
     fetchFromApi();
-    // Poll backend API every 10s — no Supabase realtime (causes overload)
-    const pollInterval = setInterval(fetchFromApi, 10_000);
-    return () => clearInterval(pollInterval);
-  }, [fetchFromApi]);
+    connectWs();
+    return () => {
+      clearTimeout(reconnectTimer.current);
+      wsRef.current?.close();
+    };
+  }, [fetchFromApi, connectWs]);
 
 
 

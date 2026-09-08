@@ -29,6 +29,15 @@ VIDEO_DIR="${VIDEO_DIR:-/videos}"
 TIER_LARGE="1280:720 8 3500k 7000k"
 TIER_MEDIUM="854:480 8 1200k 2400k"
 TIER_SMALL="426:240 8 500k 1000k"
+# cam-02's subject moves fast (vehicle). History on this host: 30fps was
+# tried and reverted (destabilized the ffmpeg encode/publish loop @
+# 3500k/1280x720, starved the RTSP source read, camera marked DEGRADED,
+# output stream froze). 16fps was tried next, also corrupted under this
+# host's GPU load. Was running at 15fps (confirmed stable). Bumped to
+# 25fps per explicit request -- same failure symptoms (DEGRADED / frozen
+# output / "Could not read from resource") are likely to resurface; drop
+# back toward 15fps if they do.
+TIER_LARGE_FAST="1280:720 12.5 3500k 7000k"
 
 publish_tier() {
     cam="$1"
@@ -71,7 +80,7 @@ publish_tier "cam-01-sm" "${SRC_FILE}" "small"  "${TIER_SMALL}"  &
 # mode; WA0002 is already monochrome so no extra ffmpeg filtering
 # needed). Single tier only — quality toggle falls through.
 SRC_FILE_2="${LSG_LIVE_SRC_2:-VID-20260131-WA0002.mp4}"
-publish_tier "cam-02" "${SRC_FILE_2}" "large" "${TIER_LARGE}" &
+publish_tier "cam-02" "${SRC_FILE_2}" "large" "${TIER_LARGE_FAST}" &
 
 echo "[stream.sh] tiers launched for cam-01 (3) + cam-02 (1), waiting"
 wait
