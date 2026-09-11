@@ -93,6 +93,9 @@ class ActionAwareFSM:
         in_roi: bool,
         dwell_time_s: float,
         bbox: dict | None = None,
+        has_carried_item: bool = False,
+        violation_threshold_s: float | None = None,
+        speed_px_s: float | None = None,
     ) -> FSMEvent | None:
         """Process a detection through the action-aware FSM.
 
@@ -141,6 +144,8 @@ class ActionAwareFSM:
                     in_roi=in_roi,
                     dwell_time_s=max(dwell_time_s, self._fsm._observe_threshold + 1),
                     bbox=bbox,
+                    has_carried_item=has_carried_item,
+                    violation_threshold_s=violation_threshold_s,
                 )
 
                 # If the FSM didn't produce an event (e.g., already in VIOLATION),
@@ -185,6 +190,9 @@ class ActionAwareFSM:
             in_roi=in_roi,
             dwell_time_s=dwell_time_s,
             bbox=bbox,
+            has_carried_item=has_carried_item,
+            violation_threshold_s=violation_threshold_s,
+            speed_px_s=speed_px_s,
         )
 
         # Restore threshold if we reduced it

@@ -363,8 +363,14 @@ class ReportScheduler:
             "cameras": cams,
         }
 
-        # Generate AI narrative via BitNet
-        report["narrative"] = self._narrator.generate_full_narrative(report, "weekly")
+        # Generate AI narrative via BitNet — generate_full_narrative() is a
+        # sync CPU-bound llama_cpp call (~15-30 tok/s), multi-second per
+        # report; off the event loop so it doesn't stall this service's
+        # scheduler and any concurrent DB work for the duration.
+        loop = asyncio.get_running_loop()
+        report["narrative"] = await loop.run_in_executor(
+            None, self._narrator.generate_full_narrative, report, "weekly"
+        )
 
         return report
 
@@ -419,7 +425,10 @@ class ReportScheduler:
         }
 
         # Generate AI narrative via BitNet
-        report["narrative"] = self._narrator.generate_full_narrative(report, "monthly")
+        loop = asyncio.get_running_loop()
+        report["narrative"] = await loop.run_in_executor(
+            None, self._narrator.generate_full_narrative, report, "monthly"
+        )
 
         return report
 

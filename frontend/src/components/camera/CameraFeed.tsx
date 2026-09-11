@@ -77,39 +77,19 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
     return () => clearInterval(interval);
   }, []);
 
-  // Derive WebRTC stream path from camera data
+  // Derive WebRTC stream path from camera data.
+  //
+  // The pipeline (connection_monitor.register_camera) publishes its
+  // annotated output to mediamtx at `{camera.id}-out` — keyed by the
+  // camera's DB UUID, not by any part of its RTSP streamUrl. So the
+  // path here must be built from camera.id, not parsed out of
+  // streamUrl (that used to break as soon as streamUrl's last path
+  // segment diverged from the camera's id, e.g. after re-pointing a
+  // camera at a different source file).
   const basePath = useMemo(() => {
-    // Route every camera feed through DeepStream's annotated output
-    // path (`<cam>-out`) so the operator sees the inference bboxes
-    // + top-right action overlay the pipeline draws on nvdsosd. The
-    // raw ffmpeg publisher path (`cam-01`, `cam-01-md`, `cam-01-sm`)
-    // has no annotations and is never what we want to render here.
-    //
-    // The annotated stream is a single 1280x720 tier, so the quality
-    // toggle becomes a no-op when this is in effect (and the "-sm"
-    // / "-md" suffix logic below is bypassed entirely via the
-    // ANNOTATED_STREAM_HAS_ONE_TIER constant in effectiveQuality).
-    const rawPath = (() => {
-      if (!camera.streamUrl) return null;
-      if (!camera.streamUrl.includes('://')) return camera.streamUrl;
-      try {
-        const segments = camera.streamUrl.split('/').filter(Boolean);
-        const last = segments[segments.length - 1];
-        if (last) return last;
-      } catch {
-        // fall through
-      }
-      const safeName = camera.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-      const safeZone = camera.zone.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-      return `cam-${safeZone}-${safeName}`;
-    })();
-    if (!rawPath) return null;
-    // Strip any transcode suffix the legacy streamUrl might carry,
-    // then append "-out" to route to the annotated feed.
-    const withoutTier = rawPath.replace(/-(sm|md|lg|large|medium|small)$/i, '');
-    if (withoutTier.endsWith('-out')) return withoutTier;
-    return `${withoutTier}-out`;
-  }, [camera.streamUrl, camera.name, camera.zone]);
+    if (!camera.id) return null;
+    return `${camera.id}-out`;
+  }, [camera.id]);
 
   // Stream quality — "auto" drives off the panel's actual rendered
   // width via a ResizeObserver hook so small grid cells request the

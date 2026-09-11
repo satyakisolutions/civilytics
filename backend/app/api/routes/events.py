@@ -88,9 +88,16 @@ async def export_events_csv(
 
 
 @router.get("/tracks/active", response_model=list[TrackSessionResponse])
-async def list_active_tracks(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
+async def list_active_tracks(
+    limit: int = Query(default=1000, le=5000),
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_viewer),
+):
     result = await db.execute(
-        select(TrackSession).where(TrackSession.exited_at.is_(None)).order_by(TrackSession.entered_at.desc())
+        select(TrackSession)
+        .where(TrackSession.exited_at.is_(None))
+        .order_by(TrackSession.entered_at.desc())
+        .limit(limit)
     )
     return result.scalars().all()
 

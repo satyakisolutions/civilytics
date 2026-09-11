@@ -157,22 +157,14 @@ services:
     command: ["python3", "-m", "services.tts.main"]
     restart: unless-stopped
 
-  # ── LPR Service (PaddleOCR) ───────────────────────────────────
-  lpr-worker:
-    build:
-      context: ./backend
-    env_file:
-      - .env
-    environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-    depends_on:
-      kafka:
-        condition: service_healthy
-    command: ["python3", "-m", "services.lpr.main"]
-    restart: unless-stopped
-
-  # ── Alert Service (Telegram + IP Speaker) ─────────────────────
-  alert-svc:
+  # ── Combined Backend Workers ───────────────────────────────────
+  # alerts, sip, evidence, health_monitor, logs, reports, lpr, and healer
+  # merged into one container (backend/services/combined_workers/main.py,
+  # asyncio.gather of all eight) -- all eight are lightweight Kafka/Redis
+  # consumers from the same ./backend image with no real isolation need
+  # between them, unlike vlm-worker (GPU-bound, stays separate). Env vars
+  # and volumes below are the union of what the eight individually needed.
+  backend-workers:
     build:
       context: ./backend
     env_file:
@@ -180,90 +172,9 @@ services:
     environment:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
-    depends_on:
-      kafka:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: ["python3", "-m", "services.alerts.main"]
-    restart: unless-stopped
-
-  # ── SIP / Escalation Service ──────────────────────────────────
-  sip-svc:
-    build:
-      context: ./backend
-    env_file:
-      - .env
-    environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
-    depends_on:
-      kafka:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: ["python3", "-m", "services.sip.main"]
-    restart: unless-stopped
-
-  # ── Evidence Service (Recording + Dropbox) ────────────────────
-  evidence-svc:
-    build:
-      context: ./backend
-    env_file:
-      - .env
-    environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
-    depends_on:
-      kafka:
-        condition: service_healthy
-    volumes:
-      - evidence_data:/tmp/wastewatch/evidence
-    command: ["python3", "-m", "services.evidence.main"]
-    restart: unless-stopped
-
-  # ── Health Monitor Service ─────────────────────────────────────
-  health-monitor:
-    build:
-      context: ./backend
-    env_file:
-      - .env
-    environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
       WW_MEDIAMTX_API_URL: http://mediamtx:9997
       WW_VLM_BASE_URL: http://vlm:8000/v1
-    depends_on:
-      kafka:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: ["python3", "-m", "services.health_monitor.main"]
-    restart: unless-stopped
-
-  # ── Log Ingestion Service ─────────────────────────────────────
-  log-worker:
-    build:
-      context: ./backend
-    env_file:
-      - .env
-    environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-    depends_on:
-      kafka:
-        condition: service_healthy
-    command: ["python3", "-m", "services.logs.main"]
-    restart: unless-stopped
-
-  # ── Report Generation Service (SMTP email reports) ────────────
-  reports:
-    build:
-      context: ./backend
-    env_file:
-      - .env
-    environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
       WW_DATABASE_URL: ${WW_DATABASE_URL}
       WW_SMTP_HOST: ${WW_SMTP_HOST:-}
       WW_SMTP_PORT: ${WW_SMTP_PORT:-587}
@@ -277,29 +188,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: ["python3", "-m", "services.reports.main"]
-    restart: unless-stopped
-
-  # ── Self-Healing Agent + MCP Server ──────────────────────────
-  healer:
-    build:
-      context: ./backend
-    env_file:
-      - .env
-    environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
-    depends_on:
-      kafka:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - evidence_data:/tmp/wastewatch/evidence
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
-      - "9100:9100"
-    command: ["python3", "-m", "services.healer.main"]
+      - "9100:9100"  # healer's MCP server
+    command: ["python3", "-m", "services.combined_workers.main"]
     restart: unless-stopped
 
   pipeline:
@@ -313,6 +207,10 @@ services:
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
       WW_EVIDENCE_DIR: /app/evidence
       WW_VLM_GRPC_TARGET: vlm-worker:50061
+      # RF-DETR-Seg-Nano (bag/person/waste, instance segmentation)
+      # primary GIE opt-in. Default 0 (bbox 2-class model stays live).
+      # See pipeline/app/pipeline.py and pipeline/configs/nvinfer_rfdetr_seg.txt.
+      WW_USE_SEG_MODEL: ${WW_USE_SEG_MODEL:-1}
     volumes:
       - evidence_data:/app/evidence
     depends_on:
@@ -330,14 +228,22 @@ services:
 
   vlm:
     image: vllm/vllm-openai:latest
+    # Tuned for a single 12GB RTX 3060 (confirmed via nvidia-smi: 11.5GB
+    # free with nothing else loaded). The original config — 4096 context,
+    # 8 multimodal image slots, plus ngram speculative decoding's draft
+    # overhead — left zero VRAM for the KV cache after model weights
+    # loaded, and vLLM refused to start ("No available memory for the
+    # cache blocks"). Speculative decoding dropped (real memory cost for
+    # marginal benefit on a memory-constrained box); context and image
+    # slots trimmed to what this app's VLM requests actually use
+    # (release_verification/analyze prompts, not long multi-turn chat).
     command: >
       --model Qwen/Qwen2.5-VL-7B-Instruct-AWQ
       --quantization awq
       --dtype float16
-      --max-model-len 4096
-      --gpu-memory-utilization 0.85
-      --limit-mm-per-prompt '{"image": 8}'
-      --speculative-config '{"method":"ngram","num_speculative_tokens":5,"prompt_lookup_max":4,"prompt_lookup_min":2}'
+      --max-model-len 2048
+      --gpu-memory-utilization 0.90
+      --limit-mm-per-prompt '{"image": 4}'
       --port 8000
     ports:
       - "8001:8000"

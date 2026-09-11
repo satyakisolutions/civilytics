@@ -49,13 +49,20 @@ network-type=0
 parse-bbox-func-name=NvDsInferParseYolo
 custom-lib-path=/app/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so
 
-cluster-mode=2
+# cluster-mode=4 (NONE), not 2 (NMS): the fused output head above already
+# emits final, per-query decoded (x1,y1,x2,y2,score,class_id) boxes —
+# RF-DETR is query-based (DETR), not a dense-anchor detector, so there is
+# no raw anchor grid left for NMS to cluster. Running nvinfer's NMS-based
+# clustering on already-final boxes is exactly the documented DeepStream
+# failure mode for a post-NMS [N,300,6]-style output: boxes render
+# visibly rotated/shifted (~45°/135°) because the clustering step
+# misinterprets already-decoded coordinates as pre-NMS anchor data.
+cluster-mode=4
 maintain-aspect-ratio=0
 
 [class-attrs-all]
 pre-cluster-threshold=0.40
 topk=100
-nms-iou-threshold=0.45
 
 # Person (0) — allow weaker tracks so tracker's hysteresis picks them up
 [class-attrs-0]

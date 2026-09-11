@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useMonitoring } from '@/context/MonitoringContext';
+import { API_BASE } from '@/lib/api-base';
 
 export function useNotifications() {
   const { isSoundEnabled } = useMonitoring();
@@ -42,21 +43,39 @@ export function useNotifications() {
     } catch { /* ignore */ }
   }, [isSoundEnabled]);
 
+  // ttsAudioUrl was accepted here but never actually played -- alerts only
+  // ever got the generic beep, never the real spoken message the pipeline/
+  // backend already generate (backend/app/services/alert_consumer.py
+  // publishes a TTS-render request and predicts this URL). Play it when
+  // present; fall back to the beep when it's not (e.g. suppress_tts alerts).
+  const playTtsAudio = useCallback((ttsAudioUrl: string) => {
+    if (!isSoundEnabled) return;
+    try {
+      const audio = new Audio(ttsAudioUrl.startsWith('http') ? ttsAudioUrl : `${API_BASE}${ttsAudioUrl}`);
+      audio.volume = 0.9;
+      audio.play().catch(() => { /* autoplay blocked without a prior user gesture -- ignore */ });
+    } catch { /* ignore */ }
+  }, [isSoundEnabled]);
+
   const notifyViolation = useCallback((
     title: string, message: string,
     severity: 'critical' | 'warning' | 'info',
-    tag?: string, _ttsAudioUrl?: string
+    tag?: string, ttsAudioUrl?: string
   ) => {
     // Cooldown: 3s so backlog still fires per-alert beep/push
     const now = Date.now();
     if (now - lastNotifyRef.current < 3_000) return;
     lastNotifyRef.current = now;
 
-    playBeep();
+    if (ttsAudioUrl) {
+      playTtsAudio(ttsAudioUrl);
+    } else {
+      playBeep();
+    }
     sendPushNotification(title, message, severity, tag);
-  }, [playBeep, sendPushNotification]);
+  }, [playBeep, playTtsAudio, sendPushNotification]);
 
   useEffect(() => { requestPermission(); }, [requestPermission]);
 
-  return { notifyViolation, playBeep, sendPushNotification, requestPermission };
+  return { notifyViolation, playBeep, playTtsAudio, sendPushNotification, requestPermission };
 }

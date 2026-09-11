@@ -1,0 +1,206 @@
+/*
+ * Copyright (c) 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.
+ *
+ * Custom DeepStream instance-segmentation parser for RF-DETR-Seg-Nano
+ * (WasteWatch seg-v2, 4-class checkpoint: 0=Waste-watch/background,
+ * 1=bag, 2=person, 3=waste).
+ *
+ * Unlike the bbox-only rfdetr.onnx (pipeline/nvdsinfer_custom_impl_Yolo),
+ * this model is exported WITHOUT a fused DeepStreamOutput head — there is
+ * no clean way to concat a [100,96,96] mask tensor into the same
+ * single-tensor YOLO-style [N,Q,6] trick the bbox model uses, so this
+ * parser reads the three raw ONNX outputs directly and does the full
+ * decode itself:
+ *
+ *   dets   [1,100,4]     cxcywh, normalised to [0,1] against the 384x384
+ *                        network input (standard DETR box parameterisation).
+ *   labels [1,100,6]     per-query class logits. Channel 0 is the
+ *                        "Waste-watch" background/ignore class the
+ *                        training run used as class-index 0 (see
+ *                        nvinfer_rfdetr_seg.txt's comment on RF-DETR's
+ *                        off-by-one class-index convention — this repo
+ *                        has been bitten by exactly this before with the
+ *                        bbox model). Channels 4-5 are unused no-object
+ *                        slack from num_classes+1 padding that never wins
+ *                        argmax on real detections (confirmed empirically
+ *                        against rfdetr's own `.predict()` postprocessing
+ *                        on a live frame — see training/test_seg_v2_inference.py).
+ *                        Channels 1,2,3 map directly to bag/person/waste.
+ *   masks  [1,100,96,96] per-query mask LOGITS over the *full* 384x384
+ *                        input at 1/4 resolution (96 = 384/4) — NOT
+ *                        per-ROI crops like Mask R-CNN/TAO MaskRCNN. We
+ *                        crop the region under each kept box out of this
+ *                        full-frame grid, sigmoid it, and hand DeepStream
+ *                        that crop as the instance mask (mask_width/
+ *                        mask_height == the box's footprint in grid
+ *                        cells, sized to at least 1x1).
+ *
+ * Class semantics were verified by comparing this exact sigmoid+argmax
+ * decode against `RFDETRSegNano.predict()`'s own supervision.Detections
+ * output on the same frame: argmax channel == supervision class_id
+ * directly (channel 3 -> "waste", channel 2 -> "person"), confirming no
+ * extra index shift beyond dropping channel 0 (background).
+ */
+
+#include "nvdsinfer_custom_impl.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <iostream>
+#include <vector>
+
+namespace {
+
+constexpr int kNumQueries = 100;
+constexpr int kNumLogitChannels = 6;   // labels last dim
+constexpr int kMaskGrid = 96;          // masks spatial dim (netW/4, netH/4)
+// The checkpoint's real class_names list (from runs_seg_v2's training
+// args, confirmed via `torch.load(...)['args']['class_names']`) is
+// ['Waste-watch', 'a', 'bag', 'person', 'waste'] -- 5 classes, NOT 4.
+// The stray 'a' class (mid-session dataset cleanup removed its
+// *annotations* but never retrained/re-exported the model without it)
+// still occupies channel 1, shifting bag/person/waste to channels
+// 2/3/4. The original version of this parser only scanned channels
+// 1-3 assuming a clean 4-class {bg, bag, person, waste} layout, which
+// read real "person" (channel 3) as "waste" and never looked at real
+// "waste" (channel 4) at all -- confirmed live: person detected as
+// waste and waste detected as person, symmetric swap. Both channels
+// 0 (Waste-watch) and 1 ('a') are ignore/background here.
+constexpr int kBackgroundChannelLo = 0;  // "Waste-watch"
+constexpr int kBackgroundChannelHi = 1;  // "a" -- stray, unused class
+constexpr int kRealClassChannelsLo = 2;
+constexpr int kRealClassChannelsHi = 4; // inclusive: 2=bag,3=person,4=waste
+
+inline float sigmoidf(float x) { return 1.0f / (1.0f + std::exp(-x)); }
+
+inline float clampf(float v, float lo, float hi) {
+  return std::max(lo, std::min(hi, v));
+}
+
+const NvDsInferLayerInfo* findLayer(
+    std::vector<NvDsInferLayerInfo> const& layers, const char* name) {
+  for (auto const& l : layers) {
+    if (l.layerName && std::strcmp(l.layerName, name) == 0) {
+      return &l;
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+extern "C" bool NvDsInferParseCustomRfdetrSeg(
+    std::vector<NvDsInferLayerInfo> const& outputLayersInfo,
+    NvDsInferNetworkInfo const& networkInfo,
+    NvDsInferParseDetectionParams const& detectionParams,
+    std::vector<NvDsInferInstanceMaskInfo>& objectList) {
+  const NvDsInferLayerInfo* detsLayer = findLayer(outputLayersInfo, "dets");
+  const NvDsInferLayerInfo* labelsLayer = findLayer(outputLayersInfo, "labels");
+  const NvDsInferLayerInfo* masksLayer = findLayer(outputLayersInfo, "masks");
+
+  if (!detsLayer || !labelsLayer || !masksLayer) {
+    std::cerr << "NvDsInferParseCustomRfdetrSeg: missing one of "
+                 "dets/labels/masks output layers"
+              << std::endl;
+    return false;
+  }
+
+  const float* dets = reinterpret_cast<const float*>(detsLayer->buffer);
+  const float* labels = reinterpret_cast<const float*>(labelsLayer->buffer);
+  const float* masks = reinterpret_cast<const float*>(masksLayer->buffer);
+
+  const float netW = static_cast<float>(networkInfo.width);
+  const float netH = static_cast<float>(networkInfo.height);
+
+  objectList.clear();
+  objectList.reserve(kNumQueries);
+
+  for (int q = 0; q < kNumQueries; ++q) {
+    const float* qLogits = labels + q * kNumLogitChannels;
+
+    int bestChannel = kRealClassChannelsLo;
+    float bestProb = sigmoidf(qLogits[kRealClassChannelsLo]);
+    for (int c = kRealClassChannelsLo + 1; c <= kRealClassChannelsHi; ++c) {
+      float p = sigmoidf(qLogits[c]);
+      if (p > bestProb) {
+        bestProb = p;
+        bestChannel = c;
+      }
+    }
+    // Also check background/ignore (Waste-watch or stray 'a') isn't
+    // stronger than every real class — if it is, this query is not a
+    // real detection at all.
+    float bgProb = sigmoidf(qLogits[kBackgroundChannelLo]);
+    for (int c = kBackgroundChannelLo + 1; c <= kBackgroundChannelHi; ++c) {
+      bgProb = std::max(bgProb, sigmoidf(qLogits[c]));
+    }
+    if (bgProb >= bestProb) {
+      continue;
+    }
+
+    const unsigned int classId = static_cast<unsigned int>(bestChannel - kRealClassChannelsLo); // 0=bag,1=person,2=waste
+    if (classId >= detectionParams.perClassPreclusterThreshold.size()) {
+      continue;
+    }
+    if (bestProb < detectionParams.perClassPreclusterThreshold[classId]) {
+      continue;
+    }
+
+    // --- box: cxcywh normalised -> pixel xyxy, clamped to network dims.
+    const float* box = dets + q * 4;
+    float cx = box[0] * netW;
+    float cy = box[1] * netH;
+    float w = box[2] * netW;
+    float h = box[3] * netH;
+    float x1 = clampf(cx - 0.5f * w, 0.0f, netW);
+    float y1 = clampf(cy - 0.5f * h, 0.0f, netH);
+    float x2 = clampf(cx + 0.5f * w, 0.0f, netW);
+    float y2 = clampf(cy + 0.5f * h, 0.0f, netH);
+    float boxW = clampf(x2 - x1, 0.0f, netW);
+    float boxH = clampf(y2 - y1, 0.0f, netH);
+    if (boxW < 1.0f || boxH < 1.0f) {
+      continue;
+    }
+
+    // --- mask: crop the box's footprint out of the 96x96 full-frame
+    // grid for this query, sigmoid it in place.
+    int gx1 = static_cast<int>(std::floor(x1 / netW * kMaskGrid));
+    int gy1 = static_cast<int>(std::floor(y1 / netH * kMaskGrid));
+    int gx2 = static_cast<int>(std::ceil(x2 / netW * kMaskGrid));
+    int gy2 = static_cast<int>(std::ceil(y2 / netH * kMaskGrid));
+    gx1 = std::max(0, std::min(gx1, kMaskGrid - 1));
+    gy1 = std::max(0, std::min(gy1, kMaskGrid - 1));
+    gx2 = std::max(gx1 + 1, std::min(gx2, kMaskGrid));
+    gy2 = std::max(gy1 + 1, std::min(gy2, kMaskGrid));
+    unsigned int maskW = static_cast<unsigned int>(gx2 - gx1);
+    unsigned int maskH = static_cast<unsigned int>(gy2 - gy1);
+
+    const float* qMask = masks + static_cast<size_t>(q) * kMaskGrid * kMaskGrid;
+    float* maskData = new float[maskW * maskH];
+    for (unsigned int r = 0; r < maskH; ++r) {
+      for (unsigned int c = 0; c < maskW; ++c) {
+        float logit = qMask[(gy1 + r) * kMaskGrid + (gx1 + c)];
+        maskData[r * maskW + c] = sigmoidf(logit);
+      }
+    }
+
+    NvDsInferInstanceMaskInfo info;
+    info.classId = classId;
+    info.left = x1;
+    info.top = y1;
+    info.width = boxW;
+    info.height = boxH;
+    info.detectionConfidence = bestProb;
+    info.mask = maskData;
+    info.mask_width = maskW;
+    info.mask_height = maskH;
+    info.mask_size = maskW * maskH * sizeof(float);
+
+    objectList.push_back(info);
+  }
+
+  return true;
+}
+
+CHECK_CUSTOM_INSTANCE_MASK_PARSE_FUNC_PROTOTYPE(NvDsInferParseCustomRfdetrSeg);

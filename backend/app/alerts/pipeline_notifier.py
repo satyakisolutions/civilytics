@@ -22,6 +22,7 @@ On resolution, the pipeline must:
     - Optionally play "all clear" on IP speaker
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -50,13 +51,42 @@ class PipelineNotifier:
                 logger.warning("PipelineNotifier: Redis not available — commands will be logged only")
 
     def _publish(self, command: dict) -> bool:
-        """Publish a command to the pipeline channel. Returns True on success."""
+        """Publish a command to the pipeline channel. Returns True on success.
+
+        This is called from async FastAPI route handlers (cameras.py) and
+        the async alert dispatcher loop, but redis-py's sync client makes a
+        blocking network round-trip. Offload it to the default executor
+        thread pool so it never blocks the event loop — every camera
+        create/update/delete and every dispatched alert used to stall the
+        whole event loop for one Redis publish.
+        """
         command.setdefault("timestamp", time.time())
         if self._redis:
             try:
-                self._redis.publish(COMMAND_CHANNEL, json.dumps(command))
+                loop = asyncio.get_running_loop()
+                future = loop.run_in_executor(
+                    None, self._redis.publish, COMMAND_CHANNEL, json.dumps(command)
+                )
+                # The future is fire-and-forget (this method returns True
+                # before the publish actually completes), but a failure
+                # inside the executor thread was previously discarded
+                # silently -- the caller kept seeing "success" even when
+                # the publish never reached Redis. Log it when it happens.
+                def _log_publish_failure(fut, _action=command.get("action")):
+                    exc = fut.exception()
+                    if exc is not None:
+                        logger.error("Pipeline command failed to publish (action=%s): %s", _action, exc)
+                future.add_done_callback(_log_publish_failure)
                 logger.info("Pipeline command sent: %s", command.get("action"))
                 return True
+            except RuntimeError:
+                # No running event loop (e.g. a sync test) — publish inline.
+                try:
+                    self._redis.publish(COMMAND_CHANNEL, json.dumps(command))
+                    return True
+                except Exception:
+                    logger.exception("Failed to publish pipeline command")
+                    return False
             except Exception:
                 logger.exception("Failed to publish pipeline command")
                 return False

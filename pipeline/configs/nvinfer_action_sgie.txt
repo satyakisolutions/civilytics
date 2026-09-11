@@ -10,8 +10,17 @@ net-scale-factor=0.00784313725
 offsets=127.5;127.5;127.5
 model-engine-file=/app/models/action_classifier/action_classifier_fp16.engine
 onnx-file=/app/models/action_classifier/action_classifier.onnx
-labelfile-path=configs/action_labels.txt
-batch-size=16
+labelfile-path=/app/configs/action_labels.txt
+# The exported action_classifier.onnx has a static batch=1 input axis
+# (confirmed via onnx_to_engine.py: "ONNX is fully static — skipping
+# --minShapes/--optShapes/--maxShapes"), not the dynamic batch the
+# ModelSpec's min/opt/max_batch=1/16/32 assumed. A batch-size=16 engine
+# request against a batch=1-only engine fails checkBackendParams()
+# ("Backend has maxBatchSize 1 whereas 16 has been requested") on every
+# deserialize attempt, forcing a full TensorRT rebuild on every pipeline
+# start. Matches the same static-batch reality already documented for
+# nvinfer_rfdetr.txt/onnx_to_engine.py's rfdetr ModelSpec.
+batch-size=1
 process-mode=2
 model-color-format=0
 network-mode=2
@@ -19,7 +28,14 @@ network-type=1
 num-detected-classes=8
 gie-unique-id=2
 operate-on-gie-id=1
-operate-on-class-ids=0;1;2;3;5;7
+# PGIE (nvinfer_rfdetr.txt) is a fine-tuned 2-class detector — 0=person,
+# 1=handbag (see COCO_CLASS_MAP in pipeline.py) — NOT the 80-class COCO
+# set. Action classification (walking/carrying/dumping/etc) only makes
+# sense for the person class; the old generic COCO id list (0;1;2;3;5;7
+# = person/bicycle/car/motorcycle/bus/truck) never matched this PGIE's
+# actual output and would have run the SGIE on stray handbag detections
+# (id 1) while never seeing the vehicle ids it was written for.
+operate-on-class-ids=0
 infer-dims=3;224;224
 maintain-aspect-ratio=1
 interval=3

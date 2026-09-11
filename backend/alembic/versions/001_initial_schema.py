@@ -45,7 +45,7 @@ def upgrade() -> None:
         sa.Column("gps_lng", sa.Float(), nullable=True),
         sa.Column(
             "status",
-            sa.Enum("online", "offline", "warning", "alert", name="camerastatus", create_type=False),
+            postgresql.ENUM("online", "offline", "warning", "alert", name="camerastatus", create_type=False),
             nullable=False,
             server_default="offline",
         ),
@@ -83,7 +83,7 @@ def upgrade() -> None:
         sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "event_type",
-            sa.Enum(
+            postgresql.ENUM(
                 "dumping_detected", "suspicious_activity", "repeat_offender",
                 name="eventtype",
                 create_type=False,
@@ -92,7 +92,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "severity",
-            sa.Enum("critical", "warning", "info", name="alertseverity", create_type=False),
+            postgresql.ENUM("critical", "warning", "info", name="alertseverity", create_type=False),
             nullable=False,
         ),
         sa.Column("confidence", sa.Float(), nullable=False),
@@ -105,7 +105,7 @@ def upgrade() -> None:
         sa.Column("video_clip_url", sa.Text(), nullable=True),
         sa.Column(
             "status",
-            sa.Enum("active", "acknowledged", "resolved", name="alertstatus", create_type=False),
+            postgresql.ENUM("active", "acknowledged", "resolved", name="alertstatus", create_type=False),
             nullable=False,
             server_default="active",
         ),
@@ -145,7 +145,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "severity",
-            sa.Enum("critical", "warning", "info", name="alertseverity", create_type=False),
+            postgresql.ENUM("critical", "warning", "info", name="alertseverity", create_type=False),
             nullable=False,
         ),
         sa.Column("title", sa.String(500), nullable=False),
@@ -162,7 +162,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "status",
-            sa.Enum("active", "acknowledged", "resolved", name="alertstatus", create_type=False),
+            postgresql.ENUM("active", "acknowledged", "resolved", name="alertstatus", create_type=False),
             nullable=False,
             server_default="active",
         ),

@@ -60,6 +60,13 @@ class Camera(Base):
     thumbnail_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     roi_polygons: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     recording_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Per-camera overrides for waste-dump detection thresholds. Shape:
+    #   {"dwell_violation_threshold_s": float, "waste_proximity_alert_window_s": float,
+    #    "waste_proximity_px": float}
+    # Any key omitted falls back to the pipeline's global default (see
+    # pipeline/app/config.py's PipelineSettings). Read by the pipeline via
+    # ROISyncer's existing /api/cameras poll (pipeline/app/roi_sync.py).
+    detection_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -122,6 +129,10 @@ class Alert(Base):
     zone: Mapped[str | None] = mapped_column(String(255), nullable=True)
     channel: Mapped[str | None] = mapped_column(String(50), nullable=True)
     tts_audio_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # URL (served under /evidence, see backend/app/main.py's StaticFiles
+    # mount) of the frame this alert fired on. Set by alert_consumer.py
+    # from the pipeline's send_alert(..., snapshot_url=...) payload.
+    snapshot_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

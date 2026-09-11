@@ -6,7 +6,7 @@ export function MonitoringView() {
     <div className="flex flex-col h-full">
       <TopBar />
       <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 flex flex-col overflow-auto">
           <CameraGrid />
         </div>
       </div>

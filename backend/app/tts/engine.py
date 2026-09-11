@@ -28,18 +28,26 @@ TTS_LENGTH_SCALE = float(os.environ.get("WW_TTS_LENGTH_SCALE", "0.78"))
 TTS_NOISE_SCALE = float(os.environ.get("WW_TTS_NOISE_SCALE", "0.667"))
 # Short pauses between sentences — keeps pressure on
 TTS_SENTENCE_SILENCE = float(os.environ.get("WW_TTS_SENTENCE_SILENCE", "0.12"))
-# Aggressive prefix/suffix wraps every message
-TTS_TONE_PREFIX = "ATTENTION. WARNING. "
-TTS_TONE_SUFFIX = " STOP IMMEDIATELY. THIS AREA IS UNDER ACTIVE SURVEILLANCE. YOU ARE BEING RECORDED."
+# Fixed deterrent phrase spoken on every aggressive-tone alert -- short,
+# direct command aimed at whoever is dumping right now, not a description
+# of the event (that's what the dashboard/Telegram text alert is for).
+#
+# Kannada, not synthesized live: Piper has no Kannada voice at all (checked
+# the official voice list -- kn/kn_IN doesn't exist, unlike hi_IN/ml_IN/
+# ne_NP which do). Since this phrase is always the same fixed string, a
+# one-time pre-generated static audio file is used instead of live TTS --
+# see _FIXED_DETERRENT_AUDIO below.
+TTS_FIXED_DETERRENT = "ಎಚ್ಚರಿಕೆ! ಕಸ ಎಸೆಯಬೇಡಿ. ನಿಮ್ಮ ಚಟುವಟಿಕೆ ಕ್ಯಾಮೆರಾದಲ್ಲಿ ದಾಖಲಾಗುತ್ತಿದೆ."
+_FIXED_DETERRENT_AUDIO = Path(__file__).parent / "assets" / "kannada_deterrent.wav"
 
 
 def _apply_tone(text: str) -> str:
-    """Shape text for the active tone. Aggressive mode UPPER-CASES the body
-    and brackets it with a hard warning prefix + suffix so Piper renders it
-    with more emphasis and the listener hears it as a command."""
+    """Shape text for the active tone. Aggressive mode ignores the passed-in
+    alert text entirely and always speaks the same short, direct command --
+    a fixed deterrent phrase reads more like an authoritative warning than
+    reading out per-event details (track IDs, dwell seconds) aloud."""
     if TTS_TONE == "aggressive":
-        body = text.strip().rstrip(".!?") + "."
-        return f"{TTS_TONE_PREFIX}{body.upper()}{TTS_TONE_SUFFIX}".strip()
+        return TTS_FIXED_DETERRENT
     return text
 
 
@@ -67,9 +75,24 @@ class TTSEngine:
         import urllib.request
         model_dir = model_path.parent
         model_dir.mkdir(parents=True, exist_ok=True)
-        # Extract model name: /tmp/piper_voices/en_US-lessac-medium.onnx → en_US-lessac-medium
+        # Extract model name: /tmp/piper_voices/en_US-ryan-high.onnx → en_US-ryan-high
         model_name = model_path.name.replace(".onnx", "")
-        base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium"
+        # Parse Piper's own naming convention ({lang}_{REGION}-{voice}-{quality})
+        # to build the HuggingFace path instead of a hardcoded "lessac/medium"
+        # directory -- that was hardcoded for the lessac voice specifically,
+        # so any other WW_TTS_VOICE (this deployment uses ryan-high, which
+        # lives under a completely different en/en_US/ryan/high/ path) 404'd
+        # on every download attempt and silently fell back to the
+        # placeholder generator (pure silence, no speech at all) forever.
+        try:
+            _lang_region, _rest = model_name.split("-", 1)
+            _voice, _quality = _rest.rsplit("-", 1)
+            _lang = _lang_region.split("_")[0]
+        except ValueError:
+            logger.error("Could not parse voice name %r — expected {lang}_{REGION}-{voice}-{quality}", model_name)
+            self._available = False
+            return
+        base_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{_lang}/{_lang_region}/{_voice}/{_quality}"
         for fname in [f"{model_name}.onnx", f"{model_name}.onnx.json"]:
             fpath = model_dir / fname
             if fpath.exists():
@@ -97,12 +120,34 @@ class TTSEngine:
         if filepath.exists():
             return {"path": str(filepath), "text_hash": text_hash, "duration_ms": self._estimate_duration(shaped)}
 
+        if shaped == TTS_FIXED_DETERRENT and _FIXED_DETERRENT_AUDIO.exists():
+            # Static pre-generated Kannada audio -- see TTS_FIXED_DETERRENT
+            # comment. Never invoke Piper (no Kannada voice) or the silent
+            # placeholder for this phrase.
+            import shutil
+            shutil.copyfile(_FIXED_DETERRENT_AUDIO, filepath)
+            return {"path": str(filepath), "text_hash": text_hash, "duration_ms": self._audio_duration_ms(filepath)}
+
         if self._available:
             self._generate_piper(shaped, filepath)
         else:
             self._generate_placeholder(shaped, filepath)
 
         return {"path": str(filepath), "text_hash": text_hash, "duration_ms": self._estimate_duration(shaped)}
+
+    def _audio_duration_ms(self, filepath: Path) -> int:
+        """Read the real duration from a WAV file's header instead of the
+        word-count estimate (that heuristic assumes space-separated Latin
+        words -- meaningless for Kannada script)."""
+        import wave
+        try:
+            with wave.open(str(filepath), "rb") as wf:
+                frames = wf.getnframes()
+                rate = wf.getframerate()
+                return int(frames / float(rate) * 1000)
+        except Exception:
+            logger.exception("Failed to read WAV duration for %s", filepath)
+            return 7000
 
     def _generate_piper(self, text: str, filepath: Path):
         """Generate using Piper TTS with tone-shaped prosody."""

@@ -43,7 +43,7 @@ def upgrade() -> None:
         sa.Column("track_id", sa.Integer(), nullable=False),
         sa.Column(
             "fsm_state",
-            sa.Enum(
+            postgresql.ENUM(
                 "enter", "observe", "violation", "alerting", "escalated", "exited",
                 name="event_fsm_state",
                 create_type=False,

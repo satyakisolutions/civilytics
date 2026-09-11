@@ -14,6 +14,7 @@ class AlertResponse(BaseModel):
     zone: str | None
     channel: str | None
     tts_audio_url: str | None
+    snapshot_url: str | None
     status: AlertStatus
     timestamp: datetime
     created_at: datetime

@@ -69,11 +69,15 @@ def test_multiple_tracks_independent():
     assert event2 is None
 
 
-def test_violation_exits_on_roi_leave():
+def test_violation_exits_after_ten_outside_roi_frames():
     mgr = EventFSMManager(enter_threshold_s=5.0, observe_threshold_s=15.0)
     mgr.update("cam-01", 1, "person", in_roi=True, dwell_time_s=0.0)
     mgr.update("cam-01", 1, "person", in_roi=True, dwell_time_s=6.0)
     mgr.update("cam-01", 1, "person", in_roi=True, dwell_time_s=16.0)
+    for _ in range(9):
+        event = mgr.update("cam-01", 1, "person", in_roi=False, dwell_time_s=20.0)
+        assert event is None
+        assert mgr.get_fsm_state("cam-01", 1) == "violation"
     event = mgr.update("cam-01", 1, "person", in_roi=False, dwell_time_s=20.0)
     assert event is not None
     assert event.state == FSMState.EXITED
@@ -92,3 +96,12 @@ def test_force_violation_overrides_dwell_fsm_and_persists_marker():
 
     assert mgr.get_fsm_state("cam-01", 878) == "violation"
     assert mgr.is_escalated("cam-01", 878) is True
+
+    # Paired waste violations are visibility-owned, not ROI-owned. Leaving
+    # the polygon while the tracker still reports the person must not clear
+    # the state at the evidence-capture boundary (or afterward).
+    for _ in range(20):
+        assert mgr.update(
+            "cam-01", 878, "person", in_roi=False, dwell_time_s=0.0
+        ) is None
+    assert mgr.get_fsm_state("cam-01", 878) == "violation"

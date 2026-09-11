@@ -66,7 +66,12 @@ export function ROIOverlay({
         }}
         onClick={handleClick}
       >
-        {polygons.map((polygon, i) => {
+        {/* Saved zone polygons only render while actively editing/configuring
+            (CameraSettingsDialog) -- previously always rendered, which put
+            a "Restricted Zone" outline + label on the live camera feed
+            permanently. Privacy/minimal-UI redesign: the live view shows
+            no zone highlighting at all now, same as the pipeline's own OSD. */}
+        {isEditing && polygons.map((polygon, i) => {
           const isHovered = hoveredPolygon === i;
           const cx = polygon.points.reduce((s, p) => s + p.x * 100, 0) / (polygon.points.length || 1);
           const cy = polygon.points.reduce((s, p) => s + p.y * 100, 0) / (polygon.points.length || 1);
@@ -95,10 +100,19 @@ export function ROIOverlay({
                   {polygon.name}
                 </text>
               )}
-              {isEditing && isHovered && onRemovePolygon && (
+              {isEditing && onRemovePolygon && (
+                // Always rendered while editing (not hover-gated) — hover-only
+                // controls are unreachable on touch/tablet, a realistic device
+                // for a surveillance monitoring room.
                 <g
-                  onClick={(e) => { e.stopPropagation(); onRemovePolygon(i); setHoveredPolygon(null); }}
-                  style={{ cursor: "pointer" }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm(`Delete zone "${polygon.name}"? This can't be undone.`)) {
+                      onRemovePolygon(i);
+                    }
+                    setHoveredPolygon(null);
+                  }}
+                  style={{ cursor: "pointer", opacity: isHovered ? 1 : 0.85 }}
                 >
                   <circle cx={cx} cy={cy} r={3} fill="rgba(239, 68, 68, 0.9)" stroke="#fff" strokeWidth={0.3} />
                   <text x={cx} y={cy + 1} fill="#fff" fontSize="3" fontWeight={700} textAnchor="middle">×</text>

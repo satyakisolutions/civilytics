@@ -123,10 +123,16 @@ class ROISyncer:
 
             for cam in cameras:
                 cam_id = cam.get("id")
-                cam_name = cam.get("name")  # the pipeline's source key, e.g. "cam-01"
+                cam_name = cam.get("name")  # display name only, for logging
                 if not cam_id or not cam_name:
                     continue
-                self._detection_configs[cam_name] = cam.get("detection_config") or {}
+                # Everything downstream (pipeline.py's extract_metadata /
+                # decorate_for_osd, source_manager) keys camera state by
+                # the DB UUID (cam_id), not the display name -- keying on
+                # cam_name here makes roi_manager.is_in_any_roi and
+                # get_detection_config silently miss every lookup (in_roi
+                # always False, detection_config always {}).
+                self._detection_configs[cam_id] = cam.get("detection_config") or {}
                 try:
                     roi_resp = client.get(
                         f"{self._api_base}/api/cameras/{cam_id}/roi"
@@ -142,7 +148,7 @@ class ROISyncer:
                 polygons_raw = payload.get("polygons") or []
                 polygons = [
                     ROIPolygon(
-                        camera_id=cam_name,
+                        camera_id=cam_id,
                         name=p.get("name") or "unnamed",
                         points=[
                             (float(pt["x"]), float(pt["y"]))
@@ -156,14 +162,14 @@ class ROISyncer:
                 ]
 
                 signature = repr([(p.name, p.points) for p in polygons])
-                if self._last_signature.get(cam_name) == signature:
+                if self._last_signature.get(cam_id) == signature:
                     continue  # No change; skip the noisy log.
-                self._last_signature[cam_name] = signature
+                self._last_signature[cam_id] = signature
 
-                self._roi_manager.set_polygons(cam_name, polygons)
+                self._roi_manager.set_polygons(cam_id, polygons)
                 logger.info(
-                    "ROISyncer: hydrated %d polygon(s) for %s",
-                    len(polygons), cam_name,
+                    "ROISyncer: hydrated %d polygon(s) for %s (%s)",
+                    len(polygons), cam_name, cam_id,
                 )
 
             # After syncing all cameras, regenerate nvdsanalytics config

@@ -1,0 +1,23 @@
+# vlm + vlm-worker + tts + tts-worker merged into one container.
+#
+# Built FROM vllm's own image (not python:3.12-slim like backend/Dockerfile)
+# so vLLM's pinned CUDA/torch build and compiled kernels are the base, and
+# the backend package is installed on top of that -- not the other way
+# around. ACCEPTED RISK: backend's deps include sentence-transformers,
+# which pulls its own unpinned torch; installing it here can replace
+# vLLM's own pinned torch build and destabilize inference. Explicitly
+# accepted by the user rather than discovered after the fact -- if vLLM
+# stops working after this, that dependency conflict is the first thing
+# to check (pip show torch before/after, compare versions).
+FROM vllm/vllm-openai:latest
+
+WORKDIR /app
+RUN pip install --no-cache-dir uv
+COPY pyproject.toml .
+RUN uv pip install --system -e .
+COPY . .
+
+COPY scripts/start_vlm_combined.sh /start_vlm_combined.sh
+RUN chmod +x /start_vlm_combined.sh
+
+ENTRYPOINT ["/start_vlm_combined.sh"]

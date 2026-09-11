@@ -27,12 +27,34 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useState } from 'react';
 import { useCameras } from '@/hooks/useCameras';
+import { useMonitoring } from '@/context/MonitoringContext';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { AddCameraDialog } from '@/components/camera/AddCameraDialog';
+import { EditCameraDialog } from '@/components/camera/EditCameraDialog';
+import { CameraSettingsDialog } from '@/components/camera/CameraSettingsDialog';
 
 export function CameraManagementView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [addOpen, setAddOpen] = useState(false);
-  const { cameras, isLoading, addCamera, deleteCamera } = useCameras();
+  const [editCamera, setEditCamera] = useState<Camera | null>(null);
+  const [settingsCamera, setSettingsCamera] = useState<Camera | null>(null);
+  const { cameras, isLoading, addCamera, updateCamera, deleteCamera } = useCameras();
+  const { setSelectedCamera, setGridLayout, setCurrentView } = useMonitoring();
+
+  const handleViewFeed = (camera: Camera) => {
+    setSelectedCamera(camera.id);
+    setGridLayout('1x1');
+    setCurrentView('monitoring');
+  };
 
   const filteredCameras = cameras.filter(camera =>
     camera.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -49,6 +71,15 @@ export function CameraManagementView() {
   return (
     <div className="flex flex-col h-full">
       <AddCameraDialog open={addOpen} onOpenChange={setAddOpen} onAdd={addCamera} />
+      <EditCameraDialog
+        camera={editCamera}
+        onOpenChange={(open) => !open && setEditCamera(null)}
+        onSave={updateCamera}
+      />
+      <CameraSettingsDialog
+        camera={settingsCamera}
+        onOpenChange={(open) => !open && setSettingsCamera(null)}
+      />
       {/* Header */}
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-4">
@@ -109,7 +140,14 @@ export function CameraManagementView() {
         ) : (
           <div className="p-4 grid grid-cols-3 gap-4">
             {filteredCameras.map((camera) => (
-              <CameraCard key={camera.id} camera={camera} onDelete={deleteCamera} />
+              <CameraCard
+                key={camera.id}
+                camera={camera}
+                onDelete={deleteCamera}
+                onEdit={setEditCamera}
+                onSettings={setSettingsCamera}
+                onViewFeed={handleViewFeed}
+              />
             ))}
           </div>
         )}
@@ -137,7 +175,13 @@ function StatusCard({ label, count, status }: { label: string; count: number; st
   );
 }
 
-function CameraCard({ camera, onDelete }: { camera: Camera; onDelete: (id: string) => Promise<void> }) {
+function CameraCard({ camera, onDelete, onEdit, onSettings, onViewFeed }: {
+  camera: Camera;
+  onDelete: (id: string) => Promise<void>;
+  onEdit: (camera: Camera) => void;
+  onSettings: (camera: Camera) => void;
+  onViewFeed: (camera: Camera) => void;
+}) {
   const statusConfig: Record<CameraStatus, { color: string; icon: typeof Wifi; label: string }> = {
     online: { color: 'text-success', icon: Wifi, label: 'Online' },
     offline: { color: 'text-muted-foreground', icon: WifiOff, label: 'Offline' },
@@ -147,6 +191,7 @@ function CameraCard({ camera, onDelete }: { camera: Camera; onDelete: (id: strin
 
   const status = statusConfig[camera.status];
   const StatusIcon = status.icon;
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   return (
     <Card className="group hover:border-primary/50 transition-colors">
@@ -174,34 +219,48 @@ function CameraCard({ camera, onDelete }: { camera: Camera; onDelete: (id: strin
               <Button 
                 variant="ghost" 
                 size="icon" 
-                className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                className="h-7 w-7 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity"
               >
                 <MoreVertical className="w-4 h-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onViewFeed(camera)}>
                 <Eye className="w-4 h-4 mr-2" />
                 View Feed
               </DropdownMenuItem>
-              <DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onEdit(camera)}>
                 <Edit className="w-4 h-4 mr-2" />
                 Edit Camera
               </DropdownMenuItem>
-              <DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onSettings(camera)}>
                 <Settings className="w-4 h-4 mr-2" />
                 Settings
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="text-destructive"
-                onClick={() => onDelete(camera.id)}
+                onSelect={(e) => { e.preventDefault(); setConfirmDeleteOpen(true); }}
               >
                 <Trash2 className="w-4 h-4 mr-2" />
                 Remove
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Remove "{camera.name}"?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently deletes the camera and stops its pipeline source. This can't be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={() => onDelete(camera.id)}>Remove</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </CardHeader>
       <CardContent>

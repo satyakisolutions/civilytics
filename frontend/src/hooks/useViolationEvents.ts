@@ -59,9 +59,19 @@ export function useViolationEvents(filters?: ViolationFilters) {
           }
         }
 
-        const snapshotUrl = match?.keyframe_url
-          ? `${API_BASE}/api/evidence/file?path=${encodeURIComponent(match.keyframe_url)}`
-          : undefined;
+        // Prefer the alert's own snapshot_url (pipeline/app/pipeline.py's
+        // _save_alert_snapshot, set at the exact moment the alert fired --
+        // no fuzzy matching needed) over the 3-minute time-window guess
+        // against /api/evidence/files, which is a separate, unrelated
+        // evidence subsystem and can easily miss or mismatch. It's already
+        // a full URL (served via the "/evidence" static mount, not the
+        // /api/evidence/file?path= proxy, which expects raw filesystem
+        // paths -- that's what `match.keyframe_url` is for, below).
+        const snapshotUrl = a.snapshot_url
+          ? `${API_BASE}${a.snapshot_url}`
+          : match?.keyframe_url
+            ? `${API_BASE}/api/evidence/file?path=${encodeURIComponent(match.keyframe_url)}`
+            : undefined;
         const videoClipUrl = match?.video_url
           ? `${API_BASE}/api/evidence/file?path=${encodeURIComponent(match.video_url)}`
           : undefined;

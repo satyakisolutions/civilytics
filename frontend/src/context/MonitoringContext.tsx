@@ -38,21 +38,35 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
 
   // Inline beep + push — can't use `useNotifications` here because that hook
   // reads this very context (would cause a circular init error).
-  const fireNotification = useCallback((title: string, body: string, severity: 'critical' | 'warning' | 'info', tag?: string) => {
+  const fireNotification = useCallback((title: string, body: string, severity: 'critical' | 'warning' | 'info', tag?: string, ttsAudioUrl?: string) => {
     if (soundEnabledRef.current) {
-      try {
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.frequency.value = 880;
-        osc.type = 'sine';
-        gain.gain.setValueAtTime(0.15, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
-        osc.start(ctx.currentTime);
-        osc.stop(ctx.currentTime + 0.2);
-      } catch { /* ignore */ }
+      // Real spoken alert when the backend generated one (see
+      // backend/app/services/alert_consumer.py) -- ttsAudioUrl was
+      // previously never passed through to this function at all, so
+      // every alert only ever got the generic beep, never an actual
+      // "alerting audio message". Beep stays as the fallback for alerts
+      // with suppress_tts / no message to speak.
+      if (ttsAudioUrl) {
+        try {
+          const audio = new Audio(`${API_BASE}${ttsAudioUrl}`);
+          audio.volume = 0.9;
+          audio.play().catch(() => { /* autoplay blocked without a prior user gesture */ });
+        } catch { /* ignore */ }
+      } else {
+        try {
+          const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.value = 880;
+          osc.type = 'sine';
+          gain.gain.setValueAtTime(0.15, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.2);
+        } catch { /* ignore */ }
+      }
     }
     if ('Notification' in window && Notification.permission === 'granted') {
       try {
@@ -102,10 +116,15 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
           if (knownAlertIds.current.has(alert.id)) continue;
           knownAlertIds.current.add(alert.id);
           if (alert.status !== 'active') continue;
-          if (alert.severity !== 'critical') continue;
+          // critical AND warning both notify (browser push + audio) --
+          // warning covers the waste-dump "suspicious proximity" fast-track
+          // alert (pipeline/app/pipeline.py), which fires before the full
+          // dwell-confirmed critical alert and would otherwise never surface
+          // here at all since it was previously critical-only.
+          if (alert.severity !== 'critical' && alert.severity !== 'warning') continue;
           if (now - lastNotifyTime.current < 3_000) continue;
           lastNotifyTime.current = now;
-          fireNotification(alert.title, alert.message || '', alert.severity, `alert-${alert.id}`);
+          fireNotification(alert.title, alert.message || '', alert.severity, `alert-${alert.id}`, alert.ttsAudioUrl);
           setIsAlertPanelOpen(true);
           fired += 1;
           if (fired >= 3) break; // cap per poll so a backlog doesn't spam

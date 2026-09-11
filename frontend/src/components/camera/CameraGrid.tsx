@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { useMonitoring } from '@/context/MonitoringContext';
 import { useCameras } from '@/hooks/useCameras';
 import { useCameraOrder } from '@/hooks/useCameraOrder';
@@ -6,15 +5,18 @@ import { CameraFeed } from './CameraFeed';
 import { SortableCameraFeed } from './SortableCameraFeed';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft, Loader2, Camera as CameraIcon } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import {
   DndContext,
+  DragOverlay,
   closestCenter,
   PointerSensor,
   KeyboardSensor,
   useSensor,
   useSensors,
   DragEndEvent,
+  DragStartEvent,
 } from '@dnd-kit/core';
 import {
   arrayMove,
@@ -61,7 +63,15 @@ export function CameraGrid() {
     });
   }, [cameras, getZoneOrder]);
 
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const activeCamera = activeId ? orderedCameras.find(c => c.id === activeId) : null;
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveId(String(event.active.id));
+  };
+
   const handleDragEnd = (event: DragEndEvent) => {
+    setActiveId(null);
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
@@ -121,6 +131,7 @@ export function CameraGrid() {
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
         <SortableContext
@@ -133,6 +144,20 @@ export function CameraGrid() {
             ))}
           </div>
         </SortableContext>
+        <DragOverlay>
+          {activeCamera && (
+            // A static placeholder, not a live CameraFeed — CameraFeed
+            // mounts its own WebRTCPlayer (a real RTCPeerConnection/WHEP
+            // session). SortableCameraFeed only CSS-hides the original
+            // during drag rather than unmounting it, so a second live
+            // CameraFeed here briefly doubled that camera's WebRTC
+            // connection (and mediamtx session) for the drag's duration.
+            <div className="shadow-2xl ring-2 ring-primary rounded-md overflow-hidden aspect-video bg-muted flex flex-col items-center justify-center gap-2 w-64">
+              <CameraIcon className="w-8 h-8 text-muted-foreground" />
+              <span className="text-sm font-medium text-foreground truncate px-2">{activeCamera.name}</span>
+            </div>
+          )}
+        </DragOverlay>
       </DndContext>
     </div>
   );

@@ -95,6 +95,33 @@ class AlertConsumer:
             logger.debug("Failed to resolve camera UUID for %s", camera_name)
         return None
 
+    async def _resolve_camera_info(self, camera_id_or_name: str) -> dict | None:
+        """Fetch name/zone/location for a camera (by UUID or by pipeline name).
+
+        Alerts arrive keyed by the pipeline's raw camera_id (a DB UUID in
+        practice), which means nothing to an operator reading a Telegram
+        message or the alert panel -- "Zone A / Main Entrance / Entry" is
+        what identifies a physical location, not a UUID.
+        """
+        try:
+            async with async_session() as session:
+                try:
+                    uuid.UUID(camera_id_or_name)
+                    stmt = select(Camera.name, Camera.zone, Camera.location).where(
+                        Camera.id == camera_id_or_name
+                    )
+                except ValueError:
+                    stmt = select(Camera.name, Camera.zone, Camera.location).where(
+                        Camera.name == camera_id_or_name
+                    )
+                result = await session.execute(stmt)
+                row = result.first()
+                if row:
+                    return {"name": row.name, "zone": row.zone, "location": row.location}
+        except Exception:
+            logger.debug("Failed to resolve camera info for %s", camera_id_or_name)
+        return None
+
     async def _handle_alert(self, payload: dict):
         camera_name = payload.get("camera_id", "")
         severity = payload.get("severity", "warning")
@@ -103,23 +130,81 @@ class AlertConsumer:
         track_id = payload.get("track_id")
         tts_text = payload.get("tts_text", "")  # The exact text sent to TTS worker
         suppress_tts = payload.get("suppress_tts", False)
+        snapshot_url = payload.get("snapshot_url")
+        # detected_at (unix epoch, set on the GStreamer pad-probe thread at
+        # the exact moment the pipeline fired -- pipeline/app/pipeline.py's
+        # _fire_waste_alert_async) beats defaulting to utcnow() here: the
+        # snapshot save + this consumer's own processing both happen after
+        # the fact, on a different thread/process/topic hop, and any delay
+        # in that chain previously showed up as the alert's timestamp
+        # drifting later than when the event actually happened.
+        _detected_at = payload.get("detected_at")
 
         # Resolve pipeline camera name to DB UUID
         camera_uuid = await self._resolve_camera_uuid(camera_name)
         if not camera_uuid:
             logger.warning("AlertConsumer: unknown camera %s — broadcasting WS only", camera_name)
 
-        # TTS URL only from VLM-generated deterrent (handled in _handle_vlm_result).
+        # Zone/Location/Name instead of a bare camera UUID -- that's what
+        # actually identifies a physical spot to an operator. Only the
+        # DISPLAYED message gets this prefix; `message` itself stays raw
+        # for the TTS request below (reading "Zone A, Main Entrance,
+        # Entry" aloud before the actual alert text would be noise).
+        camera_info = await self._resolve_camera_info(camera_uuid or camera_name)
+        camera_zone = camera_info.get("zone") if camera_info else None
+        if camera_info:
+            _loc_parts = [p for p in (camera_info.get("zone"), camera_info.get("location"), camera_info.get("name")) if p]
+            display_message = f"[{' / '.join(_loc_parts)}] {message}" if _loc_parts else message
+        else:
+            display_message = message
+
         # Templated pipeline alerts set suppress_tts=True and get no audio URL.
+        #
+        # tts_audio_url is a hash-derived path prediction -- the WAV file
+        # at that path only exists if something actually asked the TTS
+        # worker to render it. _handle_vlm_result does that (publishes to
+        # TOPIC_TTS below); this path previously computed the URL and
+        # stopped there, so every pipeline-originated alert (waste dump,
+        # suspicious proximity, etc) advertised an audio URL that 404'd --
+        # no request was ever sent to generate it. Fixed to publish the
+        # same TOPIC_TTS request _handle_vlm_result does.
         tts_audio_url = None
         if not suppress_tts:
             _tts_hash_source = tts_text or message
             if _tts_hash_source:
-                text_hash = hashlib.sha256(_tts_hash_source.encode()).hexdigest()[:16]
+                # TTSEngine.generate() applies _apply_tone() to the text
+                # BEFORE hashing for the saved filename -- hashing the raw
+                # text here would predict a URL that never matches what
+                # the worker actually writes to disk (same mismatch this
+                # code already avoided in _handle_vlm_result below).
+                from app.tts.engine import _apply_tone
+                _shaped = _apply_tone(_tts_hash_source)
+                text_hash = hashlib.sha256(_shaped.encode()).hexdigest()[:16]
                 tts_audio_url = f"/tts/tts_{text_hash}.wav"
+                try:
+                    from aiokafka import AIOKafkaProducer
+                    if self._tts_producer is None:
+                        self._tts_producer = AIOKafkaProducer(
+                            bootstrap_servers=self._bootstrap_servers,
+                            value_serializer=lambda v: orjson.dumps(v),
+                        )
+                        await self._tts_producer.start()
+                    await self._tts_producer.send_and_wait(
+                        TOPIC_TTS,
+                        value={
+                            "camera_id": camera_name, "track_id": track_id,
+                            "text": _tts_hash_source, "priority": "high" if severity == "critical" else "normal",
+                        },
+                    )
+                except Exception:
+                    logger.exception("Failed to send TTS request for alert (camera=%s)", camera_name)
 
         alert_id = str(uuid.uuid4())
-        now = datetime.utcnow()
+        now = (
+            datetime.utcfromtimestamp(_detected_at)
+            if isinstance(_detected_at, (int, float))
+            else datetime.utcnow()
+        )
 
         # Write to DB — triggers Supabase realtime subscription in frontend.
         # Prior active alerts on the same camera stay active so the panel
@@ -134,8 +219,10 @@ class AlertConsumer:
                             camera_id=camera_uuid,
                             severity=severity,
                             title=title,
-                            message=message,
+                            message=display_message,
+                            zone=camera_zone,
                             tts_audio_url=tts_audio_url,
+                            snapshot_url=snapshot_url,
                             status="active",
                             timestamp=now,
                             created_at=now,
@@ -151,10 +238,14 @@ class AlertConsumer:
             "type": "alert",
             "id": alert_id,
             "camera_id": camera_uuid or camera_name,
+            "camera_name": camera_info.get("name") if camera_info else None,
+            "zone": camera_zone,
+            "location": camera_info.get("location") if camera_info else None,
             "severity": severity,
             "title": title,
-            "message": message,
+            "message": display_message,
             "tts_audio_url": tts_audio_url,
+            "snapshot_url": snapshot_url,
             "timestamp": now.isoformat(),
         }
         await broadcast_alert(ws_payload)
@@ -261,6 +352,17 @@ class AlertConsumer:
             return
 
         camera_uuid = await self._resolve_camera_uuid(camera_id)
+        # camera_uuid or camera_id (not gated on camera_uuid) -- matches
+        # _handle_alert's fallback: a transient UUID-resolution miss should
+        # still let _resolve_camera_info try the by-name path instead of
+        # dropping the Zone/Location/Name prefix outright.
+        camera_info = await self._resolve_camera_info(camera_uuid or camera_id)
+        camera_zone = camera_info.get("zone") if camera_info else None
+        if camera_info:
+            _loc_parts = [p for p in (camera_info.get("zone"), camera_info.get("location"), camera_info.get("name")) if p]
+            display_operator_text = f"[{' / '.join(_loc_parts)}] {operator_text}" if _loc_parts else operator_text
+        else:
+            display_operator_text = operator_text
         if camera_uuid:
             try:
                 now = datetime.utcnow()
@@ -284,7 +386,8 @@ class AlertConsumer:
                         await session.execute(
                             update(tbl)
                             .where(tbl.c.id.in_(critical_ids))
-                            .values(title=vlm_title, message=operator_text,
+                            .values(title=vlm_title, message=display_operator_text,
+                                    zone=camera_zone,
                                     tts_audio_url=tts_audio_url,
                                     timestamp=now)  # refresh so UI treats as new
                         )
@@ -301,7 +404,8 @@ class AlertConsumer:
                             camera_id=camera_uuid,
                             severity=severity,
                             title=vlm_title,
-                            message=operator_text,
+                            message=display_operator_text,
+                            zone=camera_zone,
                             tts_audio_url=tts_audio_url,
                             status="active",
                             timestamp=now,
@@ -318,6 +422,9 @@ class AlertConsumer:
         ws_payload = {
             "type": "vlm_result",
             "camera_id": camera_id,
+            "camera_name": camera_info.get("name") if camera_info else None,
+            "zone": camera_zone,
+            "location": camera_info.get("location") if camera_info else None,
             "track_id": track_id,
             "is_dumping": is_dumping,
             "waste_type": waste_type,
@@ -329,7 +436,7 @@ class AlertConsumer:
             "tts_audio_url": tts_audio_url,
             "severity": severity,
             "title": f"VLM: {person_desc or action}" if (person_desc or action) else "VLM Analysis",
-            "message": operator_text,
+            "message": display_operator_text,
         }
         await broadcast_alert(ws_payload)
         logger.info("VLM result: cam=%s dumping=%s deterrent='%s' reasoning='%s'",

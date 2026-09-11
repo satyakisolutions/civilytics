@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import type { ROIPoint, ROIPolygon } from "@/types/monitoring";
 import { API_BASE } from "@/lib/api-base";
+import { toast } from "@/hooks/use-toast";
 
 interface UseROIEditorOptions {
   cameraId: string;
@@ -22,7 +23,7 @@ export function useROIEditor({ cameraId }: UseROIEditorOptions) {
     } catch { /* API may not be available */ }
   }, [cameraId]);
 
-  const savePolygons = useCallback(async (newPolygons: ROIPolygon[]) => {
+  const savePolygons = useCallback(async (newPolygons: ROIPolygon[], previousPolygons: ROIPolygon[]) => {
     setIsLoading(true);
     try {
       const resp = await fetch(`${API_BASE}/api/cameras/${cameraId}/roi`, {
@@ -33,7 +34,23 @@ export function useROIEditor({ cameraId }: UseROIEditorOptions) {
       if (resp.ok) {
         const data = await resp.json();
         setPolygons(data.polygons || []);
+      } else {
+        // Roll back the optimistic update — an unconfirmed failed save
+        // must not leave the UI showing changes that never persisted.
+        setPolygons(previousPolygons);
+        toast({
+          title: "Couldn't save ROI",
+          description: `Server responded with ${resp.status}. Your change was not saved — try again.`,
+          variant: "destructive",
+        });
       }
+    } catch {
+      setPolygons(previousPolygons);
+      toast({
+        title: "Couldn't save ROI",
+        description: "Network error — your change was not saved. Try again.",
+        variant: "destructive",
+      });
     } finally {
       setIsLoading(false);
     }
@@ -48,19 +65,25 @@ export function useROIEditor({ cameraId }: UseROIEditorOptions) {
   }, []);
 
   const finishPolygon = useCallback((name: string) => {
-    if (currentPoints.length < 3) return;
+    if (currentPoints.length < 3) {
+      toast({
+        title: "Need at least 3 points",
+        description: "Click 3 or more points on the video to draw a zone before saving.",
+      });
+      return;
+    }
     const newPoly: ROIPolygon = { name, points: currentPoints };
     const updated = [...polygons, newPoly];
     setPolygons(updated);
     setCurrentPoints([]);
     setIsEditing(false);
-    savePolygons(updated);
+    savePolygons(updated, polygons);
   }, [currentPoints, polygons, savePolygons]);
 
   const removePolygon = useCallback((index: number) => {
     const updated = polygons.filter((_, i) => i !== index);
     setPolygons(updated);
-    savePolygons(updated);
+    savePolygons(updated, polygons);
   }, [polygons, savePolygons]);
 
   const cancelEditing = useCallback(() => {

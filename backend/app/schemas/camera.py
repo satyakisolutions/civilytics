@@ -24,6 +24,7 @@ class CameraUpdate(BaseModel):
     is_pinned: bool | None = None
     roi_polygons: dict | None = None
     recording_config: dict | None = None
+    detection_config: dict | None = None
 
 class CameraResponse(BaseModel):
     id: uuid.UUID
@@ -38,6 +39,7 @@ class CameraResponse(BaseModel):
     thumbnail_url: str | None
     roi_polygons: dict | None
     recording_config: dict | None
+    detection_config: dict | None
     is_pinned: bool
     last_event_at: datetime | None
     created_at: datetime

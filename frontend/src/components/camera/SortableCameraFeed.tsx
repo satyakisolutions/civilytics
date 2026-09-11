@@ -23,7 +23,6 @@ export function SortableCameraFeed({ camera }: SortableCameraFeedProps) {
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    zIndex: isDragging ? 50 : undefined,
   };
 
   return (
@@ -32,7 +31,12 @@ export function SortableCameraFeed({ camera }: SortableCameraFeedProps) {
       style={style}
       className={cn(
         'relative group/sortable',
-        isDragging && 'opacity-50 scale-[0.98]'
+        // The DragOverlay (portaled to document.body) shows the live
+        // preview while dragging — <video> elements paint in their own
+        // GPU compositing layer and ignore normal z-index, so a plain
+        // z-index bump here isn't enough to keep the dragged card above
+        // its siblings' videos. Hide this one instead.
+        isDragging && 'invisible'
       )}
     >
       {/* Drag handle */}

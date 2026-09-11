@@ -67,6 +67,7 @@ export function HistoryView() {
             title: a.title,
             message: a.message,
             ttsAudioUrl: a.tts_audio_url,
+            snapshotUrl: a.snapshot_url ? `${API_BASE}${a.snapshot_url}` : undefined,
           })));
         }
       } catch { /* ignore */ }
@@ -166,6 +167,7 @@ export function HistoryView() {
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="w-[100px]">Time</TableHead>
+              <TableHead className="w-[64px]">Snapshot</TableHead>
               <TableHead>Event</TableHead>
               <TableHead>Camera / Location</TableHead>
               <TableHead className="w-[100px]">Confidence</TableHead>
@@ -218,6 +220,20 @@ function EventRow({ event }: { event: ViolationEvent }) {
     <TableRow className="group">
       <TableCell className="font-mono text-xs text-muted-foreground">
         {formatTime(event.timestamp)}
+      </TableCell>
+      <TableCell>
+        {(event as any).snapshotUrl ? (
+          <img
+            src={(event as any).snapshotUrl}
+            alt="Evidence snapshot"
+            className="w-12 h-9 object-cover rounded border border-border"
+            loading="lazy"
+          />
+        ) : (
+          <div className="w-12 h-9 rounded border border-dashed border-border flex items-center justify-center text-[9px] text-muted-foreground">
+            No frame
+          </div>
+        )}
       </TableCell>
       <TableCell>
         <div className="flex items-center gap-2">

@@ -94,7 +94,14 @@ MODELS: list[ModelSpec] = [
         key="rfdetr",
         display_name="RF-DETR (PGIE)",
         onnx_rel="rfdetr/rfdetr.onnx",
-        engine_rel="rfdetr/rfdetr_fp16.engine",
+        # FP32, not FP16: nvinfer_rfdetr.txt's network-mode=0 and its own
+        # comment ("FP16 destroys RF-DETR's transformer decoder per prior
+        # calibration") record a deliberate finding from a real accuracy
+        # test -- this script's ModelSpec previously said fp16=True and
+        # pointed at rfdetr_fp16.engine, silently out of sync with that
+        # finding and with the config that actually gets loaded at
+        # runtime. Fixed to match the calibrated choice.
+        engine_rel="rfdetr/rfdetr_fp32.engine",
         # The RF-DETR ONNX from Roboflow is exported with a STATIC
         # batch axis (dets [1,300,4], labels [1,300,91]), so trtexec
         # cannot stretch the engine past batch=1 here. The multi-
@@ -102,7 +109,7 @@ MODELS: list[ModelSpec] = [
         # streammux batch-size=1 — see pipeline/app/config.py.
         min_batch=1, opt_batch=1, max_batch=1,
         workspace_mb=4096,
-        fp16=True,
+        fp16=False,
         rfdetr_deepstream_head=True,
     ),
     ModelSpec(
@@ -110,10 +117,52 @@ MODELS: list[ModelSpec] = [
         display_name="Action Classifier (SGIE)",
         onnx_rel="action_classifier/action_classifier.onnx",
         engine_rel="action_classifier/action_classifier_fp16.engine",
-        min_batch=1, opt_batch=16, max_batch=32,
+        # The exported ONNX has a static batch=1 input axis (confirmed at
+        # build time — "ONNX is fully static, skipping --min/opt/maxShapes"),
+        # not a dynamic one. min/opt/max previously claimed 1/16/32, which
+        # trtexec silently couldn't honor, producing a batch=1-only engine
+        # that then failed nvinfer's checkBackendParams() against
+        # nvinfer_action_sgie.txt's batch-size=16 on every pipeline start.
+        min_batch=1, opt_batch=1, max_batch=1,
         workspace_mb=2048,
         fp16=True,
-        convert_reduce_axes=True,
+        # False, not True: this graphsurgeon fallback rewrites opset-13+
+        # ReduceMean (axes as an input tensor) back to the legacy
+        # opset-11 axes-attribute form — a workaround for TensorRT 8.6's
+        # ONNX parser mis-propagating shapes through the input-tensor
+        # form (see fallback-2 comment in sanitise_onnx). Under this
+        # environment's actual TensorRT (10.16, DS9.1) the onnx library
+        # enforces the current ReduceMean schema and rejects the legacy
+        # attribute outright ("Unrecognized attribute: axes"), so the
+        # "fix" now breaks a graph that TRT 10.16 would otherwise parse
+        # correctly in its native input-tensor form.
+        convert_reduce_axes=False,
+    ),
+    ModelSpec(
+        key="rfdetr_seg",
+        display_name="RF-DETR-Seg-Nano (PGIE, instance segmentation)",
+        onnx_rel="rfdetr_seg/rfdetr_seg.onnx",
+        # Exported straight from RFDETRSegNano.export() with three raw
+        # outputs: dets [1,100,4] (cxcywh, normalised), labels
+        # [1,100,6] (per-query logits — channel 0 is the "Waste-watch"
+        # background/ignore class, channels 1-3 are bag/person/waste,
+        # channels 4-5 are unused no-object slack the training run
+        # never needs — see nvinfer_rfdetr_seg.txt), masks [1,100,96,96]
+        # (per-query mask logits over the full 384x384 input at 1/4
+        # resolution — NOT per-ROI crops like Mask R-CNN). No
+        # DeepStreamOutput head fusion here: unlike the bbox model,
+        # there is no single-tensor YOLO-style fused output that could
+        # also carry a [100,96,96] mask tensor through the same
+        # concat trick, so the custom parser
+        # (nvdsinfer_custom_impl_Seg) does the sigmoid/argmax/box-decode/
+        # mask-crop itself directly against these three raw outputs.
+        engine_rel="rfdetr_seg/rfdetr_seg_fp32.engine",
+        # Same static batch=1 constraint as the bbox model — RF-DETR's
+        # decoder graph bakes batch into its output tensors.
+        min_batch=1, opt_batch=1, max_batch=1,
+        workspace_mb=4096,
+        fp16=False,  # same FP16-destroys-the-decoder finding as rfdetr
+        rfdetr_deepstream_head=False,
     ),
 ]
 

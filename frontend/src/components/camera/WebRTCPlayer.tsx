@@ -329,13 +329,6 @@ export const WebRTCPlayer = forwardRef<WebRTCPlayerHandle, WebRTCPlayerProps>(({
         </div>
       )}
 
-      {/* Live indicator */}
-      {connectionState === 'connected' && (
-        <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded bg-success/20 text-success text-[10px] font-semibold uppercase">
-          <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-          LIVE
-        </div>
-      )}
     </div>
   );
 });

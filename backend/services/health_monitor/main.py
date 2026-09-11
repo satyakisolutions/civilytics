@@ -186,6 +186,12 @@ class HealthMonitor:
             status["overall"] = "critical"
         elif STATUS_DEGRADED in component_statuses:
             status["overall"] = STATUS_DEGRADED
+        elif STATUS_UNKNOWN in component_statuses:
+            # A genuinely-unknown subsystem (e.g. check_postgres when
+            # unconfigured, or an ambiguous check_lpr/check_pipeline
+            # failure) is not the same as healthy — don't let it hide
+            # silently behind an all-clear overall status.
+            status["overall"] = STATUS_DEGRADED
         else:
             status["overall"] = STATUS_HEALTHY
 
@@ -376,7 +382,11 @@ class HealthMonitor:
 
         # CPU
         try:
-            result["cpu_percent"] = psutil.cpu_percent(interval=1)
+            # interval=None (delta since the last call) instead of
+            # interval=1 — this already runs off the event loop via
+            # run_in_executor, but interval=1 still blocked that executor
+            # thread for a full second every cycle for no reason.
+            result["cpu_percent"] = psutil.cpu_percent(interval=None)
         except Exception:
             result["cpu_percent"] = None
 
@@ -491,23 +501,26 @@ class HealthMonitor:
     # PostgreSQL
     # ------------------------------------------------------------------
     async def check_postgres(self) -> dict[str, Any]:
-        """Try a simple SELECT 1 against the database."""
+        """Try a simple SELECT 1 against the database.
+
+        Uses asyncpg directly rather than a sync SQLAlchemy engine --
+        the sync path defaults to the psycopg2 driver, which isn't
+        installed anywhere in this codebase (everything else uses the
+        asyncpg driver exclusively, via `+asyncpg` URLs), so it always
+        failed with "No module named 'psycopg2'" instead of reporting
+        real postgres status.
+        """
         if not settings.database_url:
             return {"status": STATUS_UNKNOWN, "error": "database_url not configured"}
 
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._check_postgres_sync)
-
-    def _check_postgres_sync(self) -> dict[str, Any]:
         try:
-            import sqlalchemy
-            engine = sqlalchemy.create_engine(
-                settings.database_url.replace("+asyncpg", "").replace("postgresql+psycopg", "postgresql"),
-                pool_pre_ping=True,
-            )
-            with engine.connect() as conn:
-                conn.execute(sqlalchemy.text("SELECT 1"))
-            engine.dispose()
+            import asyncpg
+            dsn = settings.database_url.replace("postgresql+asyncpg", "postgresql").replace("postgresql+psycopg", "postgresql")
+            conn = await asyncpg.connect(dsn, timeout=5)
+            try:
+                await conn.fetchval("SELECT 1")
+            finally:
+                await conn.close()
             return {"status": STATUS_HEALTHY}
         except Exception as exc:
             return {"status": STATUS_DOWN, "error": str(exc)}

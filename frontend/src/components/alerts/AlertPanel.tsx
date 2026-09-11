@@ -17,9 +17,20 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 
 export function AlertPanel() {
-  const { alerts, acknowledgeAlert, clearAlerts, setIsAlertPanelOpen, setCurrentView } = useMonitoring();
+  const { alerts, acknowledgeAlert, clearAlerts, setIsAlertPanelOpen, setCurrentView, setSelectedCamera, setGridLayout } = useMonitoring();
 
   const sortedAlerts = [...alerts].sort((a, b) => {
     // Sort by status (active first) then by timestamp
@@ -28,7 +39,12 @@ export function AlertPanel() {
     return b.timestamp.getTime() - a.timestamp.getTime();
   });
 
-  const handleClearAll = () => clearAlerts();
+  const handleViewCamera = (cameraId: string) => {
+    setSelectedCamera(cameraId);
+    setGridLayout('1x1');
+    setCurrentView('monitoring');
+    setIsAlertPanelOpen(false);
+  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ width: 320, maxWidth: '100%' }}>
@@ -42,10 +58,32 @@ export function AlertPanel() {
           </Badge>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[10px]" onClick={handleClearAll}>
-            Clear All
-          </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsAlertPanelOpen(false)}>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-[10px]">
+                Clear All
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Clear all alerts?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This removes every alert from this panel, including unacknowledged ones. This can't be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={() => clearAlerts()}>Clear All</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setIsAlertPanelOpen(false)}
+            aria-label="Close alerts panel"
+          >
             <X className="w-4 h-4" />
           </Button>
         </div>
@@ -55,10 +93,11 @@ export function AlertPanel() {
       <ScrollArea className="flex-1" style={{ overflow: 'hidden' }}>
         <div className="p-2 space-y-2" style={{ width: '100%', maxWidth: 320, display: 'block' }}>
           {sortedAlerts.map((alert) => (
-            <AlertCard 
-              key={alert.id} 
-              alert={alert} 
+            <AlertCard
+              key={alert.id}
+              alert={alert}
               onAcknowledge={() => acknowledgeAlert(alert.id)}
+              onViewCamera={() => handleViewCamera(alert.cameraId)}
             />
           ))}
         </div>
@@ -83,9 +122,10 @@ export function AlertPanel() {
 interface AlertCardProps {
   alert: AlertType;
   onAcknowledge: () => void;
+  onViewCamera: () => void;
 }
 
-function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
+function AlertCard({ alert, onAcknowledge, onViewCamera }: AlertCardProps) {
   const severityConfig = {
     critical: {
       icon: AlertTriangle,
@@ -144,9 +184,9 @@ function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
 
       {/* Meta */}
       <div className="flex items-center gap-3 text-[10px] text-muted-foreground mb-3">
-        <span className="flex items-center gap-1">
+        <span className="flex items-center gap-1" title={alert.timestamp.toLocaleString()}>
           <Clock className="w-3 h-3" />
-          {timeAgo}
+          {timeAgo} · {alert.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </span>
         <span className="flex items-center gap-1">
           <MapPin className="w-3 h-3" />
@@ -188,6 +228,7 @@ function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
             variant="outline"
             size="sm"
             className="h-7 text-xs"
+            onClick={onViewCamera}
           >
             <Camera className="w-3.5 h-3.5 mr-1" />
             View
