@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Camera } from '@/types/monitoring';
+import { Camera, CameraDetectionConfig } from '@/types/monitoring';
 import { useToast } from '@/hooks/use-toast';
 import { API_BASE } from '@/lib/api-base';
 
@@ -16,6 +16,7 @@ type BackendCamera = {
   thumbnail_url: string | null;
   is_pinned: boolean;
   last_event_at: string | null;
+  detection_config: CameraDetectionConfig | null;
 };
 
 export type CameraCreateInput = {
@@ -40,6 +41,7 @@ function mapCamera(c: BackendCamera): Camera {
     thumbnail: c.thumbnail_url ?? undefined,
     lastEvent: c.last_event_at ? new Date(c.last_event_at) : undefined,
     isPinned: c.is_pinned,
+    detectionConfig: c.detection_config ?? undefined,
   };
 }
 
@@ -68,6 +70,14 @@ export function useCameras() {
 
   useEffect(() => {
     fetchCameras();
+    // Camera.status (online/offline/warning) is connection-health driven,
+    // not something the frontend gets pushed live for -- without this,
+    // a status flip (e.g. a camera reconnecting) never reaches the UI
+    // until a manual page reload, which also silently disabled the
+    // alert-border highlight on camera feeds (gated on status === 'online'
+    // in useDetectionMetadata's `enabled` flag).
+    const interval = setInterval(fetchCameras, 15_000);
+    return () => clearInterval(interval);
   }, [fetchCameras]);
 
   const addCamera = async (input: CameraCreateInput) => {
@@ -93,6 +103,7 @@ export function useCameras() {
     if (updates.location !== undefined) body.location = updates.location;
     if (updates.streamUrl !== undefined) body.stream_url = updates.streamUrl;
     if (updates.isPinned !== undefined) body.is_pinned = updates.isPinned;
+    if (updates.detectionConfig !== undefined) body.detection_config = updates.detectionConfig;
     if (updates.gps !== undefined) {
       body.gps_lat = updates.gps?.lat;
       body.gps_lng = updates.gps?.lng;

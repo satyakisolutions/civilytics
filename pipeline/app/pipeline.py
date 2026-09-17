@@ -78,14 +78,22 @@ BBOX_CLASS_MAP: dict[int, str] = {
     1: "handbag",
 }
 
-# RF-DETR-Seg-Nano 3-class indices (post class-0-background-drop, see
+# RF-DETR-Seg-Nano 4-class indices (post class-0-background-drop, see
 # nvdsinfer_custom_impl_Seg/nvdsparseseg_RfdetrSeg.cpp and
 # pipeline/configs/labels_seg.txt / nvinfer_rfdetr_seg.txt). Selected
 # instead of BBOX_CLASS_MAP when WW_USE_SEG_MODEL=1.
+#
+# v12 retrain added old_waste back as a real class (bag/new_waste/
+# old_waste/person) at channel 2, but old_waste is dropped entirely by
+# the custom parser (nvdsparseseg_RfdetrSeg.cpp: kOldWasteChannel) --
+# it never becomes an object at all (no bbox, no OSD, no tracker ID),
+# so classId 2 is unreachable here. Explicit instruction: "completely
+# ignore old waste... don't bbox or highlight it, don't consider it in
+# the algorithm too."
 SEG_CLASS_MAP: dict[int, str] = {
     0: "bag",
-    1: "person",
-    2: "waste",
+    1: "waste",   # new_waste -- the only waste class that ever reaches here
+    3: "person",
 }
 
 COCO_CLASS_MAP: dict[int, str] = (
@@ -205,6 +213,14 @@ _DEBUG_OVERLAY_ALWAYS = os.environ.get("WW_DEBUG_OVERLAY", "0") == "1"
 # to go back to observation-only mode (logs/overlay, no live alert noise)
 # if ever needed for debugging.
 _ALERTS_DISABLED = os.environ.get("WW_ALERTS_DISABLED", "0") == "1"
+# Multiple call sites fire _fire_waste_alert_async for the same physical
+# incident within milliseconds of each other (e.g. the waste-attribution
+# path and the generic per-class VIOLATION path both fire off the same
+# paired-waste-override transition) -- this collapses near-duplicate
+# alerts on the same camera into one instead of double-notifying.
+_ALERT_DEDUP_WINDOW_S = 0.8
+_alert_dedup_lock = threading.Lock()
+_alert_last_fired_at: dict[str, float] = {}
 # Above this many frames of lateness, a "captured requested evidence" match
 # is flagged as degraded (queue drop, not the exact target) instead of
 # logged as a routine success.
@@ -334,6 +350,21 @@ def _fire_waste_alert_async(
     """
     if _ALERTS_DISABLED:
         return
+
+    # Collapse near-duplicate alerts on the same camera (e.g. the waste-
+    # attribution path and the generic per-class VIOLATION path both
+    # firing for the same paired-waste-override transition, milliseconds
+    # apart) into a single notification.
+    now_monotonic = time.monotonic()
+    with _alert_dedup_lock:
+        last_fired = _alert_last_fired_at.get(camera_id, 0.0)
+        if now_monotonic - last_fired < _ALERT_DEDUP_WINDOW_S:
+            logger.debug(
+                "Alert deduplicated for %s (%.0fms since last)",
+                camera_id, (now_monotonic - last_fired) * 1000,
+            )
+            return
+        _alert_last_fired_at[camera_id] = now_monotonic
     has_snapshot = (
         (bool(jpeg_bytes) and len(jpeg_bytes) >= 1000)
         or (snapshot_cache is not None and snapshot_source_id is not None)
@@ -1459,6 +1490,9 @@ def extract_metadata(
         _cam_violation_threshold_s = _dcfg.get(
             "dwell_violation_threshold_s", pipeline_settings.dwell_violation_threshold_s
         )
+        _cam_enter_threshold_s = _dcfg.get(
+            "dwell_enter_threshold_s", pipeline_settings.dwell_enter_threshold_s
+        )
         # Attribution is spatial: on the waste track's FIRST observed frame,
         # the new waste bbox must be within 40 source-image pixels of a
         # person's bbox. This is edge-to-edge distance (not center-to-center,
@@ -1985,6 +2019,7 @@ def extract_metadata(
                             bbox=bbox_dict,
                             has_carried_item=has_carried,
                             violation_threshold_s=_cam_violation_threshold_s,
+                            enter_threshold_s=_cam_enter_threshold_s,
                             speed_px_s=track_info.speed_px_s,
                         )
                     else:
@@ -1995,6 +2030,7 @@ def extract_metadata(
                             dwell_time_s=track_info.dwell_time_s,
                             bbox=bbox_dict,
                             violation_threshold_s=_cam_violation_threshold_s,
+                            enter_threshold_s=_cam_enter_threshold_s,
                             has_carried_item=has_carried,
                         )
 

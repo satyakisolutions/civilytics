@@ -19,6 +19,7 @@ from app.ws import alerts as ws_alerts
 from app.services.kafka_consumer import MetadataConsumer
 from app.services.event_consumer import EventConsumer
 from app.services.alert_consumer import AlertConsumer
+from app.services.camera_status_consumer import CameraStatusConsumer
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,13 @@ async def lifespan(app: FastAPI):
         logger.warning("AlertConsumer failed to start: %s", e)
         alert_consumer = None
 
+    camera_status_consumer = CameraStatusConsumer(settings.kafka_bootstrap_servers)
+    try:
+        await camera_status_consumer.start()
+    except Exception as e:
+        logger.warning("CameraStatusConsumer failed to start: %s", e)
+        camera_status_consumer = None
+
     yield
 
     if alert_consumer:
@@ -55,6 +63,8 @@ async def lifespan(app: FastAPI):
         await metadata_consumer.stop()
     if event_consumer:
         await event_consumer.stop()
+    if camera_status_consumer:
+        await camera_status_consumer.stop()
 
 
 def create_app() -> FastAPI:

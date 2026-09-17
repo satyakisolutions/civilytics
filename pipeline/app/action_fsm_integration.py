@@ -95,6 +95,7 @@ class ActionAwareFSM:
         bbox: dict | None = None,
         has_carried_item: bool = False,
         violation_threshold_s: float | None = None,
+        enter_threshold_s: float | None = None,
         speed_px_s: float | None = None,
     ) -> FSMEvent | None:
         """Process a detection through the action-aware FSM.
@@ -146,6 +147,7 @@ class ActionAwareFSM:
                     bbox=bbox,
                     has_carried_item=has_carried_item,
                     violation_threshold_s=violation_threshold_s,
+                    enter_threshold_s=enter_threshold_s,
                 )
 
                 # If the FSM didn't produce an event (e.g., already in VIOLATION),
@@ -192,6 +194,7 @@ class ActionAwareFSM:
             bbox=bbox,
             has_carried_item=has_carried_item,
             violation_threshold_s=violation_threshold_s,
+            enter_threshold_s=enter_threshold_s,
             speed_px_s=speed_px_s,
         )
 

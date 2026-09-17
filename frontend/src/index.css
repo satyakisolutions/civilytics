@@ -139,7 +139,7 @@
     @apply relative overflow-hidden rounded-lg border-2 border-camera-border-inactive bg-card transition-all duration-300;
   }
 
-  .camera-feed:hover {
+  .camera-feed:hover:not(.animate-alert-border) {
     @apply border-camera-border;
     box-shadow: var(--glow-primary);
   }

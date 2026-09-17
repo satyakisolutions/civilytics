@@ -119,6 +119,7 @@ services:
       - .env
     environment:
       WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WW_TTS_LANG: en
     depends_on:
       kafka:
         condition: service_healthy
@@ -237,6 +238,7 @@ services:
       MEDIAMTX_HOST: mediamtx
       MEDIAMTX_PORT: "8554"
       VIDEO_DIR: /videos
+      LSG_LIVE_SRC: VID-20260131-WA0010.mp4
     restart: unless-stopped
 
 volumes:

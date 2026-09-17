@@ -116,7 +116,14 @@ class SourceManager:
 
         properties = {prop.name for prop in source.list_properties()}
         low_latency_values = {
-            "latency": 100,          # milliseconds of network jitter tolerance
+            # Bumped 100ms -> 200ms once cam-03/cam-04 were added: the
+            # rtsp-streamer container now runs 6 concurrent software x264
+            # encodes on one host CPU (~315% CPU measured via `docker
+            # stats`), which stutters the encode/publish loop under load.
+            # 100ms wasn't enough slack to absorb that jitter and the
+            # aggressive drop-on-latency was discarding partial GOPs,
+            # reading as corrupted frames on the annotated output.
+            "latency": 200,          # milliseconds of network jitter tolerance
             "drop-on-latency": True, # discard stale frames instead of growing backlog
             "buffer-mode": 0,        # none: use RTP timestamps without extra buffering
             "protocols": 0x4,        # TCP: predictable transport on the local LAN
@@ -127,7 +134,7 @@ class SourceManager:
                 source.set_property(name, value)
 
         logger.info(
-            "Configured low-latency RTSP source for %s (latency=100ms, drop-on-latency=true)",
+            "Configured low-latency RTSP source for %s (latency=200ms, drop-on-latency=true)",
             camera_id,
         )
 

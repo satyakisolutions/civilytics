@@ -146,18 +146,38 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
     [videoContainerRef, qualityProbeRef]
   );
 
-  // Alert border — react to both camera.status AND real-time FSM escalations
+  // Alert border — red only, on a confirmed critical violation. Yellow/
+  // warning (suspicious/observe) intentionally does not pulse the border
+  // anymore — only a red alert should draw the eye across a monitoring
+  // wall.
+  //
+  // The FSM only reports "violation" on the frame(s) where it actually
+  // fires — a track can drop back to observe/idle on the very next
+  // frame (hysteresis, re-tracking, dedup window). Reacting to the raw
+  // per-frame state made the border blip for one frame and vanish, which
+  // read as "never highlighting" on a live feed. Hold the border lit for
+  // a few seconds after the last violation frame instead.
+  const ALERT_HOLD_MS = 4000;
+  const [alertHeldUntil, setAlertHeldUntil] = useState(0);
   const hasEscalation = metadata?.detections?.some(
     (d) => d.fsm_state === 'violation' || d.fsm_state === 'alerting' || d.fsm_state === 'escalated'
   ) ?? false;
-  const hasObserve = metadata?.detections?.some((d) => d.fsm_state === 'observe') ?? false;
 
-  const alertBorderClass =
-    camera.status === 'alert' || hasEscalation
-      ? 'animate-alert-border'
-      : camera.status === 'warning' || hasObserve
-        ? 'animate-alert-border-warning'
-        : '';
+  useEffect(() => {
+    if (hasEscalation) {
+      setAlertHeldUntil(Date.now() + ALERT_HOLD_MS);
+    }
+  }, [hasEscalation, metadata]);
+
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (alertHeldUntil === 0) return;
+    const interval = setInterval(() => forceTick((n) => n + 1), 500);
+    return () => clearInterval(interval);
+  }, [alertHeldUntil]);
+
+  const isAlertHeld = alertHeldUntil > Date.now();
+  const alertBorderClass = camera.status === 'alert' || isAlertHeld ? 'animate-alert-border' : '';
 
   return (
     <div

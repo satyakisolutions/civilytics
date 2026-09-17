@@ -169,7 +169,7 @@ class AlertConsumer:
         # no request was ever sent to generate it. Fixed to publish the
         # same TOPIC_TTS request _handle_vlm_result does.
         tts_audio_url = None
-        if not suppress_tts:
+        if not suppress_tts and severity == "critical":
             _tts_hash_source = tts_text or message
             if _tts_hash_source:
                 # TTSEngine.generate() applies _apply_tone() to the text

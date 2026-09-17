@@ -32,12 +32,16 @@ TTS_SENTENCE_SILENCE = float(os.environ.get("WW_TTS_SENTENCE_SILENCE", "0.12"))
 # direct command aimed at whoever is dumping right now, not a description
 # of the event (that's what the dashboard/Telegram text alert is for).
 #
-# Kannada, not synthesized live: Piper has no Kannada voice at all (checked
-# the official voice list -- kn/kn_IN doesn't exist, unlike hi_IN/ml_IN/
-# ne_NP which do). Since this phrase is always the same fixed string, a
-# one-time pre-generated static audio file is used instead of live TTS --
-# see _FIXED_DETERRENT_AUDIO below.
-TTS_FIXED_DETERRENT = "ಎಚ್ಚರಿಕೆ! ಕಸ ಎಸೆಯಬೇಡಿ. ನಿಮ್ಮ ಚಟುವಟಿಕೆ ಕ್ಯಾಮೆರಾದಲ್ಲಿ ದಾಖಲಾಗುತ್ತಿದೆ."
+# Language picked via WW_TTS_LANG env var ("en" or "kn", default "en").
+# Kannada has no Piper voice -- static pre-recorded _FIXED_DETERRENT_AUDIO
+# is played instead. English uses TTS_VOICE (en_US-lessac-medium.onnx)
+# and is synthesized live by Piper.
+TTS_LANG = os.environ.get("WW_TTS_LANG", "en").lower()
+_DETERRENT_TEXT = {
+    "en": "Attention! Littering is prohibited here. You are being monitored.",
+    "kn": "ಎಚ್ಚರಿಕೆ! ಕಸ ಎಸೆಯಬೇಡಿ. ನಿಮ್ಮ ಚಟುವಟಿಕೆ ಕ್ಯಾಮೆರಾದಲ್ಲಿ ದಾಖಲಾಗುತ್ತಿದೆ.",
+}
+TTS_FIXED_DETERRENT = _DETERRENT_TEXT.get(TTS_LANG, _DETERRENT_TEXT["en"])
 _FIXED_DETERRENT_AUDIO = Path(__file__).parent / "assets" / "kannada_deterrent.wav"
 
 
@@ -120,10 +124,11 @@ class TTSEngine:
         if filepath.exists():
             return {"path": str(filepath), "text_hash": text_hash, "duration_ms": self._estimate_duration(shaped)}
 
-        if shaped == TTS_FIXED_DETERRENT and _FIXED_DETERRENT_AUDIO.exists():
+        if TTS_LANG == "kn" and shaped == TTS_FIXED_DETERRENT and _FIXED_DETERRENT_AUDIO.exists():
             # Static pre-generated Kannada audio -- see TTS_FIXED_DETERRENT
             # comment. Never invoke Piper (no Kannada voice) or the silent
-            # placeholder for this phrase.
+            # placeholder for this phrase. Only applies in Kannada mode --
+            # English mode must fall through to live Piper synthesis below.
             import shutil
             shutil.copyfile(_FIXED_DETERRENT_AUDIO, filepath)
             return {"path": str(filepath), "text_hash": text_hash, "duration_ms": self._audio_duration_ms(filepath)}

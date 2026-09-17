@@ -1,3 +1,4 @@
 bag
+new_waste
+old_waste
 person
-waste

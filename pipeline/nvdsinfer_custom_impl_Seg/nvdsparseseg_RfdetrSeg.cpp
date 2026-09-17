@@ -2,7 +2,7 @@
  * Copyright (c) 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.
  *
  * Custom DeepStream instance-segmentation parser for RF-DETR-Seg-Nano
- * (WasteWatch seg-v2, 4-class checkpoint: 0=Waste-watch/background,
+ * (WasteWatch seg-v7/v8, 4-class checkpoint: 0=Waste-watch/background,
  * 1=bag, 2=person, 3=waste).
  *
  * Unlike the bbox-only rfdetr.onnx (pipeline/nvdsinfer_custom_impl_Yolo),
@@ -14,18 +14,14 @@
  *
  *   dets   [1,100,4]     cxcywh, normalised to [0,1] against the 384x384
  *                        network input (standard DETR box parameterisation).
- *   labels [1,100,6]     per-query class logits. Channel 0 is the
+ *   labels [1,100,4]     per-query class logits. Channel 0 is the
  *                        "Waste-watch" background/ignore class the
  *                        training run used as class-index 0 (see
  *                        nvinfer_rfdetr_seg.txt's comment on RF-DETR's
  *                        off-by-one class-index convention — this repo
  *                        has been bitten by exactly this before with the
- *                        bbox model). Channels 4-5 are unused no-object
- *                        slack from num_classes+1 padding that never wins
- *                        argmax on real detections (confirmed empirically
- *                        against rfdetr's own `.predict()` postprocessing
- *                        on a live frame — see training/test_seg_v2_inference.py).
- *                        Channels 1,2,3 map directly to bag/person/waste.
+ *                        bbox model). Channels 1,2,3 map directly to
+ *                        bag/person/waste.
  *   masks  [1,100,96,96] per-query mask LOGITS over the *full* 384x384
  *                        input at 1/4 resolution (96 = 384/4) — NOT
  *                        per-ROI crops like Mask R-CNN/TAO MaskRCNN. We
@@ -35,11 +31,22 @@
  *                        mask_height == the box's footprint in grid
  *                        cells, sized to at least 1x1).
  *
- * Class semantics were verified by comparing this exact sigmoid+argmax
- * decode against `RFDETRSegNano.predict()`'s own supervision.Detections
- * output on the same frame: argmax channel == supervision class_id
- * directly (channel 3 -> "waste", channel 2 -> "person"), confirming no
- * extra index shift beyond dropping channel 0 (background).
+ * IMPORTANT — this parser previously assumed a 5-channel/stride-6 labels
+ * layout (bg=0, stray unused "a" class=1, bag=2, person=3, waste=4), a
+ * relic of runs_seg_v2's checkpoint which had 5 class_names including a
+ * never-annotated "a" class. runs_seg_v7/v8 were trained on a clean
+ * 4-category COCO export (Waste-watch/bag/person/waste, no stray class),
+ * so the exported ONNX `labels` output is genuinely [1,100,4] — confirmed
+ * via `onnx.load(...).graph.output`. Reading with the old stride-6 offset
+ * (`labels + q*6`) walked into the wrong query's data for every q>=1, and
+ * for q>=67 read past the end of the 400-float buffer entirely. This
+ * silently produced near-zero/garbage waste-channel probabilities that
+ * never crossed any confidence threshold (confirmed live: raw_class_hist
+ * in wastewatch.metadata showed exactly zero waste detections across
+ * multiple 400-frame windows even at pre-cluster-threshold=0.05, on two
+ * independently retrained checkpoints — a symptom that pointed at a
+ * structural bug, not a data/training problem). Fixed to stride 4 and
+ * channels {bg=0, bag=1, person=2, waste=3}.
  */
 
 #include "nvdsinfer_custom_impl.h"
@@ -53,24 +60,22 @@
 namespace {
 
 constexpr int kNumQueries = 100;
-constexpr int kNumLogitChannels = 6;   // labels last dim
+constexpr int kNumLogitChannels = 5;   // labels last dim (matches [1,100,5] ONNX output)
 constexpr int kMaskGrid = 96;          // masks spatial dim (netW/4, netH/4)
-// The checkpoint's real class_names list (from runs_seg_v2's training
-// args, confirmed via `torch.load(...)['args']['class_names']`) is
-// ['Waste-watch', 'a', 'bag', 'person', 'waste'] -- 5 classes, NOT 4.
-// The stray 'a' class (mid-session dataset cleanup removed its
-// *annotations* but never retrained/re-exported the model without it)
-// still occupies channel 1, shifting bag/person/waste to channels
-// 2/3/4. The original version of this parser only scanned channels
-// 1-3 assuming a clean 4-class {bg, bag, person, waste} layout, which
-// read real "person" (channel 3) as "waste" and never looked at real
-// "waste" (channel 4) at all -- confirmed live: person detected as
-// waste and waste detected as person, symmetric swap. Both channels
-// 0 (Waste-watch) and 1 ('a') are ignore/background here.
-constexpr int kBackgroundChannelLo = 0;  // "Waste-watch"
-constexpr int kBackgroundChannelHi = 1;  // "a" -- stray, unused class
-constexpr int kRealClassChannelsLo = 2;
-constexpr int kRealClassChannelsHi = 4; // inclusive: 2=bag,3=person,4=waste
+// v12 retrain added old_waste back as a real class (bag/person/waste ->
+// bag/new_waste/old_waste/person). rfdetr's COCO loader drops the
+// unannotated background category (id 0, "Waste-watch"), then assigns
+// real-class indices alphabetically by name (confirmed against the
+// working 3-class deploy: category ids were bag=1/waste=2/person=4 but
+// live detections matched channel order bag=0/person=1/waste=2, i.e.
+// alphabetical, not id-sorted), and appends the implicit "no object"
+// class at the END (standard DETR num_classes+1 convention).
+// Alphabetical 4-class order: bag, new_waste, old_waste, person.
+constexpr int kBackgroundChannelLo = 4;  // "no object" -- last channel
+constexpr int kBackgroundChannelHi = 4;
+constexpr int kRealClassChannelsLo = 0;
+constexpr int kRealClassChannelsHi = 3; // inclusive: 0=bag,1=new_waste,2=old_waste,3=person
+constexpr unsigned int kOldWasteChannel = 2; // ignored entirely, see below
 
 inline float sigmoidf(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
@@ -139,7 +144,16 @@ extern "C" bool NvDsInferParseCustomRfdetrSeg(
       continue;
     }
 
-    const unsigned int classId = static_cast<unsigned int>(bestChannel - kRealClassChannelsLo); // 0=bag,1=person,2=waste
+    const unsigned int classId = static_cast<unsigned int>(bestChannel - kRealClassChannelsLo); // 0=bag,1=new_waste,2=old_waste,3=person
+    // old_waste (channel 2) is explicitly ignored end-to-end -- excluded
+    // here at the parser so it never becomes a NvDsInferInstanceMaskInfo
+    // object at all: no bbox, no OSD render, no tracker ID, never reaches
+    // the FSM/alerting Python side. Still competes fairly in the argmax
+    // above (a real old_waste-looking region won't get miscounted as
+    // bag/new_waste/person just because we drop it here).
+    if (classId == kOldWasteChannel) {
+      continue;
+    }
     if (classId >= detectionParams.perClassPreclusterThreshold.size()) {
       continue;
     }

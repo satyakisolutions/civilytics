@@ -6,6 +6,13 @@ export type AlertStatus = 'active' | 'acknowledged' | 'resolved';
 export type GridLayout = '2x2' | '3x3' | '4x4' | '1x1';
 export type UserRole = 'viewer' | 'admin' | 'auditor';
 
+export interface CameraDetectionConfig {
+  dwell_enter_threshold_s?: number;
+  dwell_violation_threshold_s?: number;
+  waste_proximity_px?: number;
+  bag_proximity_px?: number;
+}
+
 export interface Camera {
   id: string;
   name: string;
@@ -17,6 +24,7 @@ export interface Camera {
   thumbnail?: string;
   lastEvent?: Date;
   isPinned?: boolean;
+  detectionConfig?: CameraDetectionConfig;
 }
 
 export interface Zone {

@@ -29,7 +29,7 @@ class PipelineSettings(BaseSettings):
     analytics_config_path: str = "configs/nvdsanalytics_config.txt"
 
     # Dwell thresholds — narrow-road deployment
-    dwell_enter_threshold_s: float = 3.0      # 3s in ROI — suspicious/yellow
+    dwell_enter_threshold_s: float = 1.5      # 1.5s in ROI — suspicious/yellow, fires earlier
     dwell_observe_threshold_s: float = 5.0    # 5s — suspicious, start VLM
     dwell_violation_threshold_s: float = 3.0  # 3s in ROI before VIOLATION/alert — fast-moving subjects (e.g. vehicles) don't linger 15s
     # Person-only dwell-violation threshold, separate from the generic one

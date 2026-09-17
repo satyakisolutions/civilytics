@@ -66,14 +66,14 @@ export function Sidebar({ className }: SidebarProps) {
           <div className="relative">
             <svg viewBox="0 0 64 64" className="w-10 h-10" aria-label="Satyaki Solutions">
               <path d="M32 2 L58 17 L58 47 L32 62 L6 47 L6 17 Z" fill="#FCA719" stroke="#1A1A2E" strokeWidth="3"/>
-              <text x="32" y="44" fontFamily="Poppins, Helvetica, Arial, sans-serif" fontSize="32" fontWeight="900" textAnchor="middle" fill="#1A1A2E">W</text>
+              <text x="32" y="44" fontFamily="Poppins, Helvetica, Arial, sans-serif" fontSize="32" fontWeight="900" textAnchor="middle" fill="#1A1A2E">C</text>
             </svg>
             {systemStatus.systemHealth === 'healthy' && (
               <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-success rounded-full border-2 border-sidebar status-dot-online" />
             )}
           </div>
           <div className="flex flex-col">
-            <span className="font-semibold text-sidebar-foreground text-sm" style={{ fontFamily: "'Poppins', sans-serif" }}>WasteWatch</span>
+            <span className="font-semibold text-sidebar-foreground text-sm" style={{ fontFamily: "'Poppins', sans-serif" }}>Civilytics</span>
             <span className="text-[10px] text-muted-foreground" style={{ fontFamily: "'Poppins', sans-serif" }}>Satyaki Solutions Pvt Ltd</span>
           </div>
         </div>

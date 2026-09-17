@@ -1,31 +1,28 @@
 # WasteWatch Primary GIE — RF-DETR-Seg-Nano, instance segmentation
-# (bag + person + waste, with per-instance masks)
+# (bag + new_waste + old_waste + person, with per-instance masks)
 #
-# Fine-tuned RFDETRSegNano (training/runs_seg_v2/checkpoint_best_ema.pth,
-# best EMA mAP 0.6167), 4 training classes:
-#   0 Waste-watch   (background/ignore — NOT in labels_seg.txt, see below)
-#   1 bag           -> labels_seg.txt line 0
-#   2 person        -> labels_seg.txt line 1
-#   3 waste         -> labels_seg.txt line 2
+# v12 checkpoint (training/runs_seg_v12/checkpoint_best_ema.pth),
+# 4 real classes, alphabetical channel order confirmed against the prior
+# working 3-class deploy (see nvdsparseseg_RfdetrSeg.cpp comment):
+#   channel 0  bag        -> labels_seg.txt line 0
+#   channel 1  new_waste  -> labels_seg.txt line 1
+#   channel 2  old_waste  -> labels_seg.txt line 2
+#   channel 3  person     -> labels_seg.txt line 3
+#   channel 4  background/no-object (last channel, standard DETR
+#              num_classes+1 convention — dropped by the parser, never
+#              written to labels_seg.txt)
 #
 # RF-DETR class-index gotcha (same one nvinfer_rfdetr.txt's comments
-# warn about, this time in the *other* direction): this checkpoint DOES
-# have an explicit background row at class-index 0, unlike the bbox
-# model's 2-class training which had none. The custom parser
-# (nvdsinfer_custom_impl_Seg) drops channel 0 and re-bases the kept
-# channels (1,2,3) down by one so `classId` written into
-# NvDsInferInstanceMaskInfo lines up with labels_seg.txt's 0-based rows.
-# Getting this backwards (e.g. reusing raw channel index as classId)
-# silently reports "bag" detections as "person" and so on — verify
-# against a live frame before trusting alerts built on this config.
+# warn about): getting the channel order backwards silently reports one
+# class's detections as another — verify against a live frame before
+# trusting alerts built on this config.
 #
-# Input: 384x384, same resolution as the bbox model, so infer-dims stays
-# in lock-step with the export in training/exported_seg_v2.
+# Input: 384x384.
 #
 # Raw ONNX outputs consumed directly (no DeepStreamOutput fusion head —
 # see nvdsinfer_custom_impl_Seg/nvdsparseseg_RfdetrSeg.cpp for why):
 #   dets   [1,100,4]     cxcywh normalised
-#   labels [1,100,6]     per-query logits (channel 0 = background)
+#   labels [1,100,5]     per-query logits (channel 4 = background)
 #   masks  [1,100,96,96] per-query mask logits, full-frame 1/4 res grid
 #
 # Copyright (c) 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.
@@ -47,8 +44,8 @@ model-color-format=0
 # model (nvinfer_rfdetr.txt). Not re-tested here; inherited deliberately.
 network-mode=0
 
-# 3 = bag + person + waste (post class-0-background-drop indices).
-num-detected-classes=3
+# 4 = bag + new_waste + old_waste + person (post class-0-background-drop indices).
+num-detected-classes=4
 
 interval=0
 gie-unique-id=1
@@ -78,17 +75,19 @@ maintain-aspect-ratio=0
 pre-cluster-threshold=0.40
 topk=100
 
-# bag (0) — lowered from 0.40; v6 training set only had 11 bag
-# annotations, so confidence runs low on real footage same as waste did.
+# bag (0)
 [class-attrs-0]
 pre-cluster-threshold=0.20
 
-# person (1) — allow weaker tracks so tracker's hysteresis picks them up,
-# matching the bbox model's person threshold.
+# new_waste (1) — thresholds carried over from the old single "waste"
+# class pending re-tuning against live v12 footage.
 [class-attrs-1]
-pre-cluster-threshold=0.30
+pre-cluster-threshold=0.05
 
-# waste (2) — kept at the default 0.40 pending live-traffic calibration;
-# no shadow-false-positive history yet for this class (new in seg-v2).
+# old_waste (2) — same starting point as new_waste until re-tuned.
 [class-attrs-2]
-pre-cluster-threshold=0.9
+pre-cluster-threshold=0.05
+
+# person (3) — allow weaker tracks so tracker's hysteresis picks them up.
+[class-attrs-3]
+pre-cluster-threshold=0.30

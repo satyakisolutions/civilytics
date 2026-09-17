@@ -150,7 +150,7 @@ class EventFSMManager:
                     camera_id, track_id, previous.value,
                 )
 
-    def update(self, camera_id: str, track_id: int, class_name: str, in_roi: bool, dwell_time_s: float, bbox: dict | None = None, has_carried_item: bool = False, violation_threshold_s: float | None = None, speed_px_s: float | None = None) -> FSMEvent | None:
+    def update(self, camera_id: str, track_id: int, class_name: str, in_roi: bool, dwell_time_s: float, bbox: dict | None = None, has_carried_item: bool = False, violation_threshold_s: float | None = None, enter_threshold_s: float | None = None, speed_px_s: float | None = None) -> FSMEvent | None:
         with self._lock:
             key = (camera_id, track_id)
             now = time.monotonic()
@@ -174,6 +174,8 @@ class EventFSMManager:
             # rather than only at track creation.
             if violation_threshold_s is not None:
                 fsm.violation_threshold_s = violation_threshold_s
+            if enter_threshold_s is not None:
+                fsm.enter_threshold_s = enter_threshold_s
             prev_state = fsm.state
 
             # A carried bag/item on a person in the ROI, held for a real
@@ -219,7 +221,7 @@ class EventFSMManager:
                     fsm.forced_by_waste = True
                     self._escalated_tracks.add(key)
                     logger.info("FSM %s track=%d: fast-track ENTER→VIOLATION (carried item)", camera_id, track_id)
-                elif dwell_time_s >= self._enter_threshold or _is_slow:
+                elif dwell_time_s >= fsm.enter_threshold_s or _is_slow:
                     fsm.state = FSMState.OBSERVE
             elif fsm.state == FSMState.OBSERVE:
                 if not in_roi:
