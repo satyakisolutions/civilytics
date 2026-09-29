@@ -31,6 +31,7 @@ Success looks like:
 | D3 | Where face work runs | Pipeline only captures raw person crops and publishes them. A new CPU `subject-worker` does detection, embedding, matching and storage. |
 | D4 | Incident unit | One alert = one incident. |
 | D5 | Access control | `require_admin` on every subject route now. It is effective once dashboard login exists; under `WW_AUTH_DEV_MODE` it resolves to the mock `dev` user. |
+| D6 | How the badge reaches the dashboard | `GET /api/alerts` joins the subject tables on `incident_id`. The alert panel (`MonitoringContext`) and History already refresh that endpoint every 5 s / 30 s, so there is no `wastewatch.subjects` topic, no `alerts.subject_id` column and no WebSocket message. Merge and detach show up on the next refresh automatically. |
 
 ## 3. Constraints found in the code
 
@@ -48,11 +49,10 @@ Success looks like:
 ```
 pipeline (DeepStream, GPU)
   streammux → nvinfer → nvtracker → action_sgie → nvdsanalytics → [wastewatchmeta]
-      → tee_raw ─┬─→ nvosd → tee → demux / meta / capture          (unchanged)
-                 └─→ queue_raw(leaky=downstream, max-size-buffers=1)
-                        → nvvideoconvert → caps(RGBA) → fakesink(sync=false, async=false)
-                           ↑ raw_face_probe (fakesink sink pad)
-  queue_raw sink-pad throttle probe: DROP unless ≥ 0.5 s since last pass AND ≥1 person in batch
+      → tee_raw ─┬─(src_0, FIRST)→ nvvideoconvert → caps(RGBA) → queue_raw(leaky, 1 buf) → fakesink
+                 │                     ↑ throttle probe on tee_raw src_0     ↑ raw_face_probe (fakesink sink pad)
+                 └─(src_1)→ nvosd → tee → demux / meta / capture          (unchanged)
+  throttle probe: DROP unless ≥ 0.5 s since last pass AND ≥1 person in batch
 
   _fire_waste_alert_async (after dedup):
       incident_id = uuid4()
@@ -67,12 +67,12 @@ pipeline (DeepStream, GPU)
 subject-worker (new, CPU, backend image)
   wastewatch.faces.requests → idempotency check → SCRFD → quality gate → align 112×112
       → ArcFace 512-d → Qdrant offender_faces search → decide (auto / review / new / no_face)
-      → Postgres transaction → publish wastewatch.subjects
+      → Postgres transaction → Qdrant upsert
   daily: retention sweep
 
 api
-  AlertConsumer: stores incident_id on alerts; consumes wastewatch.subjects → sets alerts.subject_id
-      → WS broadcast {type: "subject_update", ...}
+  AlertConsumer: stores incident_id on the alert row
+  GET /api/alerts: LEFT JOIN face_incidents / subject_incidents / subjects on incident_id
   /api/subjects/* router (require_admin, access-logged)
 
 frontend
@@ -84,15 +84,17 @@ frontend
 ### 5.1 Raw branch
 
 - A new `tee_raw` is inserted immediately before `nvosd`, in both link paths (native `wastewatchmeta -> nvosd` and fallback `nvdsanalytics -> nvosd`).
-- The branch is `queue_raw` → `nvvideoconvert` → RGBA capsfilter → `fakesink`.
-- `queue_raw` is `leaky=2` (downstream), `max-size-buffers=1`, `max-size-bytes=0`, `max-size-time=0`. `fakesink` is `sync=false`, `async=false`. The raw branch therefore cannot backpressure the tee.
-- **Throttle.** A probe on `queue_raw`'s sink pad returns `Gst.PadProbeReturn.DROP` unless ≥ 0.5 s has passed since the last passed buffer and the batch contains at least one `person` object. RGBA conversion then runs at ≤ 2 fps, and only when people are present.
+- **Why this order.** `tee` does not copy buffers, and `nvdsosd` rasterises **in place** on the shared surface. A clean copy must therefore exist before nvosd sees the buffer.
+- The raw branch is requested as `tee_raw`'s **first** src pad; tee pushes to src pads in order, on the streaming thread. It is `nvvideoconvert` → RGBA capsfilter with **no queue before the converter**, so the conversion (which writes into a new buffer) finishes before nvosd receives the buffer.
+- Only after conversion comes `queue_raw` (`leaky=2`, `max-size-buffers=1`, bytes/time 0) → `fakesink` (`sync=false`, `async=false`). The Python crop work therefore runs on the queue's own thread and cannot backpressure the chain.
+- **Throttle.** A probe on `tee_raw`'s first src pad returns `Gst.PadProbeReturn.DROP` unless ≥ 0.5 s has passed since the last passed buffer and the batch contains at least one `person` object. The synchronous conversion therefore runs at ≤ 2 fps, and only when people are present.
 - **Raw probe.** It reads batch meta (it is the same buffer, so tracker IDs are present). For each `person` object on each frame it:
   - crops the head region: the top 50% of the person bbox, padded 10% horizontally, clamped to the frame;
   - skips the crop if it is smaller than 48×48;
   - encodes a JPEG (quality 90);
   - calls `FaceCropBuffer.add(source_id, track_id, ts, jpeg)`.
 - **Kill switch.** When `WW_FACE_CAPTURE_ENABLED` is not `1`, the raw branch is not built and the hook is a no-op. The pipeline is then byte-for-byte today's behaviour. The code default is off; compose sets it on.
+- **Scope of coverage.** `_fire_waste_alert_async` is only called on the Python metadata path. When the native `wastewatchmeta` C plugin path is active, no Python alerts fire, so no faces are captured. This is recorded as a known limitation.
 
 ### 5.2 `pipeline/app/face_capture.py` (new, pure, unit-tested)
 
@@ -167,7 +169,7 @@ frontend
    - `|yaw_proxy| ≤ 0.45`, where `yaw_proxy = (nose_x − eye_mid_x) / inter_eye_dist`, which is roughly ≤ 45°.
 
    Quality score = `det_score × min(1, width/112) × min(1, sharpness/200) × (1 − |yaw_proxy|)`. The top 3 faces by quality are kept.
-4. **No usable face.** The worker records `face_incidents(incident_id, status='no_face')`, publishes the result with `status: "no_face"` and stops.
+4. **No usable face.** The worker records `face_incidents(incident_id, status='no_face')`, deletes the incoming crops and stops.
 5. **Embed** the kept faces.
 6. **Search.** For each kept face, Qdrant returns the top 20 (cosine). Only active subjects own faces, because merge moves faces and delete removes them, so no status filter is needed. Subject score = the maximum similarity over all (kept face × that subject's stored face) pairs.
 7. **Decide** (pure `matcher.decide`), using the best subject `s*` with score `σ`:
@@ -182,30 +184,14 @@ frontend
    - `face_incidents(status='matched')`.
 
    Qdrant upserts happen after the DB commit, keyed by `subject_faces.id`. A failure there is retried, and the row keeps `qdrant_synced=false` until it succeeds. Crop files move from `incoming/{incident_id}/` to `subjects/{subject_id}/{face_id}.jpg`; unused crops are deleted.
-9. **Publish** `wastewatch.subjects`:
-
-```json
-{
-  "incident_id": "uuid",
-  "status": "matched | no_face",
-  "subject_id": "uuid | null",
-  "subject_code": "S-003 | null",
-  "incident_count": 3,
-  "is_repeat": true,
-  "match_type": "new | auto | review",
-  "review_pending": false,
-  "similarity": 0.63
-}
-```
-
-The Kafka offset is committed only after the publish. Redelivery is safe because of step 1.
+9. **Commit the Kafka offset** only after step 8 succeeds. Redelivery is safe because of step 1. Nothing is published; the dashboard reads the result through `GET /api/alerts` (D6).
 
 ## 7. Data model (Alembic `008_subjects`)
 
 ```
 subjects
   id uuid pk
-  code text unique not null            -- 'S-' || lpad(nextval('subject_code_seq'), 3, '0'); never reused
+  code_num int unique not null         -- from sequence subject_code_seq; never reused. Display code = f"S-{code_num:03d}"
   status text not null default 'active' -- active | merged | deleted
   merged_into_id uuid null fk subjects.id
   incident_count int not null default 0
@@ -220,6 +206,7 @@ subject_faces
   incident_id uuid not null
   crop_path text not null               -- under /app/faces_private/subjects/
   quality real not null
+  embedding bytea not null              -- 512 float32; Postgres is the source of truth, Qdrant is a rebuildable index
   qdrant_synced bool not null default false
   created_at timestamptz default now()
 
@@ -261,7 +248,6 @@ subject_access_log
 
 alerts (existing)
   + incident_id uuid null (indexed)
-  + subject_id uuid null
 ```
 
 Qdrant collection `offender_faces`: size 512, distance Cosine. Payload: `subject_id`, `incident_id`, `camera_id`, `quality`, `created_at`. It is created on worker startup if missing.
@@ -271,20 +257,18 @@ Qdrant collection `offender_faces`: size 512, distance Cosine. Payload: `subject
 All actions run in one transaction, then sync to Qdrant, then write an access-log row.
 
 - **Merge** (review → "Same person"): the new subject folds into the candidate.
-  - Faces, incidents and `alerts.subject_id` are repointed.
+  - Faces and incidents are repointed.
   - Qdrant `subject_id` payloads are updated.
   - The face cap is re-applied.
   - `incident_count`, `first_seen_at`, `last_seen_at` and the cover face are recomputed.
   - The new subject becomes `status='merged'`, `merged_into_id=candidate`.
   - `match_type` becomes `review_merged`.
   - Other pending reviews that reference the merged subject are repointed; any that become self-pairs are marked `obsolete`.
-  - A `subject_update` is broadcast for each affected alert.
 - **Reject** ("Different"): the review becomes `rejected`. Reviews are only created at incident time against a freshly created subject, so the same pair is never suggested again.
 - **Detach incident:**
   - The incident and its faces move to a newly created subject (new code).
   - Counts on the old subject are recomputed; if it has no incidents left, it is deleted.
-  - Affected alerts are re-broadcast.
-- **Delete subject:** DB rows, Qdrant points and crop files are removed, and `alerts.subject_id` is set to null. The access-log row remains.
+- **Delete subject:** DB rows, Qdrant points and crop files are removed. The access-log row remains. The alert's badge then shows nothing, because the join finds no subject.
 
 ## 9. API (`backend/app/api/routes/subjects.py`)
 
@@ -303,23 +287,19 @@ Every route depends on `require_admin` and writes `subject_access_log` with acto
 
 ### AlertConsumer changes (`backend/app/services/alert_consumer.py`)
 
-- It stores `payload["incident_id"]` on the alert row and includes `incident_id` in the WS payload.
-- **New consumer loop on `wastewatch.subjects`:** it updates `alerts.subject_id` where `incident_id` matches, then broadcasts:
+- It stores `payload["incident_id"]` on the alert row and includes `incident_id` in the WS payload. Nothing else changes.
+- `GET /api/alerts` LEFT JOINs `face_incidents`, `subject_incidents` and `subjects` on `alerts.incident_id` and adds these fields:
+  - `face_status`: `null` while pending, otherwise `matched` / `no_face`;
+  - `subject_id` and `subject_code`;
+  - `subject_incident_count`;
+  - `subject_review_pending`: whether a pending review exists with `new_subject_id` equal to this subject.
 
-  ```
-  {type: "subject_update", incident_id, subject_id, subject_code, incident_count, is_repeat, review_pending, status}
-  ```
-
-  on the existing alerts WebSocket.
-- **Ordering race:** if the subject result arrives before the alert row exists, the alert insert path looks up `subject_incidents`/`face_incidents` by `incident_id` and fills `subject_id` on insert.
-- `GET /api/alerts` returns `incident_id`, `subject_id`, `subject_code`, `incident_count` and `face_status` via a join.
-
-New topic constants in `backend/app/config/kafka.py`: `TOPIC_FACES_REQUESTS = "wastewatch.faces.requests"` and `TOPIC_SUBJECTS = "wastewatch.subjects"`, plus consumer groups for the worker and the API.
+New constants in `backend/app/config/kafka.py`: `TOPIC_FACES_REQUESTS = "wastewatch.faces.requests"` and `GROUP_SUBJECT_WORKER = "wastewatch.group.subject-worker"`.
 
 ## 10. Frontend
 
-- **Types** (`frontend/src/types/monitoring.ts`): alerts gain `incidentId`, `subjectId`, `subjectCode`, `incidentCount`, `faceStatus`, `reviewPending`.
-- **`useAlerts`:** handles `subject_update` by merging it into the matching alert by `incidentId`.
+- **Types** (`frontend/src/types/monitoring.ts`): alerts gain `incidentId`, `subjectId`, `subjectCode`, `subjectIncidentCount`, `faceStatus`, `subjectReviewPending`.
+- **`MonitoringContext.fetchAlerts` and `HistoryView`** map the new fields from `GET /api/alerts`. The unused `useAlerts` hook is left alone.
 - **`SubjectBadge` component**, used in `AlertPanel` and `HistoryView`:
   - `S-007 · New`
   - `S-003 · Repeat ×3` (emphasised)
@@ -342,7 +322,7 @@ New topic constants in `backend/app/config/kafka.py`: `TOPIC_FACES_REQUESTS = "w
 | Only violators' faces stored | Crops live in pipeline memory only; nothing is written without `begin_incident`. Non-violator rings are evicted within ~5 s. |
 | No comparison outside violations | Matching runs only in `subject-worker` on `faces.requests`. |
 | Retention | Daily sweep. Subjects with `last_seen_at` older than `WW_SUBJECT_RETENTION_DAYS` (90) are fully deleted. `incoming/` folders and `no_face` data older than 7 days are deleted. `merged` tombstones are deleted after the same retention period. |
-| Private storage | New volume `faces_private` mounted at `/app/faces_private`: pipeline (rw, `incoming/` only), subject-worker (rw), api (ro). It is never under `/evidence`. |
+| Private storage | New volume `faces_private` mounted at `/app/faces_private`: pipeline (rw, writes only `incoming/`), subject-worker (rw), api (rw, because merge and delete remove files). It is never under `/evidence`. The pipeline creates `incoming/` and `subjects/` with mode 0777 at startup, because it runs as root while the backend image runs as `appuser`. |
 | Human in the loop | Uncertain matches never auto-link. Every automatic link can be undone with detach. |
 | Audit | `subject_access_log` covers every read and every change. |
 | No public exposure | Subject data is never included in TTS text, Telegram or SIP messages. |
@@ -362,11 +342,11 @@ New topic constants in `backend/app/config/kafka.py`: `TOPIC_FACES_REQUESTS = "w
 | `WW_FACE_MATCH_REVIEW` | `0.40` | subject-worker |
 | `WW_SUBJECT_MAX_FACES` | `10` | subject-worker |
 | `WW_SUBJECT_RETENTION_DAYS` | `90` | subject-worker |
-| `WW_FACE_DET_MODEL` / `WW_FACE_REC_MODEL` | `/app/models/face/scrfd_2.5g_bnkps.onnx` / `/app/models/face/w600k_r50.onnx` | subject-worker |
+| `WW_FACE_DET_MODEL` / `WW_FACE_REC_MODEL` | `/app/models/face/det_10g.onnx` / `/app/models/face/w600k_r50.onnx` | subject-worker |
 
 ## 13. Models and licensing
 
-- **Detector:** SCRFD 2.5G with keypoints (~3 MB). **Recognizer:** ArcFace R50 trained on WebFace600K (`w600k_r50.onnx`, ~170 MB). Both come from InsightFace's `buffalo_l` pack.
+- **Detector:** SCRFD-10G with keypoints (`det_10g.onnx`, ~17 MB). **Recognizer:** ArcFace R50 trained on WebFace600K (`w600k_r50.onnx`, ~170 MB). Both come from InsightFace's `buffalo_l` pack (`https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip`).
 - They live in `backend/models/face/` under Git LFS, and `scripts/download_models.py` fetches them if absent.
 - **Licence:** InsightFace pretrained weights are for **non-commercial research use only**. A paid municipal deployment needs a commercial licence from InsightFace or a replacement model. The embedder accepts any ONNX model with a 112×112 aligned RGB input and a 512-d output, so swapping only changes a path. Thresholds must be re-calibrated after a swap.
 
@@ -405,7 +385,7 @@ Testing follows TDD for every pure unit.
     - the same `incident_id` redelivered gives no change;
     - a faceless image gives `no_face`.
 - **API:** route tests for list/detail/face/merge/reject/detach/delete, access-log rows, and a 403 without the admin role when dev mode is off.
-- **AlertConsumer:** `subject_update` broadcast, and the subject-before-alert race.
+- **AlertConsumer:** `incident_id` is stored on insert. **`GET /api/alerts`:** the join fields for pending, `no_face`, new, repeat and review-pending cases.
 - **Manual live check:**
   1. Run the pipeline on the sample stream with the kill switch on and off.
   2. Confirm there is no FPS drop or stall.
