@@ -135,3 +135,57 @@ async def test_delete_subject_removes_everything_but_the_log(service, session_fa
 async def test_delete_unknown_subject_is_not_found(service):
     with pytest.raises(NotFound):
         await service.delete_subject(uuid.uuid4(), actor="alice")
+
+
+async def test_delete_subject_keeps_detached_subjects_crop_files(service, session_factory):
+    v = unit(1)
+    req_a, req_c = request(), request()
+    res_a = await service.process_request(req_a, [face(v)])
+    await service.process_request(req_c, [face(with_similarity(v, 0.7))])
+    new_id = await service.detach_incident(res_a.subject_id, req_c.incident_id, actor="alice")
+    async with session_factory() as s:
+        old_face = (await s.execute(
+            select(SubjectFace).where(SubjectFace.subject_id == res_a.subject_id)
+        )).scalar_one()
+        new_face = (await s.execute(
+            select(SubjectFace).where(SubjectFace.subject_id == new_id)
+        )).scalar_one()
+    old_path, new_path = Path(old_face.crop_path), Path(new_face.crop_path)
+    assert old_path.exists() and new_path.exists()
+
+    await service.delete_subject(res_a.subject_id, actor="alice")
+
+    assert not old_path.exists()
+    assert new_path.exists()
+
+
+async def test_merge_does_not_repoint_non_pending_reviews(service, session_factory):
+    v = unit(1)
+    req_a, req_b = request(), request()
+    res_a = await service.process_request(req_a, [face(v)])
+    res_b = await service.process_request(req_b, [face(with_similarity(v, 0.45))])
+    async with session_factory() as s:
+        review1 = (await s.execute(select(SubjectMatchReview))).scalar_one()
+    await service.reject_review(review1.id, actor="alice")
+
+    # S-003: a subject unrelated to v/S-002, so it forms without a review.
+    req_d = request()
+    res_d = await service.process_request(req_d, [face(unit(42))])
+
+    # Manually stand up a second, still-pending review with the same source
+    # subject (S-002) as review1, so merging it exercises the repoint.
+    async with session_factory() as s:
+        review2 = SubjectMatchReview(
+            incident_id=uuid.uuid4(), new_subject_id=res_b.subject_id,
+            candidate_subject_id=res_d.subject_id, similarity=0.5, status="pending",
+        )
+        s.add(review2)
+        await s.commit()
+        await s.refresh(review2)
+
+    await service.merge_review(review2.id, actor="alice")
+
+    async with session_factory() as s:
+        rejected = await s.get(SubjectMatchReview, review1.id)
+        assert rejected.status == "rejected"
+        assert rejected.new_subject_id == res_b.subject_id

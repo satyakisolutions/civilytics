@@ -187,8 +187,14 @@ class SubjectService:
 
     async def _repoint_reviews(self, s, old: uuid.UUID, new: uuid.UUID, exclude: uuid.UUID) -> None:
         r = SubjectMatchReview
-        await s.execute(update(r).where(r.id != exclude, r.new_subject_id == old).values(new_subject_id=new))
-        await s.execute(update(r).where(r.id != exclude, r.candidate_subject_id == old).values(candidate_subject_id=new))
+        await s.execute(
+            update(r).where(r.id != exclude, r.status == "pending", r.new_subject_id == old)
+            .values(new_subject_id=new)
+        )
+        await s.execute(
+            update(r).where(r.id != exclude, r.status == "pending", r.candidate_subject_id == old)
+            .values(candidate_subject_id=new)
+        )
         await s.execute(
             update(r).where(r.status == "pending", r.new_subject_id == r.candidate_subject_id).values(status="obsolete")
         )
@@ -275,7 +281,10 @@ class SubjectService:
             })
             await s.commit()
         await self._drop_faces(faces)
-        shutil.rmtree(self._faces_dir / "subjects" / str(subject_id), ignore_errors=True)
+        try:
+            (self._faces_dir / "subjects" / str(subject_id)).rmdir()
+        except OSError:
+            pass
 
     # ── helpers (shared with operator actions / retention) ─────────
 
