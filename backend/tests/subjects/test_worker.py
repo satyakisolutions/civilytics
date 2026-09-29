@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 
 from app.db.models import SubjectIncident
 from app.subjects.worker import SubjectWorker
@@ -11,16 +12,17 @@ from tests.subjects.factories import T0, face, unit
 
 
 class FakeAnalyzer:
-    def __init__(self, faces=None, fail_times: int = 0):
+    def __init__(self, faces=None, fail_times: int = 0, fail_exc: Exception | None = None):
         self.faces = faces or []
         self.fail_times = fail_times
+        self.fail_exc = fail_exc if fail_exc is not None else RuntimeError("model crashed")
         self.calls: list[list[str]] = []
 
     def __call__(self, paths):
         self.calls.append(list(paths))
         if self.fail_times:
             self.fail_times -= 1
-            raise RuntimeError("model crashed")
+            raise self.fail_exc
         return list(self.faces) if paths else []
 
 
@@ -110,6 +112,17 @@ async def test_handle_with_retry_gives_up_after_attempts(make_worker, settings):
     worker = make_worker(analyzer)
     assert await worker.handle_with_retry(_payload(settings, uuid.uuid4()), attempts=3, backoff_s=0) is None
     assert len(analyzer.calls) == 3
+
+
+async def test_handle_with_retry_retries_infra_errors_without_bound(make_worker, settings):
+    analyzer = FakeAnalyzer(
+        [face(unit(1))], fail_times=5,
+        fail_exc=OperationalError("stmt", {}, Exception("db down")),
+    )
+    worker = make_worker(analyzer)
+    result = await worker.handle_with_retry(_payload(settings, uuid.uuid4()), attempts=1, backoff_s=0)
+    assert result.status == "matched"
+    assert len(analyzer.calls) == 6
 
 
 async def test_consume_loop_commits_after_each_message(make_worker, settings, session_factory):

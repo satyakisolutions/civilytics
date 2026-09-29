@@ -3,7 +3,11 @@
 Offsets are committed manually after each message. Redelivery is harmless
 (face_incidents makes processing idempotent); malformed messages are
 logged and skipped; transient failures are retried a few times, then
-skipped so one poison message cannot stall the queue.
+skipped so one poison message cannot stall the queue. Infrastructure
+errors (DB/connection outages) are retried indefinitely with capped
+exponential backoff instead of consuming that bounded retry budget, so a
+sustained outage stalls the consumer rather than silently dropping
+incidents.
 """
 from __future__ import annotations
 
@@ -13,6 +17,7 @@ from pathlib import Path
 
 import orjson
 from aiokafka import AIOKafkaConsumer
+from sqlalchemy.exc import DBAPIError
 
 from app.config.kafka import GROUP_SUBJECT_WORKER, TOPIC_FACES_REQUESTS
 from app.subjects.config import SubjectSettings
@@ -61,18 +66,30 @@ class SubjectWorker:
         )
         return result
 
-    async def handle_with_retry(self, payload, attempts: int = 3, backoff_s: float = 1.0) -> ProcessResult | None:
-        for attempt in range(1, attempts + 1):
+    async def handle_with_retry(
+        self, payload, attempts: int = 3, backoff_s: float = 1.0, max_backoff_s: float = 30.0
+    ) -> ProcessResult | None:
+        attempt = 0
+        infra_failures = 0
+        while True:
             try:
                 return await self.handle(payload)
             except (KeyError, ValueError, TypeError):
                 logger.exception("Malformed face request skipped: %s", str(payload)[:200])
                 return None
+            except (DBAPIError, ConnectionError):
+                infra_failures += 1
+                logger.warning(
+                    "Face request failed due to an infrastructure error; retrying until it "
+                    "recovers (infra failure #%d)", infra_failures, exc_info=True,
+                )
+                await asyncio.sleep(min(max_backoff_s, backoff_s * 2 ** infra_failures))
             except Exception:
+                attempt += 1
                 logger.exception("Face request failed (attempt %d/%d)", attempt, attempts)
-                if attempt < attempts:
-                    await asyncio.sleep(backoff_s * attempt)
-        return None
+                if attempt >= attempts:
+                    return None
+                await asyncio.sleep(backoff_s * attempt)
 
     async def start(self) -> None:
         self._consumer = self._consumer_factory(
