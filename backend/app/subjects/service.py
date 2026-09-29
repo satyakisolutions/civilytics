@@ -17,9 +17,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 
-from app.db.models import FaceIncident, Subject, SubjectFace, SubjectIncident, SubjectMatchReview
+from app.db.models import (
+    FaceIncident,
+    Subject,
+    SubjectAccessLog,
+    SubjectFace,
+    SubjectIncident,
+    SubjectMatchReview,
+)
 from app.subjects.config import SubjectSettings
 from app.subjects.matcher import Hit, best_per_subject, decide, faces_over_cap
 from app.subjects.types import AnalyzedFace, FaceRequest
@@ -130,6 +137,145 @@ class SubjectService:
         return ProcessResult(
             "matched", subject.id, subject.code, decision.kind, subject.incident_count, decision.score
         )
+
+    # ── operator actions (spec §8) ─────────────────────────────────
+
+    async def log_access(
+        self, s, subject_id: uuid.UUID | None, action: str, actor: str,
+        client_ip: str | None = None, detail: dict | None = None,
+    ) -> None:
+        s.add(SubjectAccessLog(
+            subject_id=subject_id, action=action, actor=actor, client_ip=client_ip, detail=detail,
+        ))
+
+    async def merge_review(self, review_id: uuid.UUID, actor: str, client_ip: str | None = None) -> uuid.UUID:
+        async with self.session_factory() as s:
+            review = await s.get(SubjectMatchReview, review_id)
+            if review is None:
+                raise NotFound("review")
+            if review.status != "pending":
+                raise Conflict(f"review already {review.status}")
+            src = await s.get(Subject, review.new_subject_id)
+            dst = await s.get(Subject, review.candidate_subject_id)
+            if src is None or dst is None or src.status != "active" or dst.status != "active":
+                raise Conflict("subjects changed since this review was created")
+            moved = list((await s.execute(
+                select(SubjectFace).where(SubjectFace.subject_id == src.id)
+            )).scalars())
+            for row in moved:
+                row.subject_id = dst.id
+                row.qdrant_synced = False
+            await s.execute(
+                update(SubjectIncident).where(SubjectIncident.subject_id == src.id)
+                .values(subject_id=dst.id, match_type="review_merged")
+            )
+            await self._repoint_reviews(s, old=src.id, new=dst.id, exclude=review.id)
+            review.status, review.decided_by, review.decided_at = "merged", actor, utcnow()
+            src.status, src.merged_into_id, src.incident_count, src.cover_face_id = "merged", dst.id, 0, None
+            await s.flush()
+            evicted = await self._enforce_face_cap(s, dst.id)
+            await self._recompute(s, dst)
+            await self.log_access(s, dst.id, "merge", actor, client_ip, {
+                "review_id": str(review.id), "merged_subject_id": str(src.id),
+            })
+            await s.commit()
+            target = dst.id
+        evicted_ids = {r.id for r in evicted}
+        await self._index_faces([r for r in moved if r.id not in evicted_ids])
+        await self._drop_faces(evicted)
+        return target
+
+    async def _repoint_reviews(self, s, old: uuid.UUID, new: uuid.UUID, exclude: uuid.UUID) -> None:
+        r = SubjectMatchReview
+        await s.execute(update(r).where(r.id != exclude, r.new_subject_id == old).values(new_subject_id=new))
+        await s.execute(update(r).where(r.id != exclude, r.candidate_subject_id == old).values(candidate_subject_id=new))
+        await s.execute(
+            update(r).where(r.status == "pending", r.new_subject_id == r.candidate_subject_id).values(status="obsolete")
+        )
+
+    async def reject_review(self, review_id: uuid.UUID, actor: str, client_ip: str | None = None) -> None:
+        async with self.session_factory() as s:
+            review = await s.get(SubjectMatchReview, review_id)
+            if review is None:
+                raise NotFound("review")
+            if review.status != "pending":
+                raise Conflict(f"review already {review.status}")
+            review.status, review.decided_by, review.decided_at = "rejected", actor, utcnow()
+            await self.log_access(s, review.new_subject_id, "reject", actor, client_ip, {
+                "review_id": str(review.id), "candidate_subject_id": str(review.candidate_subject_id),
+            })
+            await s.commit()
+
+    async def detach_incident(
+        self, subject_id: uuid.UUID, incident_id: uuid.UUID, actor: str, client_ip: str | None = None,
+    ) -> uuid.UUID:
+        async with self.session_factory() as s:
+            incident = await s.get(SubjectIncident, incident_id)
+            if incident is None or incident.subject_id != subject_id:
+                raise NotFound("incident")
+            old = await s.get(Subject, subject_id)
+            count = (await s.execute(
+                select(func.count()).select_from(SubjectIncident)
+                .where(SubjectIncident.subject_id == subject_id)
+            )).scalar_one()
+            if count <= 1:
+                raise Conflict("this is the subject's only incident")
+            new = await self._new_subject(s, incident.detected_at)
+            incident.subject_id, incident.match_type = new.id, "detached"
+            moved = list((await s.execute(
+                select(SubjectFace).where(SubjectFace.subject_id == subject_id, SubjectFace.incident_id == incident_id)
+            )).scalars())
+            for row in moved:
+                row.subject_id = new.id
+                row.qdrant_synced = False
+            await s.execute(
+                update(SubjectMatchReview)
+                .where(SubjectMatchReview.incident_id == incident_id, SubjectMatchReview.status == "pending")
+                .values(status="obsolete")
+            )
+            await s.flush()
+            await self._recompute(s, old)
+            await self._recompute(s, new)
+            await self.log_access(s, subject_id, "detach", actor, client_ip, {
+                "incident_id": str(incident_id), "new_subject_id": str(new.id),
+            })
+            await s.commit()
+            new_id = new.id
+        await self._index_faces(moved)
+        return new_id
+
+    async def delete_subject(
+        self, subject_id: uuid.UUID, actor: str, client_ip: str | None = None, reason: str = "operator",
+    ) -> None:
+        async with self.session_factory() as s:
+            subject = await s.get(Subject, subject_id)
+            if subject is None:
+                raise NotFound("subject")
+            code = subject.code
+            faces = list((await s.execute(
+                select(SubjectFace).where(SubjectFace.subject_id == subject_id)
+            )).scalars())
+            incident_ids = list((await s.execute(
+                select(SubjectIncident.incident_id).where(SubjectIncident.subject_id == subject_id)
+            )).scalars())
+            await s.execute(delete(SubjectMatchReview).where(
+                (SubjectMatchReview.new_subject_id == subject_id)
+                | (SubjectMatchReview.candidate_subject_id == subject_id)
+            ))
+            await s.execute(delete(SubjectIncident).where(SubjectIncident.subject_id == subject_id))
+            if incident_ids:
+                await s.execute(
+                    update(FaceIncident).where(FaceIncident.incident_id.in_(incident_ids)).values(status="deleted")
+                )
+            await s.execute(delete(SubjectFace).where(SubjectFace.subject_id == subject_id))
+            await s.execute(update(Subject).where(Subject.merged_into_id == subject_id).values(merged_into_id=None))
+            await s.delete(subject)
+            await self.log_access(s, subject_id, "delete", actor, client_ip, {
+                "code": code, "incidents": len(incident_ids), "reason": reason,
+            })
+            await s.commit()
+        await self._drop_faces(faces)
+        shutil.rmtree(self._faces_dir / "subjects" / str(subject_id), ignore_errors=True)
 
     # ── helpers (shared with operator actions / retention) ─────────
 
