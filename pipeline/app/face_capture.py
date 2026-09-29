@@ -101,6 +101,8 @@ class FaceCropBuffer:
             existing = self._open.get(key)
             if existing is not None:
                 existing.alias_ids.append((incident_id, detected_at))
+                # Extend close_at by this alias's postroll to ensure it collects its own crops
+                existing.close_at = max(existing.close_at, now + self._postroll_s)
                 return
             seed = list(self._rings.get(key, ()))[-self._max_incident_crops:]
             self._open[key] = Incident(
@@ -162,21 +164,30 @@ def flush_due(
     now: float,
     base_dir: Path,
     publish: Callable[[str, dict], None],
+    on_error: Callable[[], None] | None = None,
 ) -> int:
-    """Write + publish every incident whose post-roll ended. Returns requests published."""
+    """Write + publish every incident whose post-roll ended. Returns requests published.
+
+    Each incident id (primary + aliases) is isolated: if write or publish raises,
+    on_error() is called and processing continues with the next id.
+    """
     sent = 0
     for incident in buffer.pop_due(now):
         ids = [(incident.incident_id, incident.detected_at), *incident.alias_ids]
         for incident_id, detected_at in ids:
-            paths = write_incident_crops(base_dir, incident_id, incident.crops) if incident.crops else []
-            publish(incident.camera_id, {
-                "incident_id": incident_id,
-                "camera_id": incident.camera_id,
-                "person_track_id": incident.track_id,
-                "detected_at": detected_at,
-                "crops": paths,
-            })
-            sent += 1
+            try:
+                paths = write_incident_crops(base_dir, incident_id, incident.crops) if incident.crops else []
+                publish(incident.camera_id, {
+                    "incident_id": incident_id,
+                    "camera_id": incident.camera_id,
+                    "person_track_id": incident.track_id,
+                    "detected_at": detected_at,
+                    "crops": paths,
+                })
+                sent += 1
+            except Exception:
+                if on_error is not None:
+                    on_error()
     return sent
 
 
@@ -194,7 +205,7 @@ def run_flusher(
         now = clock()
         try:
             buffer.evict_stale(now)
-            flush_due(buffer, now, base_dir, publish)
+            flush_due(buffer, now, base_dir, publish, on_error=on_error)
         except Exception:
             if on_error is not None:
                 on_error()

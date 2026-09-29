@@ -183,3 +183,39 @@ def test_run_flusher_survives_publish_errors(tmp_path: Path):
     stop.set()
     t.join(2.0)
     assert errors and not t.is_alive()
+
+
+# ── isolation & error handling ─────────────────────────────────────
+
+def test_flush_due_isolates_ids_on_publish_error(tmp_path: Path):
+    """If publish raises for one id, others are still published (with on_error callback)."""
+    b = FaceCropBuffer()
+    b.add("cam-01", 7, 0.0, _jpeg(0))
+    b.begin_incident("inc-1", "cam-01", 7, now=0.0, detected_at=100.0)
+    b.begin_incident("inc-2", "cam-01", 7, now=0.1, detected_at=100.1)
+    sent: list[dict] = []
+    errors: list[int] = []
+
+    def publish_with_first_fail(key, payload):
+        if payload["incident_id"] == "inc-1":
+            raise RuntimeError("kafka down")
+        sent.append(payload)
+
+    n = flush_due(b, 5.0, tmp_path, publish_with_first_fail, on_error=lambda: errors.append(1))
+    assert n == 1  # only inc-2 successfully published
+    assert len(sent) == 1 and sent[0]["incident_id"] == "inc-2"
+    assert len(errors) == 1  # on_error called once for inc-1
+
+
+def test_alias_extends_postroll():
+    """An alias alert extends the post-roll deadline by its own postroll duration."""
+    b = FaceCropBuffer(postroll_s=2.0)
+    b.begin_incident("inc-1", "cam-01", 7, now=0.0, detected_at=1000.0)
+    b.begin_incident("inc-2", "cam-01", 7, now=1.5, detected_at=1000.5)
+    # Without the fix, close_at would still be 0.0 + 2.0 = 2.0 for both
+    # With the fix, inc-2 extends close_at to max(2.0, 1.5 + 2.0) = 3.5
+    assert b.pop_due(2.5) == []  # Not due yet because of alias extension
+    b.add("cam-01", 7, 3.0, _jpeg(1))
+    [inc] = b.pop_due(3.5)
+    assert _jpeg(1) in inc.crops  # Crop added after first close_at is captured
+    assert inc.alias_ids == [("inc-2", 1000.5)]
