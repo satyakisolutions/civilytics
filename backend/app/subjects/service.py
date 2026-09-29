@@ -13,7 +13,7 @@ import logging
 import shutil
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -52,6 +52,14 @@ class ProcessResult:
     match_type: str | None = None  # new | auto | review
     incident_count: int | None = None
     similarity: float | None = None
+
+
+@dataclass(frozen=True)
+class SweepResult:
+    subjects_deleted: int
+    tombstones_deleted: int
+    no_face_deleted: int
+    incoming_dirs_deleted: int
 
 
 def embedding_to_bytes(vector: np.ndarray) -> bytes:
@@ -285,6 +293,52 @@ class SubjectService:
             (self._faces_dir / "subjects" / str(subject_id)).rmdir()
         except OSError:
             pass
+
+    # ── retention and index maintenance (spec §11) ─────────────────
+
+    async def sweep(self, now: datetime | None = None) -> SweepResult:
+        now = now or utcnow()
+        cutoff = now - timedelta(days=self.settings.retention_days)
+        short_cutoff = now - timedelta(days=self.settings.incoming_retention_days)
+        async with self.session_factory() as s:
+            stale = list((await s.execute(
+                select(Subject.id).where(Subject.status == "active", Subject.last_seen_at < cutoff)
+            )).scalars())
+        for subject_id in stale:
+            await self.delete_subject(subject_id, actor="system:retention", reason="retention")
+        async with self.session_factory() as s:
+            tombstones = list((await s.execute(
+                select(Subject.id).where(Subject.status == "merged", Subject.created_at < cutoff)
+            )).scalars())
+            if tombstones:
+                await s.execute(delete(SubjectMatchReview).where(
+                    SubjectMatchReview.new_subject_id.in_(tombstones)
+                    | SubjectMatchReview.candidate_subject_id.in_(tombstones)
+                ))
+                await s.execute(update(Subject).where(Subject.merged_into_id.in_(tombstones)).values(merged_into_id=None))
+                await s.execute(delete(Subject).where(Subject.id.in_(tombstones)))
+            no_face = await s.execute(delete(FaceIncident).where(
+                FaceIncident.status.in_(("no_face", "deleted")), FaceIncident.created_at < short_cutoff
+            ))
+            await s.commit()
+        removed_dirs = 0
+        incoming = self._faces_dir / "incoming"
+        if incoming.is_dir():
+            for folder in incoming.iterdir():
+                modified = datetime.fromtimestamp(folder.stat().st_mtime, tz=timezone.utc)
+                if folder.is_dir() and modified < short_cutoff:
+                    shutil.rmtree(folder, ignore_errors=True)
+                    removed_dirs += 1
+        result = SweepResult(len(stale), len(tombstones), no_face.rowcount or 0, removed_dirs)
+        logger.info("Subject retention sweep: %s", result)
+        return result
+
+    async def resync_index(self, limit: int = 500) -> int:
+        async with self.session_factory() as s:
+            rows = list((await s.execute(
+                select(SubjectFace).where(SubjectFace.qdrant_synced.is_(False)).limit(limit)
+            )).scalars())
+        return await self._index_faces(rows)
 
     # ── helpers (shared with operator actions / retention) ─────────
 
