@@ -16,6 +16,7 @@ TOPIC_CAMERA_STATUS = "wastewatch.camera.status"
 TOPIC_HEALTH = "wastewatch.health"
 TOPIC_HEALING = "wastewatch.healing"
 TOPIC_MISSES = "wastewatch.misses"
+TOPIC_FACES_REQUESTS = "wastewatch.faces.requests"
 
 # ---------------------------------------------------------------------------
 # Kafka consumer group IDs
@@ -28,3 +29,4 @@ GROUP_LOG_INGESTION = "wastewatch.group.log-ingestion"
 GROUP_ESCALATION = "wastewatch.group.escalation"
 GROUP_HEALTH_MONITOR = "wastewatch.group.health-monitor"
 GROUP_HEALER = "wastewatch.group.healer"
+GROUP_SUBJECT_WORKER = "wastewatch.group.subject-worker"
