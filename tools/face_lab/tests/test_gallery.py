@@ -27,6 +27,17 @@ def test_first_visit_is_new_then_same_face_is_repeat():
     assert again.similarity == pytest.approx(0.8, abs=1e-3)
 
 
+def test_match_while_still_present_is_same_visit_not_repeat():
+    g = Gallery()
+    v = unit(1)
+    g.enroll([(0.8, v)], when=10.0)
+    g.touch(1, 12.0)
+    same = g.enroll([(0.8, with_similarity(v, 0.8, 7))], when=13.0, visit_start=14.0, continuation_gap_s=3.0)
+    assert (same.kind, same.code, same.incident_count) == ("same", "S-001", 1)
+    later = g.enroll([(0.8, with_similarity(v, 0.8, 8))], when=30.0, visit_start=29.0, continuation_gap_s=3.0)
+    assert (later.kind, later.incident_count) == ("auto", 2)
+
+
 def test_uncertain_match_creates_new_subject_with_candidate():
     g = Gallery()
     v = unit(1)

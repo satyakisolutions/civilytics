@@ -16,8 +16,19 @@ COLORS = {
 }
 
 
+def display_status(visit: Visit) -> str:
+    """A "same" visit (split presence) shows like the subject's own state: New or Repeat."""
+    if visit.status == "same":
+        return "new" if visit.result.incident_count <= 1 else "repeat"
+    return visit.status
+
+
 def visit_label(visit: Visit, need_samples: int) -> str:
     r = visit.result
+    if visit.status == "same":
+        if r.incident_count <= 1:
+            return f"{r.code} - New"
+        return f"{r.code} - Repeat x{r.incident_count}"
     if visit.status == "new":
         return f"{r.code} - New"
     if visit.status == "repeat":
@@ -35,7 +46,7 @@ def draw(frame: np.ndarray, visits: list[Visit], need_samples: int, stats: str) 
     out = frame.copy()
     for visit in visits:
         x1, y1, x2, y2 = (int(v) for v in visit.bbox)
-        color = COLORS.get(visit.status, (255, 255, 255))
+        color = COLORS.get(display_status(visit), (255, 255, 255))
         thickness = 2 if visit.obs is not None else 1  # thin = not seen in the latest processed frame
         cv2.rectangle(out, (x1, y1), (x2, y2), color, thickness)
         label = visit_label(visit, need_samples)

@@ -31,7 +31,8 @@ class Subject:
 
 @dataclass(frozen=True)
 class EnrollResult:
-    kind: str                  # "new" | "auto" | "review"
+    kind: str                  # "new" | "auto" | "review" | "same" (continuation of a visit in progress)
+    code_num: int
     code: str
     incident_count: int
     similarity: float | None   # best match score against existing subjects
@@ -56,27 +57,51 @@ class Gallery:
             scores[code_num] = best
         return scores
 
-    def enroll(self, samples: list[tuple[float, np.ndarray]], when: float) -> EnrollResult:
-        """Match one visit's faces (quality, embedding) and record the incident."""
+    def enroll(
+        self,
+        samples: list[tuple[float, np.ndarray]],
+        when: float,
+        visit_start: float | None = None,
+        continuation_gap_s: float = 0.0,
+    ) -> EnrollResult:
+        """Match one visit's faces (quality, embedding) and record the incident.
+
+        If the matched subject was still being seen when this visit started
+        (last_seen + continuation_gap_s >= visit_start), the visit is the same
+        presence split in two (head turn, missed frames) -- kind "same", and the
+        incident count is NOT increased. Mirrors the feature's one-episode rule.
+        """
         if not samples:
             raise ValueError("enroll needs at least one face sample")
         embeddings = [e for _, e in samples]
         decision = decide(self.best_scores(embeddings), self.match_auto, self.match_review)
         candidate_code = None
+        kind = decision.kind
         if decision.kind == "auto":
             subject = self.subjects[decision.subject_id]
+            if visit_start is not None and visit_start <= subject.last_seen + continuation_gap_s:
+                kind = "same"
         else:
             if decision.kind == "review":
                 candidate_code = self.subjects[decision.subject_id].code
             subject = Subject(code_num=max(self.subjects, default=0) + 1, first_seen=when)
             self.subjects[subject.code_num] = subject
-        subject.incident_count += 1
-        subject.last_seen = when
+        if kind != "same":
+            subject.incident_count += 1
+        subject.last_seen = max(subject.last_seen, when)
         for quality, embedding in samples:
             subject.embeddings.append(np.asarray(embedding, dtype=np.float32))
             subject.qualities.append(float(quality))
         self._cap(subject)
-        return EnrollResult(decision.kind, subject.code, subject.incident_count, decision.score, candidate_code)
+        return EnrollResult(
+            kind, subject.code_num, subject.code, subject.incident_count, decision.score, candidate_code
+        )
+
+    def touch(self, code_num: int, when: float) -> None:
+        """The subject is still in view (keeps a continuing presence from counting as a repeat)."""
+        subject = self.subjects.get(code_num)
+        if subject is not None:
+            subject.last_seen = max(subject.last_seen, when)
 
     def _cap(self, subject: Subject) -> None:
         order = sorted(range(len(subject.qualities)), key=lambda i: -subject.qualities[i])[: self.max_faces]

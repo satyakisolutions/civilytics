@@ -42,6 +42,19 @@ def test_visit_matched_once_after_enough_samples_then_repeat_on_return():
     assert [(r.status, r.result.code, r.result.incident_count) for r in results][-1] == ("repeat", "S-001", 2)
 
 
+def test_same_person_split_into_two_visits_is_not_a_repeat():
+    # One continuous presence tracked as two visits (head turn / missed frames):
+    # the second visit must continue S-001, not count as "Repeat x2".
+    results = []
+    s = Session(Gallery(), need_samples=2, gone_after_s=3.0, on_result=results.append)
+    v = unit(1)
+    run(s, [(0.0, [face(100, v)]), (0.2, [face(102, v)])])            # visit 1 -> S-001 New
+    run(s, [(0.4, [face(700, v)]), (0.6, [face(702, v)])])            # visit 2, same face, 0.4 s later
+    assert [(r.status, r.result.code, r.result.incident_count) for r in results] == [
+        ("new", "S-001", 1), ("same", "S-001", 1),
+    ]
+
+
 def test_two_people_in_view_get_two_ids():
     results = []
     s = Session(Gallery(), need_samples=1, on_result=results.append)

@@ -41,7 +41,7 @@ class Visit:
     obs: FaceObs | None = None         # face in the latest processed frame (None if not seen)
     samples: list[tuple[float, np.ndarray, np.ndarray]] = field(default_factory=list)  # (quality, embedding, aligned)
     first_good_at: float | None = None
-    status: str = "collecting"         # collecting | new | repeat | review | no_face
+    status: str = "collecting"         # collecting | new | repeat | review | same | no_face
     result: EnrollResult | None = None
 
     @property
@@ -86,6 +86,8 @@ class Session:
         for visit in self.active.values():
             if not visit.decided and self._ready(visit, now):
                 self._decide(visit, now)
+            if visit.result is not None and visit.obs is not None:
+                self.gallery.touch(visit.result.code_num, now)
         for visit_id in [vid for vid, v in self.active.items() if now - v.last_seen > self.gone_after_s]:
             self._close(self.active.pop(visit_id), now)
         return list(self.active.values())
@@ -130,9 +132,14 @@ class Session:
         return len(visit.samples) >= self.need_samples or now - visit.first_good_at >= self.collect_s
 
     def _decide(self, visit: Visit, now: float) -> None:
-        result = self.gallery.enroll([(q, e) for q, e, _ in visit.samples], now)
+        result = self.gallery.enroll(
+            [(q, e) for q, e, _ in visit.samples], now,
+            visit_start=visit.first_seen, continuation_gap_s=self.gone_after_s,
+        )
         visit.result = result
-        if result.kind == "auto":
+        if result.kind == "same":
+            visit.status = "same"
+        elif result.kind == "auto":
             visit.status = "repeat"
         elif result.kind == "review":
             visit.status = "review"
