@@ -32,6 +32,7 @@ sys.path.insert(0, str(HERE))
 from facelab import DEFAULT_MODELS_DIR  # noqa: E402
 from facelab.faces import FaceAnalyzer, MultiFaceDetector  # noqa: E402
 from facelab.gallery import Gallery  # noqa: E402
+from facelab.mjpeg import MjpegServer  # noqa: E402
 from facelab.overlay import draw  # noqa: E402
 from facelab.session import Session, Visit  # noqa: E402
 from facelab.source import FrameSource  # noqa: E402
@@ -62,6 +63,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--gallery", type=Path, default=None, help="folder to load/save subjects so IDs survive restarts")
     p.add_argument("--out", type=Path, default=HERE / "runs", help="where run logs and face crops are written")
     p.add_argument("--no-display", action="store_true", help="no window; print results only")
+    p.add_argument("--serve-port", type=int, default=0,
+                   help="also stream the annotated view as MJPEG over HTTP on this port (e.g. 8090; 0 = off)")
+    p.add_argument("--serve-host", default="127.0.0.1",
+                   help="address to serve on; 0.0.0.0 lets other machines on the network watch (shows faces!)")
     p.add_argument("--max-seconds", type=float, default=0.0, help="stop after this many seconds (0 = run until q / end of file)")
     return p.parse_args(argv)
 
@@ -145,6 +150,15 @@ def main(argv=None) -> int:
     source = FrameSource(args.source, rtsp_tcp=not args.udp)
     source.start()
     logger.info("Run folder: %s", log.dir)
+    server = None
+    if args.serve_port:
+        server = MjpegServer(args.serve_host, args.serve_port)
+        server.start()
+        shown_host = "localhost" if args.serve_host in ("127.0.0.1", "0.0.0.0") else args.serve_host
+        logger.info("Streaming annotated view: http://%s:%d/stream.mjpg (open in VLC or a browser)",
+                    shown_host, server.port)
+        if args.serve_host == "0.0.0.0":
+            logger.warning("Stream is reachable from other machines on this network and shows faces.")
 
     window = "Face-ID lab (q quit, r reset, s snapshot)"
     min_gap = 1.0 / args.process_fps if args.process_fps > 0 else 0.0
@@ -168,10 +182,14 @@ def main(argv=None) -> int:
                 fps_frames += 1
                 if time.monotonic() - fps_t0 >= 1.0:
                     fps, fps_frames, fps_t0 = fps_frames / (time.monotonic() - fps_t0), 0, time.monotonic()
-            if args.no_display:
+            if args.no_display and server is None:
                 continue
             stats = f"proc {fps:.1f} fps | subjects {len(gallery.subjects)} | in view {len(visits)}"
             shown = draw(frame, visits, args.need_samples, stats)
+            if server is not None:
+                server.publish(shown)
+            if args.no_display:
+                continue
             if shown.shape[1] > 1600:
                 scale = 1600 / shown.shape[1]
                 shown = cv2.resize(shown, (1600, int(shown.shape[0] * scale)))
@@ -192,6 +210,8 @@ def main(argv=None) -> int:
     finally:
         session.finish(now)
         source.stop()
+        if server is not None:
+            server.stop()
         log.close()
         if not args.no_display:
             cv2.destroyAllWindows()

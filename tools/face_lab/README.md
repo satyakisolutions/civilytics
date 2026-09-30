@@ -56,6 +56,23 @@ If the picture smears or freezes, the default is already RTSP over TCP; try `--u
 
 Keys in the window: `q` quit, `r` reset all IDs, `s` save a snapshot.
 
+### Watch the annotated view in VLC or a browser (HTTP)
+
+```bash
+.venv/Scripts/python run_face_lab.py --source "rtsp://..." --no-display --serve-port 8090
+```
+
+Open `http://localhost:8090/stream.mjpg`:
+
+- **VLC:** Media → Open Network Stream.
+- **Browser:** paste the URL into the address bar.
+
+`http://localhost:8090/snapshot.jpg` gives the current frame. The stream is only reachable
+from this machine by default. To watch from another PC, add `--serve-host 0.0.0.0` and open
+`http://<this-PC's-IP>:8090/stream.mjpg` there. Anyone on the network can then see the faces,
+so use this only on a trusted network. You can drop `--no-display` to have the OpenCV window
+and the HTTP stream at the same time.
+
 Every run writes a folder under `runs/<date-time>/` with `results.csv` (one row
 per visit) and `faces/` (the best face per visit, named by subject and status).
 These are faces of real people: they stay local and are git-ignored.
