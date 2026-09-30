@@ -118,3 +118,40 @@ async def test_alert_consumer_stores_incident_id(monkeypatch):
         "suppress_tts": True, "incident_id": "garbage",
     })
     assert captured["params"]["incident_id"] is None
+
+
+async def test_list_alerts_face_result_timeout(alerts_client, session_factory):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    async with session_factory() as s:
+        s.add(Alert(severity=AlertSeverity.critical, title="young", status=AlertStatus.active,
+                    incident_id=uuid.uuid4(), timestamp=now - timedelta(seconds=10)))
+        s.add(Alert(severity=AlertSeverity.critical, title="old", status=AlertStatus.active,
+                    incident_id=uuid.uuid4(), timestamp=now - timedelta(seconds=200)))
+        s.add(Alert(severity=AlertSeverity.warning, title="old without incident", status=AlertStatus.active,
+                    timestamp=now - timedelta(seconds=200)))
+        await s.commit()
+    by_title = {a["title"]: a for a in (await alerts_client.get("/api/alerts")).json()}
+    assert by_title["young"]["face_status"] is None
+    assert by_title["old"]["face_status"] == "no_face"
+    assert by_title["old"]["subject_code"] is None
+    assert by_title["old without incident"]["face_status"] is None
+
+
+def test_face_result_timed_out_handles_naive_and_aware():
+    from datetime import datetime, timedelta, timezone
+
+    from app.api.routes.alerts import FACE_RESULT_TIMEOUT_S, _face_result_timed_out
+
+    assert FACE_RESULT_TIMEOUT_S == 120
+    now = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
+    old_aware = now - timedelta(seconds=121)
+    young_aware = now - timedelta(seconds=119)
+    assert _face_result_timed_out(old_aware, now) is True
+    assert _face_result_timed_out(young_aware, now) is False
+    assert _face_result_timed_out(old_aware.replace(tzinfo=None), now) is True
+    assert _face_result_timed_out(young_aware.replace(tzinfo=None), now) is False
+    ist = timezone(timedelta(hours=5, minutes=30))
+    assert _face_result_timed_out(young_aware.astimezone(ist), now) is False
+    assert _face_result_timed_out(None, now) is False

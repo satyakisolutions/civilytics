@@ -904,3 +904,4 @@ linked automatically when the face match is confident, or queued for operator re
 - Face images live only in the `faces_private` volume and are served only via `/api/subjects/faces/{id}` (admin, access-logged).
 - Models: `python scripts/download_face_models.py` (InsightFace buffalo_l — **non-commercial research licence**; a paid deployment needs a commercial licence or a replacement model).
 - Only the Python metadata path fires alerts, so faces are not captured when the native `wastewatchmeta` plugin path is active.
+- Face processing and the `incoming/` clean-up depend on the `subject-worker` service running: while it is down, captured crops wait in `faces_private/incoming/` and alerts show `Face not captured` once 120 s pass without a result (`FACE_RESULT_TIMEOUT_S`); a worker that comes back later still processes the queued requests and the badge then updates.
