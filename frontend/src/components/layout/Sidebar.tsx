@@ -17,7 +17,9 @@ import {
   Map,
   PlayCircle,
   XCircle,
+  Users,
 } from 'lucide-react';
+import { usePendingReviewCount } from '@/hooks/usePendingReviewCount';
 import { cn } from '@/lib/utils';
 import { API_BASE } from '@/lib/api-base';
 import { useMonitoring } from '@/context/MonitoringContext';
@@ -35,6 +37,7 @@ const navigationItems = [
   { id: 'map', label: 'Camera Map', icon: Map },
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
   { id: 'history', label: 'Event History', icon: History },
+  { id: 'subjects', label: 'Subjects', icon: Users },
   { id: 'timeline', label: 'Timeline Playback', icon: PlayCircle },
   { id: 'cameras', label: 'Camera Management', icon: Camera },
   { id: 'settings', label: 'Settings', icon: Settings },
@@ -53,6 +56,7 @@ export function Sidebar({ className }: SidebarProps) {
   } = useMonitoring();
 
   const activeAlerts = alerts.filter(a => a.status === 'active').length;
+  const pendingReviews = usePendingReviewCount();
   const systemStatus = mockSystemStatus;
 
   return (
@@ -137,6 +141,11 @@ export function Sidebar({ className }: SidebarProps) {
             >
               <Icon className={cn('w-4 h-4', isActive && 'text-primary')} />
               <span className="font-medium">{item.label}</span>
+              {item.id === 'subjects' && pendingReviews > 0 && (
+                <Badge variant="secondary" className="ml-auto h-5 px-1.5 text-[10px]" title="Matches waiting for review">
+                  {pendingReviews}
+                </Badge>
+              )}
             </button>
           );
         })}
