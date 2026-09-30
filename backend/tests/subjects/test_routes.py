@@ -138,3 +138,27 @@ async def test_access_log_records_reads(subjects_client, service, session_factor
 async def test_requires_admin_without_dev_mode(subjects_client, monkeypatch):
     monkeypatch.delenv("WW_AUTH_DEV_MODE", raising=False)
     assert (await subjects_client.get("/api/subjects")).status_code == 401
+
+
+async def test_detail_one_row_per_incident_with_earliest_alert(service, session_factory):
+    """Several alerts can share one incident_id (per-track episode): one incident row, earliest alert wins."""
+    from app.subjects.queries import subject_detail
+
+    req = request(camera_id="cam-01", at=T0)
+    res = await service.process_request(req, [face(unit(1))])
+    async with session_factory() as s:
+        s.add(Alert(severity=AlertSeverity.critical, title="Reminder", zone="Zone B",
+                    status=AlertStatus.active, incident_id=req.incident_id,
+                    snapshot_url="/evidence/alerts/cam-01/later.jpg", timestamp=T0 + timedelta(seconds=37)))
+        s.add(Alert(severity=AlertSeverity.critical, title="Waste dumping confirmed", zone="Zone A",
+                    status=AlertStatus.active, incident_id=req.incident_id,
+                    snapshot_url="/evidence/alerts/cam-01/first.jpg", timestamp=T0))
+        s.add(Alert(severity=AlertSeverity.critical, title="Violation confirmed", zone="Zone C",
+                    status=AlertStatus.active, incident_id=req.incident_id,
+                    snapshot_url="/evidence/alerts/cam-01/second.jpg", timestamp=T0 + timedelta(seconds=5)))
+        await s.commit()
+        detail = await subject_detail(s, res.subject_id)
+    [incident] = detail["incidents"]
+    assert (incident["snapshot_url"], incident["zone"], incident["title"]) == (
+        "/evidence/alerts/cam-01/first.jpg", "Zone A", "Waste dumping confirmed",
+    )

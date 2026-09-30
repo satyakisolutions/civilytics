@@ -11,7 +11,7 @@ When a person commits a violation, capture their face at that moment and assign 
 
 Success looks like:
 
-- Every violation alert shows, within ~3 s of firing, either a subject badge or an explicit `Face not captured`.
+- Every violation alert shows, within ~8 s of firing (2 s post-roll + processing + the 5 s alert poll), either a subject badge or an explicit `Face not captured`.
 - A second violation by the same person, with a usable face, lands on the same subject code automatically, or goes to the review queue if the match is uncertain.
 - Operators can correct the system (merge, reject, detach). A wrong automatic match never stays hidden.
 
@@ -29,7 +29,7 @@ Success looks like:
 | D1 | What "marking" means | Tag after the fact: subject ID on each violation, Subjects view, review screen. No live marking. |
 | D2 | Match autonomy | Auto-attach when confident (≥ 0.55 cosine), review queue for 0.40–0.55, new subject below 0.40. |
 | D3 | Where face work runs | Pipeline only captures raw person crops and publishes them. A new CPU `subject-worker` does detection, embedding, matching and storage. |
-| D4 | Incident unit | One alert = one incident. |
+| D4 | Incident unit | One violation episode per person track = one incident. Only a first-fire critical violation for a person starts a face capture; later alerts on the same person track within 600 s of its last alert reuse that incident id (warnings and reminders carry it if one exists, else none). |
 | D5 | Access control | `require_admin` on every subject route now. It is effective once dashboard login exists; under `WW_AUTH_DEV_MODE` it resolves to the mock `dev` user. |
 | D6 | How the badge reaches the dashboard | `GET /api/alerts` joins the subject tables on `incident_id`. The alert panel (`MonitoringContext`) and History already refresh that endpoint every 5 s / 30 s, so there is no `wastewatch.subjects` topic, no `alerts.subject_id` column and no WebSocket message. Merge and detach show up on the next refresh automatically. |
 
@@ -93,7 +93,7 @@ frontend
   - skips the crop if it is smaller than 48×48;
   - encodes a JPEG (quality 90);
   - calls `FaceCropBuffer.add(source_id, track_id, ts, jpeg)`.
-- **Kill switch.** When `WW_FACE_CAPTURE_ENABLED` is not `1`, the raw branch is not built and the hook is a no-op. The pipeline is then byte-for-byte today's behaviour. The code default is off; compose sets it on.
+- **Kill switch.** When `WW_FACE_CAPTURE_ENABLED` is not `1`, the raw branch is not built and the hook is a no-op: alert payloads carry neither `incident_id` nor `person_track_id`, so they are byte-for-byte today's payloads. The code default is off; compose sets it on.
 - **Scope of coverage.** `_fire_waste_alert_async` is only called on the Python metadata path. When the native `wastewatchmeta` C plugin path is active, no Python alerts fire, so no faces are captured. This is recorded as a known limitation.
 
 ### 5.2 `pipeline/app/face_capture.py` (new, pure, unit-tested)
@@ -108,18 +108,22 @@ frontend
   - Opens an incident seeded with a copy of the current ring for that key.
   - Its post-roll closes at `now + 2.0`.
   - If the same `(source_id, track_id)` already has an open incident, the new one is recorded as an alias sharing the same crops.
+    This is defensive only: the §5.3 hook reuses a track's incident id through `TrackIncidents`, so it never begins a second incident for a track within the 600 s TTL.
 - `pop_due(now) -> list[Incident]`: returns and removes incidents whose post-roll has ended.
 - `evict_stale(now)`: drops rings not updated for 5 s.
 - Crops exist only in process memory until an incident closes. Rings of people who never violate are overwritten or evicted within seconds and never touch disk.
 
+`TrackIncidents` (thread-safe): `get_or_create(camera_id, track_id, now) -> (incident_id, is_new)` and `lookup(camera_id, track_id, now) -> incident_id | None`, see §5.3.
+
 ### 5.3 Hook and flusher
 
-- In `_fire_waste_alert_async`, after the dedup check, the hook:
-  - mints `incident_id`;
-  - calls `begin_incident`;
-  - adds `incident_id` and `person_track_id` to the `send_alert` kwargs.
+- `_fire_waste_alert_async` takes `capture_face: bool = False`. Only call sites that fire a first-time critical violation for a person pass `True` (waste dumping confirmed after the person highlight, the dwell-confirmed waste fallback, and the generic FSM `VIOLATION` alert when the violating track is a person). The OBSERVE "Suspicious activity" warning and the periodic "Reminder: … still not cleared" alert pass `False`.
+- After the dedup check, when face capture is enabled, the hook (`alert_incident_fields` in `face_capture.py`) works on `person_track_id = dumped_by_track_id or track_id` and a `TrackIncidents` registry keyed by `(camera_id, person_track_id)` (600 s TTL, refreshed on every use, expired entries evicted lazily):
+  - `capture_face=True`: reuse the track's incident id, or mint a new uuid4; only a newly minted id calls `begin_incident`, so a person is enrolled once per violation episode;
+  - `capture_face=False`: look up the track's existing incident id without creating one (may be none);
+  - adds `incident_id` and `person_track_id` to the `send_alert` kwargs only when there is an incident id.
 
-  It runs on the pad-probe thread, so it does O(1) work only.
+  It runs on the pad-probe thread, so it does O(1) work only (plus lazy eviction over the small registry).
 - A daemon flusher thread handles closed incidents. Every 0.5 s it calls `pop_due`, then for each incident:
   - writes the crops to `/app/faces_private/incoming/{incident_id}/{NN}.jpg`;
   - publishes `wastewatch.faces.requests`.
@@ -282,7 +286,7 @@ Every route depends on `require_admin` and writes `subject_access_log` with acto
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/subjects?repeat_only=bool&sort=incidents\|last_seen&limit&offset` | Active subjects: code, cover face id, incident count, first/last seen, camera ids |
-| GET | `/api/subjects/{id}` | Faces and incident timeline (joined to `alerts` for snapshot URL, camera name/zone, time) |
+| GET | `/api/subjects/{id}` | Faces and incident timeline (joined to the earliest `alerts` row per incident, since several alerts can share one incident id, for snapshot URL, camera name/zone, time) |
 | GET | `/api/subjects/faces/{face_id}` | `FileResponse` of the private crop, `Cache-Control: no-store` |
 | GET | `/api/subjects/reviews?status=pending` | Review items with face ids for both sides |
 | POST | `/api/subjects/reviews/{id}/merge` | |

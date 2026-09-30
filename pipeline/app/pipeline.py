@@ -22,7 +22,6 @@ import sys
 import math
 import threading
 import time
-import uuid
 from pathlib import Path
 from collections import OrderedDict
 from typing import Optional
@@ -44,6 +43,8 @@ from app.event_fsm import EventFSMManager, FSMState
 from app.face_capture import (
     TOPIC_FACES_REQUESTS,
     FaceCropBuffer,
+    TrackIncidents,
+    alert_incident_fields,
     ensure_faces_dirs,
     head_crop_box,
     run_flusher,
@@ -241,6 +242,9 @@ _UNTRACKED_OBJECT_ID = 0xFFFFFFFFFFFFFFFF
 _face_buffer: FaceCropBuffer | None = (
     FaceCropBuffer(postroll_s=_FACE_POSTROLL_S) if _FACE_CAPTURE_ENABLED else None
 )
+# One incident per person-track violation episode (spec D4): a track's
+# incident id is reused by its later alerts for 600 s after its last use.
+_track_incidents = TrackIncidents()
 # Above this many frames of lateness, a "captured requested evidence" match
 # is flagged as degraded (queue drop, not the exact target) instead of
 # logged as a routine success.
@@ -345,8 +349,13 @@ def _fire_waste_alert_async(
     snapshot_exact_cache: dict[tuple[int, int], bytes] | None = None,
     snapshot_target_frame: int | None = None,
     snapshot_capture_requests: set[tuple[int, int]] | None = None,
+    capture_face: bool = False,
 ) -> None:
     """Write the snapshot and publish the alert off the GStreamer pad probe.
+
+    `capture_face=True` only at call sites firing a first-time critical
+    violation for a person: that alert starts (or reuses) the person track's
+    face incident. Warnings and reminders only carry an existing incident id.
 
     No-ops entirely when _ALERTS_DISABLED (WW_ALERTS_DISABLED=1, default)
     -- attribution/FSM/OSD/evidence-capture logic upstream of this call all
@@ -385,15 +394,13 @@ def _fire_waste_alert_async(
             )
             return
         _alert_last_fired_at[camera_id] = now_monotonic
-    # One incident per alert that survives dedup. The id rides on the alert
-    # and on the face request so the API can join them (spec D6).
-    incident_id = str(uuid.uuid4())
-    person_track_id = dumped_by_track_id if dumped_by_track_id is not None else track_id
-    if _face_buffer is not None:
-        _face_buffer.begin_incident(
-            incident_id, camera_id, person_track_id,
-            now=now_monotonic, detected_at=detected_at,
-        )
+    # One incident per person-track violation episode. The id rides on the
+    # alert and on the face request so the API can join them (spec D4/D6).
+    # With face capture disabled this is {} and the payload is unchanged.
+    face_fields = alert_incident_fields(
+        _face_buffer, _track_incidents, camera_id, track_id, dumped_by_track_id,
+        capture_face=capture_face, now=now_monotonic, detected_at=detected_at,
+    )
     has_snapshot = (
         (bool(jpeg_bytes) and len(jpeg_bytes) >= 1000)
         or (snapshot_cache is not None and snapshot_source_id is not None)
@@ -418,8 +425,7 @@ def _fire_waste_alert_async(
             bbox=bbox,
             snapshot_url=snap_url if snapshot_available else None,
             detected_at=detected_at,
-            incident_id=incident_id,
-            person_track_id=person_track_id,
+            **face_fields,
         )
 
     def _run():
@@ -2164,6 +2170,7 @@ def extract_metadata(
                                     snapshot_exact_cache=ctx.get("frame_jpeg_exact_cache"),
                                     snapshot_target_frame=_snapshot_target_frame,
                                     snapshot_capture_requests=ctx.get("frame_capture_requests"),
+                                    capture_face=True,
                                 )
                                 logger.debug(
                                     "WASTE ALERT (post-highlight) %s waste=%d person=%d: dumped by %s; "
@@ -2298,6 +2305,9 @@ def extract_metadata(
                                 dwell_time_s=fsm_event.dwell_time_s,
                                 bbox=bbox_dict,
                                 detected_at=time.time(),
+                                # Only a person has a face to enrol; bag /
+                                # vehicle / waste dwell violations do not.
+                                capture_face=_category == "person",
                             )
                             _fsm_obj.vlm_fired = True
 
@@ -2374,6 +2384,7 @@ def extract_metadata(
                                     dwell_time_s=track_info.dwell_time_s,
                                     bbox=bbox_dict,
                                     detected_at=time.time(),
+                                    capture_face=True,
                                 )
                                 logger.debug(
                                     "WASTE ALERT %s track=%d: %s", camera_id, track_id, _msg

@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,9 @@ RING_SIZE = 6
 MAX_INCIDENT_CROPS = 12
 STALE_AFTER_S = 5.0
 MIN_CROP_PX = 48
+# A person track's incident id is reused while it keeps alerting; after this
+# long without any alert on that track the next violation is a new incident.
+INCIDENT_TTL_S = 600.0
 TOPIC_FACES_REQUESTS = "wastewatch.faces.requests"
 
 TrackKey = tuple  # (camera_id: str, track_id: int)
@@ -132,6 +136,87 @@ class FaceCropBuffer:
     def tracked_count(self) -> int:
         with self._lock:
             return len(self._rings)
+
+
+class TrackIncidents:
+    """Thread-safe (camera_id, track_id) -> incident_id registry.
+
+    One violation episode per person track = one incident (spec D4): repeat
+    violations and reminders for the same track within ``ttl_s`` of its last
+    use share the incident id instead of minting (and enrolling) new ones.
+    Expired entries are evicted lazily on every call.
+    """
+
+    def __init__(self, ttl_s: float = INCIDENT_TTL_S) -> None:
+        self._lock = threading.Lock()
+        self._ttl_s = ttl_s
+        # key -> [incident_id, last_used]
+        self._entries: dict[TrackKey, list] = {}
+
+    def _evict(self, now: float) -> None:
+        expired = [k for k, (_, used) in self._entries.items() if now - used > self._ttl_s]
+        for key in expired:
+            del self._entries[key]
+
+    def get_or_create(self, camera_id: str, track_id: int, now: float) -> tuple[str, bool]:
+        key = (camera_id, track_id)
+        with self._lock:
+            self._evict(now)
+            entry = self._entries.get(key)
+            if entry is not None:
+                entry[1] = now
+                return entry[0], False
+            incident_id = str(uuid.uuid4())
+            self._entries[key] = [incident_id, now]
+            return incident_id, True
+
+    def lookup(self, camera_id: str, track_id: int, now: float) -> str | None:
+        key = (camera_id, track_id)
+        with self._lock:
+            self._evict(now)
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            entry[1] = now
+            return entry[0]
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._entries)
+
+
+def alert_incident_fields(
+    buffer: FaceCropBuffer | None,
+    registry: TrackIncidents,
+    camera_id: str,
+    track_id: int,
+    dumped_by_track_id: int | None,
+    capture_face: bool,
+    now: float,
+    detected_at: float,
+) -> dict:
+    """Extra send_alert kwargs linking an alert to its face incident (spec §5.3).
+
+    - Face capture disabled (``buffer is None``): ``{}`` -- payload unchanged.
+    - ``capture_face`` (first-fire critical violation): reuse the track's
+      incident or mint one; only a new incident starts a crop capture.
+    - Otherwise (warnings, reminders): carry the track's existing incident
+      id if there is one, else nothing.
+    """
+    if buffer is None:
+        return {}
+    person_track_id = dumped_by_track_id if dumped_by_track_id is not None else track_id
+    if capture_face:
+        incident_id, is_new = registry.get_or_create(camera_id, person_track_id, now)
+        if is_new:
+            buffer.begin_incident(
+                incident_id, camera_id, person_track_id, now=now, detected_at=detected_at,
+            )
+    else:
+        incident_id = registry.lookup(camera_id, person_track_id, now)
+    if incident_id is None:
+        return {}
+    return {"incident_id": incident_id, "person_track_id": person_track_id}
 
 
 def ensure_faces_dirs(base_dir: Path) -> None:

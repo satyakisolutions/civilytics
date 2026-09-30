@@ -5,6 +5,8 @@ from pathlib import Path
 
 from app.face_capture import (
     FaceCropBuffer,
+    TrackIncidents,
+    alert_incident_fields,
     ensure_faces_dirs,
     flush_due,
     head_crop_box,
@@ -229,3 +231,137 @@ def test_alias_extends_postroll():
     [inc] = b.pop_due(3.5)
     assert _jpeg(1) in inc.crops  # Crop added after first close_at is captured
     assert inc.alias_ids == [("inc-2", 1000.5)]
+
+
+# ── TrackIncidents (one incident per person-track episode) ──────────
+
+
+def test_track_incidents_mints_then_reuses_within_ttl():
+    reg = TrackIncidents(ttl_s=600.0)
+    first, is_new = reg.get_or_create("cam1", 7, now=100.0)
+    assert is_new is True
+    assert isinstance(first, str) and len(first) == 36
+    again, is_new2 = reg.get_or_create("cam1", 7, now=650.0)
+    assert (again, is_new2) == (first, False)
+
+
+def test_track_incidents_refreshes_last_used_on_every_call():
+    reg = TrackIncidents(ttl_s=600.0)
+    first, _ = reg.get_or_create("cam1", 7, now=0.0)
+    reg.get_or_create("cam1", 7, now=500.0)
+    # 1000 s after mint but only 500 s after last use -> still the same id.
+    assert reg.get_or_create("cam1", 7, now=1000.0) == (first, False)
+    assert reg.lookup("cam1", 7, now=1500.0) == first
+    # lookup refreshed too
+    assert reg.lookup("cam1", 7, now=2050.0) == first
+
+
+def test_track_incidents_expires_after_ttl_and_mints_new():
+    reg = TrackIncidents(ttl_s=600.0)
+    first, _ = reg.get_or_create("cam1", 7, now=0.0)
+    assert reg.lookup("cam1", 7, now=601.0) is None
+    second, is_new = reg.get_or_create("cam1", 7, now=602.0)
+    assert is_new is True and second != first
+
+
+def test_track_incidents_keys_by_camera_and_track():
+    reg = TrackIncidents()
+    a, _ = reg.get_or_create("cam1", 7, now=0.0)
+    b, new_b = reg.get_or_create("cam2", 7, now=0.0)
+    c, new_c = reg.get_or_create("cam1", 8, now=0.0)
+    assert new_b and new_c and len({a, b, c}) == 3
+
+
+def test_track_incidents_lookup_never_creates():
+    reg = TrackIncidents()
+    assert reg.lookup("cam1", 7, now=0.0) is None
+    assert len(reg) == 0
+
+
+def test_track_incidents_evicts_expired_entries_lazily():
+    reg = TrackIncidents(ttl_s=10.0)
+    reg.get_or_create("cam1", 1, now=0.0)
+    reg.get_or_create("cam1", 2, now=0.0)
+    reg.get_or_create("cam1", 3, now=20.0)
+    assert len(reg) == 1
+
+
+def test_track_incidents_is_thread_safe():
+    reg = TrackIncidents()
+    results: list = []
+
+    def worker() -> None:
+        for _ in range(200):
+            results.append(reg.get_or_create("cam1", 1, now=time.monotonic()))
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len({incident_id for incident_id, _ in results}) == 1
+    assert sum(1 for _, is_new in results if is_new) == 1
+
+
+# ── alert_incident_fields (the _fire_waste_alert_async hook) ────────
+
+def test_alert_fields_kill_switch_adds_nothing():
+    reg = TrackIncidents()
+    fields = alert_incident_fields(
+        None, reg, "cam1", track_id=5, dumped_by_track_id=9,
+        capture_face=True, now=0.0, detected_at=1.0,
+    )
+    assert fields == {}
+    assert len(reg) == 0
+
+
+def test_alert_fields_violation_begins_incident_for_dumper():
+    buf = FaceCropBuffer(postroll_s=2.0)
+    buf.add("cam1", 9, 0.0, _jpeg(1))
+    reg = TrackIncidents()
+    fields = alert_incident_fields(
+        buf, reg, "cam1", track_id=5, dumped_by_track_id=9,
+        capture_face=True, now=10.0, detected_at=1000.0,
+    )
+    assert fields["person_track_id"] == 9
+    assert fields["incident_id"] == reg.lookup("cam1", 9, now=10.0)
+    [incident] = buf.pop_due(12.0)
+    assert incident.incident_id == fields["incident_id"]
+    assert incident.track_id == 9
+    assert incident.detected_at == 1000.0
+
+
+def test_alert_fields_second_violation_same_track_reuses_incident_without_new_capture():
+    buf = FaceCropBuffer(postroll_s=2.0)
+    reg = TrackIncidents()
+    first = alert_incident_fields(buf, reg, "cam1", 5, 9, capture_face=True, now=10.0, detected_at=1.0)
+    assert len(buf.pop_due(12.0)) == 1
+    second = alert_incident_fields(buf, reg, "cam1", 6, 9, capture_face=True, now=40.0, detected_at=2.0)
+    assert second == first
+    assert buf.pop_due(100.0) == []
+
+
+def test_alert_fields_non_violation_without_incident_adds_nothing():
+    buf = FaceCropBuffer()
+    reg = TrackIncidents()
+    fields = alert_incident_fields(buf, reg, "cam1", 5, None, capture_face=False, now=0.0, detected_at=1.0)
+    assert fields == {}
+    assert buf.pop_due(100.0) == []
+    assert len(reg) == 0
+
+
+def test_alert_fields_reminder_carries_existing_incident_without_capture():
+    buf = FaceCropBuffer(postroll_s=2.0)
+    reg = TrackIncidents()
+    first = alert_incident_fields(buf, reg, "cam1", 5, 9, capture_face=True, now=10.0, detected_at=1.0)
+    buf.pop_due(12.0)
+    reminder = alert_incident_fields(buf, reg, "cam1", 5, 9, capture_face=False, now=47.0, detected_at=2.0)
+    assert reminder == first
+    assert buf.pop_due(100.0) == []
+
+
+def test_alert_fields_person_track_falls_back_to_track_id():
+    buf = FaceCropBuffer()
+    reg = TrackIncidents()
+    fields = alert_incident_fields(buf, reg, "cam1", 5, None, capture_face=True, now=0.0, detected_at=1.0)
+    assert fields["person_track_id"] == 5

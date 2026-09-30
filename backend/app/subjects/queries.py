@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db.models import Alert, FaceIncident, Subject, SubjectFace, SubjectIncident, SubjectMatchReview, subject_code
 
@@ -95,9 +95,24 @@ async def subject_detail(session, subject_id: uuid.UUID) -> dict | None:
     faces = (await session.execute(
         select(SubjectFace).where(SubjectFace.subject_id == subject_id).order_by(SubjectFace.quality.desc())
     )).scalars().all()
+    # Several alerts can share one incident_id (a person track's violation
+    # episode, spec D4): join only the earliest alert per incident.
+    ranked = (
+        select(
+            Alert.incident_id, Alert.snapshot_url, Alert.zone, Alert.title,
+            func.row_number().over(
+                partition_by=Alert.incident_id, order_by=(Alert.timestamp, Alert.created_at, Alert.id),
+            ).label("rn"),
+        )
+        .where(Alert.incident_id.in_(
+            select(SubjectIncident.incident_id).where(SubjectIncident.subject_id == subject_id)
+        ))
+        .subquery()
+    )
+    first_alert = select(ranked).where(ranked.c.rn == 1).subquery()
     incidents = (await session.execute(
-        select(SubjectIncident, Alert.snapshot_url, Alert.zone, Alert.title)
-        .outerjoin(Alert, Alert.incident_id == SubjectIncident.incident_id)
+        select(SubjectIncident, first_alert.c.snapshot_url, first_alert.c.zone, first_alert.c.title)
+        .outerjoin(first_alert, first_alert.c.incident_id == SubjectIncident.incident_id)
         .where(SubjectIncident.subject_id == subject_id)
         .order_by(SubjectIncident.detected_at.desc())
     )).all()
@@ -132,8 +147,6 @@ async def _review_side(session, subject_id: uuid.UUID) -> dict | None:
 
 
 async def pending_review_count(session) -> int:
-    from sqlalchemy import func
-
     return int((await session.execute(
         select(func.count()).select_from(SubjectMatchReview).where(SubjectMatchReview.status == "pending")
     )).scalar_one())
