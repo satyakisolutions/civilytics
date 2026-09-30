@@ -142,6 +142,16 @@ def test_ensure_faces_dirs_creates_incoming_and_subjects(tmp_path: Path):
     assert (tmp_path / "subjects").is_dir()
 
 
+def test_ensure_faces_dirs_tolerates_chmod_permission_error(tmp_path: Path, monkeypatch):
+    def deny(*a, **k):
+        raise PermissionError("not owner")
+
+    monkeypatch.setattr("app.face_capture.os.chmod", deny)
+    ensure_faces_dirs(tmp_path)
+    assert (tmp_path / "incoming").is_dir()
+    assert (tmp_path / "subjects").is_dir()
+
+
 def test_run_flusher_publishes_and_stops(tmp_path: Path):
     b = FaceCropBuffer(postroll_s=0.0)
     b.begin_incident("inc-1", "cam-01", 7, now=0.0, detected_at=1.0)

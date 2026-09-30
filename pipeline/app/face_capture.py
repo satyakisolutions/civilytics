@@ -135,15 +135,19 @@ class FaceCropBuffer:
 
 
 def ensure_faces_dirs(base_dir: Path) -> None:
-    """Create incoming/ and subjects/ world-writable.
+    """Create incoming/ and subjects/, best-effort world-writable.
 
-    The pipeline runs as root while the backend image runs as appuser; both
-    must be able to create and delete inside these folders.
+    Both containers run as their own non-root ``appuser`` (uids may differ).
+    The images pre-create these folders 0777, so a chmod that fails because the
+    directory is owned by the other container's uid is ignored.
     """
     for sub in ("incoming", "subjects"):
         d = Path(base_dir) / sub
         d.mkdir(parents=True, exist_ok=True)
-        os.chmod(d, 0o777)
+        try:
+            os.chmod(d, 0o777)
+        except PermissionError:
+            pass
 
 
 def write_incident_crops(base_dir: Path, incident_id: str, crops: list) -> list[str]:

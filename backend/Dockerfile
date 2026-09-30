@@ -7,8 +7,9 @@ RUN uv pip install --system -e .
 COPY . .
 
 RUN adduser --disabled-password --gecos "" appuser \
-    && mkdir -p /home/appuser/.cache /tmp/wastewatch/recordings /tmp/wastewatch/evidence /app/faces_private \
-    && chown -R appuser:appuser /home/appuser /tmp/wastewatch /app
+    && mkdir -p /home/appuser/.cache /tmp/wastewatch/recordings /tmp/wastewatch/evidence /app/faces_private/incoming /app/faces_private/subjects \
+    && chown -R appuser:appuser /home/appuser /tmp/wastewatch /app \
+    && chmod -R 0777 /app/faces_private
 
 ENV HOME=/home/appuser \
     HF_HOME=/home/appuser/.cache/huggingface \

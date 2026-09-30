@@ -1534,7 +1534,11 @@ def _attach_face_capture(pipeline, source_manager, kafka_producer) -> None:
     if tee_raw is None or fakesink_raw is None or _face_buffer is None:
         logger.error("Face capture enabled but raw branch missing -- face capture disabled")
         return
-    ensure_faces_dirs(_FACES_PRIVATE_DIR)
+    try:
+        ensure_faces_dirs(_FACES_PRIVATE_DIR)
+    except OSError:
+        logger.error("Face capture disabled: cannot prepare %s", _FACES_PRIVATE_DIR, exc_info=True)
+        return
     state = {
         "last": 0.0,
         "snapshots": OrderedDict(),
