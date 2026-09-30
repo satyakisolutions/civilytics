@@ -49,6 +49,11 @@ def test_stream_delivers_multipart_frames(server):
     assert b"\xff\xd8" in chunk
 
 
+def test_second_server_on_same_port_fails_clearly(server):
+    with pytest.raises(RuntimeError, match="already in use"):
+        MjpegServer("127.0.0.1", server.port)
+
+
 def test_unknown_path_404(server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(f"http://127.0.0.1:{server.port}/nope", timeout=5)

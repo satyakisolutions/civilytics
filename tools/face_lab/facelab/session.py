@@ -48,10 +48,17 @@ class Visit:
     def decided(self) -> bool:
         return self.status != "collecting"
 
-    def add(self, obs: FaceObs, now: float, keep: int = 5) -> None:
+    def add(self, obs: FaceObs, now: float, keep: int = 5,
+            embed: Callable[[FaceObs], np.ndarray] | None = None) -> None:
         self.bbox, self.last_seen, self.obs = obs.bbox, now, obs
-        if not obs.passed:
-            return
+        if not obs.passed or self.decided:
+            return  # after the visit is matched no more faces are needed (no embedding cost)
+        if len(self.samples) >= keep and obs.quality <= self.samples[-1][0]:
+            return  # would not be kept -- skip the embedding
+        if obs.embedding is None:
+            if embed is None:
+                return
+            embed(obs)
         if self.first_good_at is None:
             self.first_good_at = now
         self.samples.append((obs.quality, obs.embedding, obs.aligned))
@@ -69,8 +76,10 @@ class Session:
         iou_threshold: float = 0.25,
         min_no_face_s: float = 1.0,
         on_result: Callable[[Visit], None] | None = None,
+        embed: Callable[[FaceObs], np.ndarray] | None = None,
     ) -> None:
         self.gallery = gallery
+        self.embed = embed
         self.need_samples = need_samples
         self.collect_s = collect_s
         self.gone_after_s = gone_after_s
@@ -115,7 +124,7 @@ class Session:
                 continue
             used_v.add(vid)
             used_f.add(fi)
-            self.active[vid].add(faces[fi], now)
+            self.active[vid].add(faces[fi], now, embed=self.embed)
         for vid, visit in self.active.items():
             if vid not in used_v:
                 visit.obs = None
@@ -123,7 +132,7 @@ class Session:
             if fi not in used_f:
                 visit = Visit(visit_id=self._next_id, bbox=face.bbox, first_seen=now, last_seen=now)
                 self._next_id += 1
-                visit.add(face, now)
+                visit.add(face, now, embed=self.embed)
                 self.active[visit.visit_id] = visit
 
     def _ready(self, visit: Visit, now: float) -> bool:

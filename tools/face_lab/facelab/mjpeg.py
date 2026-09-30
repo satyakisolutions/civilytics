@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 BOUNDARY = "facelabframe"
 
 
+class _ExclusiveHTTPServer(ThreadingHTTPServer):
+    # http.server enables SO_REUSEADDR, which on Windows lets a second process bind the
+    # SAME port silently (clients then hit either one). Fail loudly instead.
+    allow_reuse_address = False
+
+
 class MjpegServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 8090, quality: int = 80, max_width: int = 1280):
         self.quality = quality
@@ -24,7 +30,12 @@ class MjpegServer:
         self._seq = 0
         self._cond = threading.Condition()
         self._closed = False
-        self._httpd = ThreadingHTTPServer((host, port), self._handler_class())
+        try:
+            self._httpd = _ExclusiveHTTPServer((host, port), self._handler_class())
+        except OSError as exc:
+            raise RuntimeError(
+                f"Port {port} is already in use (another face-lab run?). Stop it or use a different --serve-port."
+            ) from exc
         self._httpd.daemon_threads = True
         self._thread: threading.Thread | None = None
 

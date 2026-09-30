@@ -7,8 +7,13 @@ Every face that passes the feature's quality gate is matched once per visit:
   S-004 - maybe S-001? (0.47) uncertain (--review <= similarity < --auto)
 Leaving the view for longer than --gone-s and coming back is a new visit.
 
+Live sources: the picture (window / HTTP stream) runs at the camera's frame rate;
+face processing runs on its own thread as fast as the device allows (GPU with
+onnxruntime-directml, see README) and its latest boxes are drawn on every frame.
+
 Examples:
   python run_face_lab.py --source "rtsp://user:pass@192.168.1.64:554/Streaming/Channels/101"
+  python run_face_lab.py --source "rtsp://..." --no-display --serve-port 8090
   python run_face_lab.py --source clip.mp4 --no-display
   python run_face_lab.py --source 0          # laptop webcam
 
@@ -20,6 +25,7 @@ import argparse
 import csv
 import logging
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -30,27 +36,32 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from facelab import DEFAULT_MODELS_DIR  # noqa: E402
-from facelab.faces import FaceAnalyzer, MultiFaceDetector  # noqa: E402
+from facelab.faces import Embedder, FaceAnalyzer, MultiFaceDetector, resolve_providers  # noqa: E402
 from facelab.gallery import Gallery  # noqa: E402
 from facelab.mjpeg import MjpegServer  # noqa: E402
-from facelab.overlay import draw  # noqa: E402
+from facelab.overlay import OverlayItem, draw_items, overlay_items  # noqa: E402
 from facelab.session import Session, Visit  # noqa: E402
 from facelab.source import FrameSource  # noqa: E402
 from app.subjects.config import SubjectSettings  # noqa: E402
-from app.subjects.embedder import ArcFaceEmbedder  # noqa: E402
 
 logger = logging.getLogger("face_lab")
 DEFAULTS = SubjectSettings()
+WINDOW = "Face-ID lab (q quit, r reset, s snapshot)"
 
 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--source", required=True, help="RTSP URL, video file path, or webcam index (e.g. 0)")
     p.add_argument("--udp", action="store_true", help="use RTSP over UDP (default TCP)")
+    p.add_argument("--no-hw-decode", action="store_true",
+                   help="decode video on the CPU (default: GPU decoding when available)")
+    p.add_argument("--device", choices=["auto", "gpu", "cpu"], default="auto",
+                   help="inference device: auto = GPU if onnxruntime-directml/CUDA is installed, else CPU")
     p.add_argument("--models-dir", type=Path, default=DEFAULT_MODELS_DIR, help="folder with det_10g.onnx and w600k_r50.onnx")
-    p.add_argument("--det-size", type=int, default=640, help="detector input size (640 for whole frames; larger finds smaller faces, slower)")
+    p.add_argument("--det-size", type=int, default=640, help="detector input size (GPU/DirectML supports 640 only)")
     p.add_argument("--det-thresh", type=float, default=0.5)
-    p.add_argument("--process-fps", type=float, default=5.0, help="max frames per second sent to face processing")
+    p.add_argument("--process-fps", type=float, default=0.0,
+                   help="cap on face-processing rate (0 = as fast as the device allows)")
     p.add_argument("--auto", type=float, default=DEFAULTS.match_auto, help="similarity for automatic repeat match")
     p.add_argument("--review", type=float, default=DEFAULTS.match_review, help="similarity for 'maybe same person'")
     p.add_argument("--min-px", type=float, default=DEFAULTS.min_px, help="minimum face width in pixels")
@@ -123,6 +134,82 @@ class RunLog:
         self._file.close()
 
 
+class RateMeter:
+    def __init__(self):
+        self.fps, self._n, self._t0 = 0.0, 0, time.monotonic()
+
+    def tick(self) -> None:
+        self._n += 1
+        elapsed = time.monotonic() - self._t0
+        if elapsed >= 1.0:
+            self.fps, self._n, self._t0 = self._n / elapsed, 0, time.monotonic()
+
+
+class Processor(threading.Thread):
+    """Face processing on its own thread: newest frame in, overlay items out."""
+
+    def __init__(self, source: FrameSource, analyzer: FaceAnalyzer, session: Session, need_samples: int, min_gap: float):
+        super().__init__(name="face-processor", daemon=True)
+        self.source, self.analyzer, self.session = source, analyzer, session
+        self.need_samples, self.min_gap = need_samples, min_gap
+        self.meter = RateMeter()
+        self.reset_requested = threading.Event()
+        self.error: BaseException | None = None
+        self.last_ts = 0.0
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._items: list[OverlayItem] = []
+        self._in_view = 0
+
+    def snapshot(self) -> tuple[list[OverlayItem], float, int]:
+        with self._lock:
+            return self._items, self.meter.fps, self._in_view
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def run(self) -> None:
+        seq, last_processed = -1, -1e9
+        try:
+            while not self._stop_event.is_set():
+                frame, ts, seq = self.source.wait_new(seq, timeout=1.0)
+                if frame is None or ts - last_processed < self.min_gap:
+                    continue
+                last_processed = self.last_ts = ts
+                if self.reset_requested.is_set():
+                    self.session.finish(ts)
+                    self.session.gallery.subjects.clear()
+                    self.reset_requested.clear()
+                    logger.info("Gallery reset")
+                visits = self.session.step(self.analyzer.analyze(frame), ts)
+                items = overlay_items(visits, self.need_samples)
+                with self._lock:
+                    self._items, self._in_view = items, len(visits)
+                self.meter.tick()
+        except BaseException as exc:  # surface to the main loop instead of dying silently
+            self.error = exc
+            logger.exception("Face processing stopped")
+
+
+def present(frame, items, stats, args, server, log) -> str:
+    """Draw, stream and show one frame. Returns the key pressed ("q", "r", ...) or ""."""
+    shown = draw_items(frame, items, stats)
+    if server is not None:
+        server.publish(shown)
+    if args.no_display:
+        return ""
+    if shown.shape[1] > 1600:
+        shown = cv2.resize(shown, (1600, int(shown.shape[0] * 1600 / shown.shape[1])))
+    cv2.imshow(WINDOW, shown)
+    code = cv2.waitKey(1) & 0xFF
+    key = chr(code) if code != 255 else ""
+    if key == "s":
+        path = log.dir / f"snapshot_{datetime.now().strftime('%H%M%S')}.jpg"
+        cv2.imwrite(str(path), shown)
+        logger.info("Saved %s", path)
+    return key
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -131,12 +218,14 @@ def main(argv=None) -> int:
         min_det=args.min_det, min_px=args.min_px, min_sharpness=args.min_sharpness, max_yaw=args.max_yaw,
         match_auto=args.auto, match_review=args.review,
     )
+    providers = resolve_providers(args.device)
     logger.info("Loading models from %s", args.models_dir)
-    analyzer = FaceAnalyzer(
-        MultiFaceDetector(str(det_path), input_size=(args.det_size, args.det_size), det_thresh=args.det_thresh),
-        ArcFaceEmbedder(str(rec_path)),
-        settings,
-    )
+    detector = MultiFaceDetector(str(det_path), input_size=(args.det_size, args.det_size),
+                                 det_thresh=args.det_thresh, providers=providers)
+    analyzer = FaceAnalyzer(detector, Embedder(str(rec_path), providers=providers), settings)
+    device = "GPU" if detector.provider != "CPUExecutionProvider" else "CPU"
+    logger.info("Inference on %s (%s)", device, detector.provider)
+
     gallery_kwargs = dict(match_auto=args.auto, match_review=args.review, max_faces=settings.max_faces)
     gallery = Gallery.load(args.gallery, **gallery_kwargs) if args.gallery else Gallery(**gallery_kwargs)
     if gallery.subjects:
@@ -145,9 +234,9 @@ def main(argv=None) -> int:
     log = RunLog(args.out)
     session = Session(
         gallery, need_samples=args.need_samples, collect_s=args.collect_s, gone_after_s=args.gone_s,
-        on_result=log.record,
+        on_result=log.record, embed=analyzer.embed,
     )
-    source = FrameSource(args.source, rtsp_tcp=not args.udp)
+    source = FrameSource(args.source, rtsp_tcp=not args.udp, hw_decode=not args.no_hw_decode)
     source.start()
     logger.info("Run folder: %s", log.dir)
     server = None
@@ -160,54 +249,67 @@ def main(argv=None) -> int:
         if args.serve_host == "0.0.0.0":
             logger.warning("Stream is reachable from other machines on this network and shows faces.")
 
-    window = "Face-ID lab (q quit, r reset, s snapshot)"
     min_gap = 1.0 / args.process_fps if args.process_fps > 0 else 0.0
     started = time.monotonic()
-    last_processed = -1e9
-    visits: list[Visit] = []
     now = 0.0
-    fps_frames, fps_t0, fps = 0, time.monotonic(), 0.0
+    processor = None
     try:
-        while True:
-            if args.max_seconds and time.monotonic() - started > args.max_seconds:
-                break
-            frame, now = source.read()
-            if frame is None:
-                if source.ended:
+        if source.live:
+            processor = Processor(source, analyzer, session, args.need_samples, min_gap)
+            processor.start()
+            video = RateMeter()
+            seq = -1
+            while True:
+                if args.max_seconds and time.monotonic() - started > args.max_seconds:
                     break
-                continue
-            if now - last_processed >= min_gap:
-                last_processed = now
-                visits = session.step(analyzer.analyze(frame), now)
-                fps_frames += 1
-                if time.monotonic() - fps_t0 >= 1.0:
-                    fps, fps_frames, fps_t0 = fps_frames / (time.monotonic() - fps_t0), 0, time.monotonic()
-            if args.no_display and server is None:
-                continue
-            stats = f"proc {fps:.1f} fps | subjects {len(gallery.subjects)} | in view {len(visits)}"
-            shown = draw(frame, visits, args.need_samples, stats)
-            if server is not None:
-                server.publish(shown)
-            if args.no_display:
-                continue
-            if shown.shape[1] > 1600:
-                scale = 1600 / shown.shape[1]
-                shown = cv2.resize(shown, (1600, int(shown.shape[0] * scale)))
-            cv2.imshow(window, shown)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                break
-            if key == ord("r"):
-                session.finish(now)
-                gallery.subjects.clear()
-                logger.info("Gallery reset")
-            if key == ord("s"):
-                path = log.dir / f"snapshot_{datetime.now().strftime('%H%M%S')}.jpg"
-                cv2.imwrite(str(path), shown)
-                logger.info("Saved %s", path)
+                if processor.error is not None:
+                    break
+                if args.no_display and server is None:
+                    time.sleep(0.2)
+                    continue
+                frame, _, seq = source.wait_new(seq, timeout=1.0)
+                if frame is None:
+                    continue
+                video.tick()
+                items, face_fps, in_view = processor.snapshot()
+                stats = (f"video {video.fps:.0f} fps | faces {face_fps:.1f} fps ({device}) | "
+                         f"subjects {len(gallery.subjects)} | in view {in_view}")
+                key = present(frame, items, stats, args, server, log)
+                if key == "q":
+                    break
+                if key == "r":
+                    processor.reset_requested.set()
+        else:
+            last_processed, items, meter = -1e9, [], RateMeter()
+            while True:
+                if args.max_seconds and time.monotonic() - started > args.max_seconds:
+                    break
+                frame, now = source.read()
+                if frame is None:
+                    break
+                if now - last_processed >= min_gap:
+                    last_processed = now
+                    visits = session.step(analyzer.analyze(frame), now)
+                    items = overlay_items(visits, args.need_samples)
+                    meter.tick()
+                if args.no_display and server is None:
+                    continue
+                stats = f"faces {meter.fps:.1f} fps ({device}) | subjects {len(gallery.subjects)}"
+                key = present(frame, items, stats, args, server, log)
+                if key == "q":
+                    break
+                if key == "r":
+                    session.finish(now)
+                    gallery.subjects.clear()
+                    items = []
+                    logger.info("Gallery reset")
     except KeyboardInterrupt:
         pass
     finally:
+        if processor is not None:
+            processor.stop()
+            processor.join(timeout=5)
+            now = processor.last_ts
         session.finish(now)
         source.stop()
         if server is not None:
@@ -222,7 +324,7 @@ def main(argv=None) -> int:
     for s in sorted(gallery.subjects.values(), key=lambda s: s.code_num):
         print(f"  {s.code}: {s.incident_count} visit(s), {len(s.embeddings)} stored face(s)")
     print(f"Results: {log.dir / 'results.csv'}")
-    return 0
+    return 1 if processor is not None and processor.error is not None else 0
 
 
 if __name__ == "__main__":

@@ -32,7 +32,33 @@ python -m venv .venv
 ```
 
 The lab uses its own venv on purpose: it needs the GUI build of OpenCV
-(`opencv-python`), and the backend uses the headless one.
+(`opencv-python`), and the backend uses the headless one. **Always run it with
+`.venv/Scripts/python`**, not the system `python`.
+
+### Use the GPU (recommended: 30 fps video, ~20 fps face processing)
+
+```bash
+.venv/Scripts/python -m pip uninstall -y onnxruntime
+.venv/Scripts/python -m pip install -r requirements-gpu.txt
+```
+
+This installs ONNX Runtime with DirectML, which works on any Windows GPU and needs no CUDA install.
+`--device auto` (the default) then uses the GPU, and video is decoded on the GPU too.
+The startup log shows `Inference on GPU` and `Video decoding on GPU`; the stats bar shows both rates.
+
+Measured on this project's laptop (GTX 1650 Ti) with the Axis camera at 1080p:
+
+| Setup | Video (window / HTTP stream) | Face processing |
+|---|---|---|
+| CPU only | ~5 fps | ~3 fps |
+| GPU inference + GPU decoding | ~25–30 fps | ~20 fps |
+
+The picture always runs at the camera's rate. Face processing runs on its own thread, and its latest
+boxes are drawn on every frame. The slow part, the face fingerprint, runs only while a visit is still
+collecting its first good shots.
+
+If 1080p decoding is still slow on a weaker machine, ask the camera for 720p. For Axis, append
+`?resolution=1280x720&fps=30` to the URL. Faces become smaller, so distant faces may show `too small`.
 
 ## Run
 
@@ -49,6 +75,7 @@ The lab uses its own venv on purpose: it needs the GUI build of OpenCV
 ```
 
 Common RTSP URL shapes (check your camera's manual):
+Axis `rtsp://user:pass@IP/axis-media/media.amp?fps=30`;
 Hikvision `rtsp://user:pass@IP:554/Streaming/Channels/101` (main) or `/102` (sub-stream);
 Dahua / CP Plus `rtsp://user:pass@IP:554/cam/realmonitor?channel=1&subtype=0`.
 Use the **main stream** for face tests; sub-streams are usually too low resolution.
@@ -99,7 +126,9 @@ getting the same ID means `--auto` is too low for this camera.
 | `--auto` / `--review` | 0.55 / 0.40 | the match thresholds (the real stack starts at 0.60 for its first week) |
 | `--need-samples` / `--collect-s` | 3 / 2.0 | how many good shots are collected before matching a visit |
 | `--gone-s` | 3.0 | how long someone must be out of view before a return counts as a new visit |
-| `--process-fps` | 5 | lower it if the CPU cannot keep up (the `proc` fps is shown on screen) |
+| `--process-fps` | 0 (unlimited) | cap the face-processing rate to save CPU/GPU |
+| `--device` | auto | `gpu` to require the GPU, `cpu` to compare |
+| `--no-hw-decode` | off | decode video on the CPU if GPU decoding misbehaves |
 
 ## Tests
 

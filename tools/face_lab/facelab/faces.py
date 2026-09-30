@@ -1,16 +1,48 @@
-"""Multi-face detection + per-face quality gate and embedding, using the feature's code."""
+"""Multi-face detection + per-face quality gate and embedding, using the feature's code.
+
+Inference can run on the GPU: `--device gpu|auto` uses ONNX Runtime's DirectML
+(any Windows GPU, needs the `onnxruntime-directml` package) or CUDA when
+installed, and falls back to the CPU.
+"""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
+import onnxruntime as ort
 
 import facelab  # noqa: F401  (puts backend/ on sys.path)
 from app.subjects.config import SubjectSettings
 from app.subjects.detector import FaceDetection, ScrfdDetector, decode_stride, letterbox
 from app.subjects.embedder import ArcFaceEmbedder, align_face
 from app.subjects.quality import laplacian_sharpness, quality_score, yaw_proxy
+
+logger = logging.getLogger(__name__)
+GPU_PROVIDERS = ("CUDAExecutionProvider", "DmlExecutionProvider")
+
+
+def resolve_providers(device: str) -> list[str]:
+    """ONNX Runtime providers for --device auto|gpu|cpu (GPU first, CPU fallback)."""
+    if device == "cpu":
+        return ["CPUExecutionProvider"]
+    available = ort.get_available_providers()
+    gpu = [p for p in GPU_PROVIDERS if p in available]
+    if not gpu:
+        if device == "gpu":
+            raise RuntimeError(
+                "No GPU provider in this onnxruntime build "
+                f"(available: {available}). Install onnxruntime-directml -- see README."
+            )
+        return ["CPUExecutionProvider"]
+    return [gpu[0], "CPUExecutionProvider"]
+
+
+def _session(model_path: str, providers: list[str]) -> ort.InferenceSession:
+    options = ort.SessionOptions()
+    options.log_severity_level = 3  # silence shape-mismatch warnings from dynamic input sizes
+    return ort.InferenceSession(model_path, sess_options=options, providers=providers)
 
 
 def nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float) -> list[int]:
@@ -40,6 +72,17 @@ class MultiFaceDetector(ScrfdDetector):
     camera frames, so it needs all faces plus NMS.
     """
 
+    def __init__(self, model_path: str, input_size=(640, 640), det_thresh: float = 0.5,
+                 providers: list[str] | None = None):
+        providers = providers or ["CPUExecutionProvider"]
+        if providers[0] == "DmlExecutionProvider" and tuple(input_size) != (640, 640):
+            # det_10g's reshape nodes are fixed to 640 on DirectML (other sizes crash).
+            logger.warning("DirectML runs det_10g only at 640x640 -- using 640")
+            input_size = (640, 640)
+        super().__init__(model_path, input_size=input_size, det_thresh=det_thresh)
+        self._session = _session(model_path, providers)
+        self.provider = self._session.get_providers()[0]
+
     def detect_all(self, img_bgr: np.ndarray, nms_iou: float = 0.4) -> list[FaceDetection]:
         det_img, scale = letterbox(img_bgr, self._input_size)
         blob = cv2.dnn.blobFromImage(
@@ -65,6 +108,15 @@ class MultiFaceDetector(ScrfdDetector):
         ]
 
 
+class Embedder(ArcFaceEmbedder):
+    """The feature's ArcFace embedder on the chosen ONNX Runtime providers."""
+
+    def __init__(self, model_path: str, providers: list[str] | None = None):
+        super().__init__(model_path)
+        self._session = _session(model_path, providers or ["CPUExecutionProvider"])
+        self._input_name = self._session.get_inputs()[0].name
+
+
 def gate_reason(det_score: float, width: float, sharpness: float, yaw: float, s: SubjectSettings) -> str | None:
     """Why a face fails the feature's quality gate (same checks as quality.passes_gate), or None."""
     if det_score < s.min_det:
@@ -88,7 +140,7 @@ class FaceObs:
     yaw: float
     reason: str | None        # None = passed the quality gate
     quality: float            # 0 when the gate failed
-    embedding: np.ndarray | None  # only for faces that passed
+    embedding: np.ndarray | None  # filled on demand (only while a visit still collects faces)
     aligned: np.ndarray       # 112x112 BGR aligned face
 
     @property
@@ -102,7 +154,9 @@ class FaceAnalyzer:
         self._embedder = embedder
         self._settings = settings
 
-    def analyze(self, frame: np.ndarray) -> list[FaceObs]:
+    def analyze(self, frame: np.ndarray, with_embeddings: bool = False) -> list[FaceObs]:
+        """Detect faces and apply the quality gate. Embeddings (the slow part) only
+        when asked -- the live loop computes them on demand via embed()."""
         faces: list[FaceObs] = []
         for det in self._detector.detect_all(frame):
             width = float(det.bbox[2] - det.bbox[0])
@@ -114,15 +168,18 @@ class FaceAnalyzer:
             yaw = yaw_proxy(det.kps)
             reason = gate_reason(det.score, width, sharpness, yaw, self._settings)
             passed = reason is None
-            faces.append(FaceObs(
-                bbox=det.bbox,
-                det_score=det.score,
-                width=width,
-                sharpness=sharpness,
-                yaw=yaw,
+            obs = FaceObs(
+                bbox=det.bbox, det_score=det.score, width=width, sharpness=sharpness, yaw=yaw,
                 reason=reason,
                 quality=quality_score(det.score, width, sharpness, yaw) if passed else 0.0,
-                embedding=self._embedder.embed(aligned) if passed else None,
-                aligned=aligned,
-            ))
+                embedding=None, aligned=aligned,
+            )
+            if with_embeddings and passed:
+                self.embed(obs)
+            faces.append(obs)
         return faces
+
+    def embed(self, obs: FaceObs) -> np.ndarray:
+        if obs.embedding is None:
+            obs.embedding = self._embedder.embed(obs.aligned)
+        return obs.embedding
