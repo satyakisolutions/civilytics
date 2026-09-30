@@ -5,14 +5,19 @@ import { authHeaders } from '@/lib/subjectsApi';
 export function useAuthedImage(url: string | null): string | null {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
-    if (!url) {
-      setSrc(null);
-      return;
-    }
+    // Clear first: a previous subject's face must never show for another id.
+    setSrc(null);
+    if (!url) return;
     let cancelled = false;
     let objectUrl: string | null = null;
     fetch(url, { headers: authHeaders(), cache: 'no-store' })
-      .then((resp) => (resp.ok ? resp.blob() : null))
+      .then((resp) => {
+        if (!resp.ok) {
+          if (!cancelled) setSrc(null);
+          return null;
+        }
+        return resp.blob();
+      })
       .then((blob) => {
         if (!blob || cancelled) return;
         objectUrl = URL.createObjectURL(blob);
