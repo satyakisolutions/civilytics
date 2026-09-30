@@ -18,6 +18,9 @@ import {
 } from 'lucide-react';
 import { Alert } from '@/types/monitoring';
 import { API_BASE } from '@/lib/api-base';
+import { mapSubjectFields } from '@/lib/subjects';
+import { SubjectBadge } from '@/components/subjects/SubjectBadge';
+import { useMonitoring } from '@/context/MonitoringContext';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -68,6 +71,7 @@ export function HistoryView() {
             message: a.message,
             ttsAudioUrl: a.tts_audio_url,
             snapshotUrl: a.snapshot_url ? `${API_BASE}${a.snapshot_url}` : undefined,
+            ...mapSubjectFields(a),
           })));
         }
       } catch { /* ignore */ }
@@ -198,6 +202,7 @@ export function HistoryView() {
 }
 
 function EventRow({ event }: { event: ViolationEvent }) {
+  const { openSubject } = useMonitoring();
   const severityConfig = {
     critical: { icon: AlertTriangle, color: 'text-destructive', badge: 'badge-critical' },
     warning: { icon: AlertTriangle, color: 'text-warning', badge: 'badge-warning' },
@@ -252,6 +257,7 @@ function EventRow({ event }: { event: ViolationEvent }) {
               )}
             </div>
             <span className="text-xs text-muted-foreground">{event.id}</span>
+            <SubjectBadge fields={event as any} onOpen={openSubject} className="mt-1" />
           </div>
         </div>
       </TableCell>

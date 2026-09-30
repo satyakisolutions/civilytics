@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback, useRef, createContext, useContext, Re
 import { GridLayout, Alert, ViolationEvent } from '@/types/monitoring';
 import { mockViolationEvents } from '@/data/mockData';
 import { API_BASE } from '@/lib/api-base';
+import { mapSubjectFields } from '@/lib/subjects';
+
+export type AppView = 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline' | 'subjects';
 
 interface MonitoringContextType {
   gridLayout: GridLayout;
@@ -16,8 +19,10 @@ interface MonitoringContextType {
   setIsAlertPanelOpen: (open: boolean) => void;
   isSoundEnabled: boolean;
   setIsSoundEnabled: (enabled: boolean) => void;
-  currentView: 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline';
-  setCurrentView: (view: 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline') => void;
+  currentView: AppView;
+  setCurrentView: (view: AppView) => void;
+  selectedSubjectId: string | null;
+  openSubject: (id: string | null) => void;
 }
 
 const MonitoringContext = createContext<MonitoringContextType | undefined>(undefined);
@@ -97,6 +102,7 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
           cameraId: a.camera_id,
           zone: a.zone,
           ttsAudioUrl: a.tts_audio_url,
+          ...mapSubjectFields(a),
         }));
       // After clear, only show alerts newer than the clear timestamp
       if (clearedAtRef.current) {
@@ -174,7 +180,12 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('touchstart', unlock);
     };
   }, []);
-  const [currentView, setCurrentView] = useState<'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline'>('monitoring');
+  const [currentView, setCurrentView] = useState<AppView>('monitoring');
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
+  const openSubject = useCallback((id: string | null) => {
+    setSelectedSubjectId(id);
+    if (id) setCurrentView('subjects');
+  }, []);
 
   const acknowledgeAlert = async (id: string) => {
     // Update locally first (instant UI feedback)
@@ -222,6 +233,8 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
         setIsSoundEnabled,
         currentView,
         setCurrentView,
+        selectedSubjectId,
+        openSubject,
       }}
     >
       {children}
