@@ -1,4 +1,6 @@
 import uuid
+from dataclasses import asdict
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +8,7 @@ from app.api.deps import get_db
 from app.auth.middleware import require_viewer, require_admin
 from app.db.models import Alert, AlertStatus
 from app.schemas.alert import AlertResponse, AlertAcknowledge
+from app.subjects.queries import alert_badges
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -24,7 +27,16 @@ async def list_alerts(
     if status is not None:
         stmt = stmt.where(Alert.status == status)
     result = await db.execute(stmt)
-    return result.scalars().all()
+    alerts = result.scalars().all()
+    badges = await alert_badges(db, [a.incident_id for a in alerts if a.incident_id is not None])
+    out = []
+    for alert in alerts:
+        item = AlertResponse.model_validate(alert)
+        badge = badges.get(alert.incident_id) if alert.incident_id is not None else None
+        if badge is not None:
+            item = item.model_copy(update=asdict(badge))
+        out.append(item)
+    return out
 
 
 @router.patch("/{alert_id}", response_model=AlertResponse)
