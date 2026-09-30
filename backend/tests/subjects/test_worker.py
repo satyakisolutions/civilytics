@@ -1,12 +1,13 @@
+import asyncio
 import uuid
 from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.db.models import SubjectIncident
-from app.subjects.worker import SubjectWorker
+from app.subjects.worker import SubjectWorker, _backoff
 
 from tests.subjects.factories import T0, face, unit
 
@@ -32,9 +33,10 @@ class FakeMsg:
 
 
 class FakeConsumer:
-    def __init__(self, values):
+    def __init__(self, values, fail_commits: int = 0):
         self._values = values
         self.commits = 0
+        self.fail_commits = fail_commits
 
     def __aiter__(self):
         return self._gen()
@@ -45,6 +47,9 @@ class FakeConsumer:
 
     async def commit(self):
         self.commits += 1
+        if self.fail_commits:
+            self.fail_commits -= 1
+            raise RuntimeError("CommitFailedError: rebalanced after max_poll_interval_ms")
 
 
 @pytest.fixture
@@ -133,6 +138,96 @@ async def test_consume_loop_commits_after_each_message(make_worker, settings, se
     assert worker._consumer.commits == 3
     async with session_factory() as s:
         assert (await s.execute(select(func.count()).select_from(SubjectIncident))).scalar_one() == 1
+
+
+async def test_consume_loop_survives_commit_failure(make_worker, settings, session_factory):
+    worker = make_worker(FakeAnalyzer([face(unit(1))]))
+    first, second = _payload(settings, uuid.uuid4()), _payload(settings, uuid.uuid4())
+    worker._consumer = FakeConsumer([first, second], fail_commits=1)
+    await worker._consume_loop()
+    assert worker._consumer.commits == 2
+    async with session_factory() as s:
+        assert (await s.execute(select(func.count()).select_from(SubjectIncident))).scalar_one() == 2
+
+
+def test_backoff_is_capped_and_never_overflows():
+    assert _backoff(1.0, 30.0, 1) == 2.0
+    assert _backoff(1.0, 30.0, 3) == 8.0
+    assert _backoff(1.0, 30.0, 10) == 30.0
+    assert _backoff(1.0, 30.0, 5000) == 30.0
+    assert _backoff(0.0, 30.0, 5000) == 0.0
+
+
+async def test_handle_with_retry_integrity_error_is_bounded(make_worker, settings):
+    analyzer = FakeAnalyzer(
+        [face(unit(1))], fail_times=5,
+        fail_exc=IntegrityError("stmt", {}, Exception("duplicate key")),
+    )
+    worker = make_worker(analyzer)
+    assert await worker.handle_with_retry(_payload(settings, uuid.uuid4()), attempts=3, backoff_s=0) is None
+    assert len(analyzer.calls) == 3
+
+
+async def test_handle_with_retry_retries_connection_errors_without_bound(make_worker, settings):
+    analyzer = FakeAnalyzer([face(unit(1))], fail_times=4, fail_exc=ConnectionRefusedError("qdrant down"))
+    worker = make_worker(analyzer)
+    result = await worker.handle_with_retry(_payload(settings, uuid.uuid4()), attempts=1, backoff_s=0)
+    assert result.status == "matched"
+    assert len(analyzer.calls) == 5
+
+
+class CrashingConsumer:
+    """aiokafka stand-in whose iteration dies (e.g. broker gone for good)."""
+
+    def __init__(self, *args, **kwargs):
+        self.stopped = False
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        self.stopped = True
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise RuntimeError("consumer died")
+
+
+class IdleConsumer(CrashingConsumer):
+    async def __anext__(self):
+        await asyncio.sleep(3600)
+
+
+async def test_crashed_consume_task_sets_failure_event(service, settings):
+    worker = SubjectWorker("kafka:9092", service, FakeAnalyzer(), settings, consumer_factory=CrashingConsumer)
+    await worker.start()
+    await asyncio.wait_for(worker.wait_failed(), timeout=2)
+    assert worker.failed is True
+    await worker.stop()
+
+
+async def test_cancelled_tasks_do_not_set_failure_event(service, settings):
+    worker = SubjectWorker("kafka:9092", service, FakeAnalyzer(), settings, consumer_factory=IdleConsumer)
+    await worker.start()
+    await asyncio.sleep(0)
+    await worker.stop()
+    assert worker.failed is False
+
+
+async def test_entrypoint_supervise_exit_codes(service, settings):
+    from services.subjects.main import supervise
+
+    crashing = SubjectWorker("kafka:9092", service, FakeAnalyzer(), settings, consumer_factory=CrashingConsumer)
+    await crashing.start()
+    assert await asyncio.wait_for(supervise(crashing, asyncio.Event()), timeout=2) == 1
+
+    idle = SubjectWorker("kafka:9092", service, FakeAnalyzer(), settings, consumer_factory=IdleConsumer)
+    await idle.start()
+    shutdown = asyncio.Event()
+    shutdown.set()
+    assert await asyncio.wait_for(supervise(idle, shutdown), timeout=2) == 0
 
 
 def test_service_entrypoint_imports():

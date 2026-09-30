@@ -7,6 +7,7 @@ See docs/superpowers/specs/2026-09-29-face-subject-id-design.md.
 import asyncio
 import logging
 import signal
+import sys
 
 from qdrant_client import QdrantClient
 
@@ -26,7 +27,30 @@ logging.basicConfig(
 logger = logging.getLogger("wastewatch.subject-worker")
 
 
-async def main() -> None:
+async def supervise(worker: SubjectWorker, shutdown: asyncio.Event) -> int:
+    """Wait for a shutdown signal or a crashed worker task, stop the worker.
+
+    Returns the process exit code: 0 on shutdown, 1 when a task crashed (so
+    compose `restart: unless-stopped` brings the worker back).
+    """
+    waiters = [
+        asyncio.create_task(shutdown.wait()),
+        asyncio.create_task(worker.wait_failed()),
+    ]
+    try:
+        await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for waiter in waiters:
+            waiter.cancel()
+        await worker.stop()
+    if worker.failed:
+        logger.error("Subject worker task crashed; exiting for restart")
+        return 1
+    logger.info("Subject worker stopped")
+    return 0
+
+
+async def main() -> int:
     from app.db.engine import async_session  # lazy: engine needs WW_DATABASE_URL
 
     settings = SubjectSettings.from_env()
@@ -46,12 +70,8 @@ async def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, shutdown.set)
     logger.info("Subject worker ready")
-    try:
-        await shutdown.wait()
-    finally:
-        await worker.stop()
-        logger.info("Subject worker stopped")
+    return await supervise(worker, shutdown)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
