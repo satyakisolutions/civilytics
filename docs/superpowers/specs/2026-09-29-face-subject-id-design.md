@@ -188,7 +188,10 @@ frontend
    - `face_incidents(status='matched')`.
 
    Qdrant upserts happen after the DB commit, keyed by `subject_faces.id`. A failure there is retried, and the row keeps `qdrant_synced=false` until it succeeds. Crop files move from `incoming/{incident_id}/` to `subjects/{subject_id}/{face_id}.jpg`; unused crops are deleted.
-9. **Commit the Kafka offset** only after step 8 succeeds. Redelivery is safe because of step 1. Nothing is published; the dashboard reads the result through `GET /api/alerts` (D6).
+
+   Every post-commit step (crop writes, Qdrant upsert and the `qdrant_synced` update, evicted-face cleanup, `incoming/` removal) is best-effort: a failure is logged and the result is still returned; the same applies after merge, detach and delete. The maintenance loop runs, each step isolated, `resync_index()` then `reconcile()` (delete Qdrant points whose id is not a `subject_faces.id`, and `subjects/**/*.jpg` files that no `crop_path` references, then remove the folders this emptied) every 10 min, and the retention sweep daily.
+9. **Commit the Kafka offset** after step 8. Redelivery is safe because of step 1, so a failed commit (for example after an outage longer than `max_poll_interval_ms`) is logged and ignored. Nothing is published; the dashboard reads the result through `GET /api/alerts` (D6).
+10. **Failures.** Only `OperationalError`, `InterfaceError` and `ConnectionError` count as infrastructure errors and are retried until the dependency is back (exponential backoff, capped); any other error (including `IntegrityError`/`DataError`) is retried 3 times, then the message is skipped. If the consume or maintenance task dies, the process exits with code 1 and compose restarts it.
 
 ## 7. Data model (Alembic `008_subjects`)
 

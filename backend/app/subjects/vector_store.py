@@ -59,3 +59,15 @@ class FaceVectorStore:
             self._collection,
             points_selector=qm.PointIdsList(points=[str(f) for f in face_ids]),
         )
+
+    def all_point_ids(self, page_size: int = 1000) -> list[uuid.UUID]:
+        """Every point id in the collection (ids only, paginated scroll)."""
+        ids: list[uuid.UUID] = []
+        offset = None
+        while True:
+            points, offset = self._client.scroll(
+                self._collection, limit=page_size, offset=offset, with_payload=False, with_vectors=False,
+            )
+            ids.extend(uuid.UUID(str(point.id)) for point in points)
+            if offset is None:
+                return ids

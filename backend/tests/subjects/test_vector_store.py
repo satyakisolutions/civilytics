@@ -52,3 +52,14 @@ def test_delete_removes_points(store):
     store.delete([face])
     store.delete([])
     assert store.search(_unit(1)) == []
+
+
+def test_all_point_ids_pages_through_collection(store):
+    faces = [uuid.uuid4() for _ in range(5)]
+    for i, f in enumerate(faces):
+        store.upsert(f, _unit(i), uuid.uuid4(), uuid.uuid4())
+    assert sorted(store.all_point_ids(page_size=2)) == sorted(faces)
+
+
+def test_all_point_ids_empty(store):
+    assert store.all_point_ids() == []

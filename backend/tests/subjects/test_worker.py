@@ -200,34 +200,79 @@ class IdleConsumer(CrashingConsumer):
         await asyncio.sleep(3600)
 
 
-async def test_crashed_consume_task_sets_failure_event(service, settings):
-    worker = SubjectWorker("kafka:9092", service, FakeAnalyzer(), settings, consumer_factory=CrashingConsumer)
+class NullService:
+    """No-DB service so the maintenance task never leaves a query in flight."""
+
+    async def resync_index(self):
+        return 0
+
+    async def reconcile(self):
+        return None
+
+    async def sweep(self):
+        return None
+
+
+async def test_crashed_consume_task_sets_failure_event(settings):
+    worker = SubjectWorker("kafka:9092", NullService(), FakeAnalyzer(), settings, consumer_factory=CrashingConsumer)
     await worker.start()
     await asyncio.wait_for(worker.wait_failed(), timeout=2)
     assert worker.failed is True
     await worker.stop()
 
 
-async def test_cancelled_tasks_do_not_set_failure_event(service, settings):
-    worker = SubjectWorker("kafka:9092", service, FakeAnalyzer(), settings, consumer_factory=IdleConsumer)
+async def test_cancelled_tasks_do_not_set_failure_event(settings):
+    worker = SubjectWorker("kafka:9092", NullService(), FakeAnalyzer(), settings, consumer_factory=IdleConsumer)
     await worker.start()
     await asyncio.sleep(0)
     await worker.stop()
     assert worker.failed is False
 
 
-async def test_entrypoint_supervise_exit_codes(service, settings):
+async def test_entrypoint_supervise_exit_codes(settings):
     from services.subjects.main import supervise
 
-    crashing = SubjectWorker("kafka:9092", service, FakeAnalyzer(), settings, consumer_factory=CrashingConsumer)
+    crashing = SubjectWorker("kafka:9092", NullService(), FakeAnalyzer(), settings, consumer_factory=CrashingConsumer)
     await crashing.start()
     assert await asyncio.wait_for(supervise(crashing, asyncio.Event()), timeout=2) == 1
 
-    idle = SubjectWorker("kafka:9092", service, FakeAnalyzer(), settings, consumer_factory=IdleConsumer)
+    idle = SubjectWorker("kafka:9092", NullService(), FakeAnalyzer(), settings, consumer_factory=IdleConsumer)
     await idle.start()
     shutdown = asyncio.Event()
     shutdown.set()
     assert await asyncio.wait_for(supervise(idle, shutdown), timeout=2) == 0
+
+
+class RecordingService:
+    """Maintenance-loop stand-in: resync fails, the other steps must still run."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    async def resync_index(self):
+        self.calls.append("resync")
+        raise ConnectionError("qdrant down")
+
+    async def reconcile(self):
+        self.calls.append("reconcile")
+        raise RuntimeError("reconcile failed")
+
+    async def sweep(self):
+        self.calls.append("sweep")
+
+
+async def test_maintenance_runs_reconcile_after_resync_each_isolated(settings):
+    service = RecordingService()
+    worker = SubjectWorker("kafka:9092", service, FakeAnalyzer(), settings, resync_every_s=3600)
+    task = asyncio.create_task(worker._maintenance_loop())
+    for _ in range(20):
+        await asyncio.sleep(0)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    assert service.calls == ["resync", "reconcile", "sweep"]
 
 
 def test_service_entrypoint_imports():

@@ -156,13 +156,21 @@ class SubjectWorker:
         loop = asyncio.get_running_loop()
         last_sweep: float | None = None
         while True:
+            # Each step is isolated: one failing never skips the others.
             try:
                 await self._service.resync_index()
-                if last_sweep is None or loop.time() - last_sweep >= self._sweep_every_s:
+            except Exception:
+                logger.exception("Subject index resync failed")
+            try:
+                await self._service.reconcile()
+            except Exception:
+                logger.exception("Subject reconcile failed")
+            if last_sweep is None or loop.time() - last_sweep >= self._sweep_every_s:
+                try:
                     await self._service.sweep()
                     last_sweep = loop.time()
-            except Exception:
-                logger.exception("Subject maintenance tick failed")
+                except Exception:
+                    logger.exception("Subject retention sweep failed")
             await asyncio.sleep(self._resync_every_s)
 
     async def stop(self) -> None:

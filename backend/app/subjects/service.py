@@ -4,6 +4,11 @@ Postgres is the source of truth (embeddings included); Qdrant is an index
 updated after each commit. Faces whose index write failed keep
 qdrant_synced=False and are re-indexed by resync_index(); if Qdrant search
 itself fails, matching falls back to an exact search over Postgres.
+
+Everything after a commit (crop files, Qdrant, incoming/ cleanup) is
+best-effort: a failure is logged and never undoes or hides the committed
+decision. reconcile() later removes Qdrant points and crop files that no
+subject_faces row references.
 See docs/superpowers/specs/2026-09-29-face-subject-id-design.md §6-8.
 """
 from __future__ import annotations
@@ -52,6 +57,12 @@ class ProcessResult:
     match_type: str | None = None  # new | auto | review
     incident_count: int | None = None
     similarity: float | None = None
+
+
+@dataclass(frozen=True)
+class ReconcileResult:
+    qdrant_orphans_deleted: int
+    files_orphans_deleted: int
 
 
 @dataclass(frozen=True)
@@ -136,11 +147,14 @@ class SubjectService:
         evicted_ids = {row.id for row in evicted}
         kept = [(row, analyzed) for row, analyzed in new_rows if row.id not in evicted_ids]
         for row, analyzed in kept:
-            path = Path(row.crop_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(analyzed.face_jpeg)
-        await self._index_faces([row for row, _ in kept])
-        await self._drop_faces(evicted)
+            try:
+                path = Path(row.crop_path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(analyzed.face_jpeg)
+            except Exception:
+                logger.warning("Could not write crop for face %s", row.id, exc_info=True)
+        await self._best_effort("index faces", self._index_faces([row for row, _ in kept]))
+        await self._best_effort("drop evicted faces", self._drop_faces(evicted))
         self._remove_incoming(req.incident_id)
         return ProcessResult(
             "matched", subject.id, subject.code, decision.kind, subject.incident_count, decision.score
@@ -189,8 +203,8 @@ class SubjectService:
             await s.commit()
             target = dst.id
         evicted_ids = {r.id for r in evicted}
-        await self._index_faces([r for r in moved if r.id not in evicted_ids])
-        await self._drop_faces(evicted)
+        await self._best_effort("index merged faces", self._index_faces([r for r in moved if r.id not in evicted_ids]))
+        await self._best_effort("drop evicted faces", self._drop_faces(evicted))
         return target
 
     async def _repoint_reviews(self, s, old: uuid.UUID, new: uuid.UUID, exclude: uuid.UUID) -> None:
@@ -255,7 +269,7 @@ class SubjectService:
             })
             await s.commit()
             new_id = new.id
-        await self._index_faces(moved)
+        await self._best_effort("index detached faces", self._index_faces(moved))
         return new_id
 
     async def delete_subject(
@@ -288,7 +302,7 @@ class SubjectService:
                 "code": code, "incidents": len(incident_ids), "reason": reason,
             })
             await s.commit()
-        await self._drop_faces(faces)
+        await self._best_effort("drop deleted subject faces", self._drop_faces(faces))
         try:
             (self._faces_dir / "subjects" / str(subject_id)).rmdir()
         except OSError:
@@ -340,7 +354,60 @@ class SubjectService:
             )).scalars())
         return await self._index_faces(rows)
 
+    async def reconcile(self) -> ReconcileResult:
+        """Delete Qdrant points and crop files that no subject_faces row references.
+
+        Qdrant ids and files are listed *before* reading Postgres: a point or
+        crop is only ever written after its row commits, so anything listed
+        first whose row is missing afterwards is a genuine orphan, never an
+        in-flight face.
+        """
+        point_ids = await asyncio.to_thread(self._vs.all_point_ids)
+        subjects_dir = self._faces_dir / "subjects"
+        files = await asyncio.to_thread(
+            lambda: [p.resolve() for p in subjects_dir.rglob("*.jpg")] if subjects_dir.is_dir() else []
+        )
+        async with self.session_factory() as s:
+            rows = (await s.execute(select(SubjectFace.id, SubjectFace.crop_path))).all()
+        face_ids = {face_id for face_id, _ in rows}
+        referenced = {Path(crop_path).resolve() for _, crop_path in rows}
+
+        orphan_points = [pid for pid in point_ids if pid not in face_ids]
+        if orphan_points:
+            await asyncio.to_thread(self._vs.delete, orphan_points)
+        removed_files = 0
+        emptied: set[Path] = set()
+        for path in files:
+            if path in referenced:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+                removed_files += 1
+                emptied.add(path.parent)
+            except OSError:
+                logger.warning("Could not delete orphan crop %s", path, exc_info=True)
+        subjects_root = subjects_dir.resolve()
+        for folder in emptied:
+            if folder == subjects_root:
+                continue
+            try:
+                folder.rmdir()  # only succeeds if the folder is now empty
+            except OSError:
+                pass
+        result = ReconcileResult(len(orphan_points), removed_files)
+        if orphan_points or removed_files:
+            logger.info("Subject reconcile: %s", result)
+        return result
+
     # ── helpers (shared with operator actions / retention) ─────────
+
+    @staticmethod
+    async def _best_effort(step: str, coro) -> None:
+        """Await a post-commit step; log and continue if it fails."""
+        try:
+            await coro
+        except Exception:
+            logger.warning("Post-commit step failed (%s); continuing", step, exc_info=True)
 
     async def _score_subjects(self, s, vectors: list[np.ndarray]) -> dict[uuid.UUID, float]:
         try:
@@ -420,9 +487,13 @@ class SubjectService:
             except Exception:
                 logger.warning("Qdrant upsert failed for face %s; will resync", row.id, exc_info=True)
         if synced:
-            async with self.session_factory() as s:
-                await s.execute(update(SubjectFace).where(SubjectFace.id.in_(synced)).values(qdrant_synced=True))
-                await s.commit()
+            try:
+                async with self.session_factory() as s:
+                    await s.execute(update(SubjectFace).where(SubjectFace.id.in_(synced)).values(qdrant_synced=True))
+                    await s.commit()
+            except Exception:
+                # The points are indexed; resync_index() re-upserts them (idempotent).
+                logger.warning("Could not mark %d faces as synced; will resync", len(synced), exc_info=True)
         return len(synced)
 
     async def _drop_faces(self, rows: list[SubjectFace]) -> None:
@@ -433,7 +504,10 @@ class SubjectService:
         except Exception:
             logger.warning("Qdrant delete failed for %d faces", len(rows), exc_info=True)
         for row in rows:
-            Path(row.crop_path).unlink(missing_ok=True)
+            try:
+                Path(row.crop_path).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not delete crop %s; reconcile will retry", row.crop_path, exc_info=True)
 
     def _face_path(self, subject_id: uuid.UUID, face_id: uuid.UUID) -> Path:
         return self._faces_dir / "subjects" / str(subject_id) / f"{face_id}.jpg"

@@ -1,11 +1,12 @@
 import os
+import uuid
 from datetime import timedelta
 from pathlib import Path
 
 from sqlalchemy import select, update
 
 from app.db.models import FaceIncident, Subject, SubjectAccessLog, SubjectFace, SubjectMatchReview
-from app.subjects.service import SubjectService
+from app.subjects.service import ReconcileResult, SubjectService
 
 from tests.subjects.factories import FlakyStore, T0, face, request, unit, with_similarity
 
@@ -76,3 +77,28 @@ async def test_resync_indexes_unsynced_faces(session_factory, vector_store, sett
         assert (await s.execute(select(SubjectFace.qdrant_synced))).scalar_one() is True
     assert vector_store.search(v, 1)[0].score > 0.99
     assert await service.resync_index() == 0
+
+
+async def test_reconcile_deletes_orphan_points_and_files(service, session_factory, vector_store, settings):
+    v = unit(1)
+    res = await service.process_request(request(), [face(v)])
+    async with session_factory() as s:
+        kept = (await s.execute(select(SubjectFace))).scalar_one()
+    subjects_dir = Path(settings.faces_dir) / "subjects"
+    orphan_point = uuid.uuid4()
+    vector_store.upsert(orphan_point, unit(2), uuid.uuid4(), uuid.uuid4())
+    orphan_in_live_folder = subjects_dir / str(res.subject_id) / f"{uuid.uuid4()}.jpg"
+    orphan_in_live_folder.write_bytes(b"\xff\xd8orphan")
+    gone_subject = subjects_dir / str(uuid.uuid4())
+    gone_subject.mkdir(parents=True)
+    (gone_subject / f"{uuid.uuid4()}.jpg").write_bytes(b"\xff\xd8orphan")
+
+    result = await service.reconcile()
+
+    assert (result.qdrant_orphans_deleted, result.files_orphans_deleted) == (1, 2)
+    assert vector_store.all_point_ids() == [kept.id]
+    assert Path(kept.crop_path).exists()
+    assert not orphan_in_live_folder.exists()
+    assert not gone_subject.exists()
+    assert (subjects_dir / str(res.subject_id)).is_dir()
+    assert await service.reconcile() == ReconcileResult(0, 0)

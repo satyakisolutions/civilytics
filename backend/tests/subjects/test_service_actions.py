@@ -189,3 +189,15 @@ async def test_merge_does_not_repoint_non_pending_reviews(service, session_facto
         rejected = await s.get(SubjectMatchReview, review1.id)
         assert rejected.status == "rejected"
         assert rejected.new_subject_id == res_b.subject_id
+
+
+async def test_delete_subject_file_errors_are_best_effort(service, session_factory, monkeypatch):
+    res = await service.process_request(request(), [face(unit(1))])
+
+    def refuse(self, missing_ok=False):
+        raise PermissionError(f"cannot unlink {self}")
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    await service.delete_subject(res.subject_id, actor="tester")
+    async with session_factory() as s:
+        assert await s.get(Subject, res.subject_id) is None

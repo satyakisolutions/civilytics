@@ -119,3 +119,53 @@ async def test_hits_on_merged_subject_are_ignored(service, session_factory):
     second = await service.process_request(request(), [face(v)])
     assert second.match_type == "new"
     assert second.subject_id != first.subject_id
+
+
+async def test_crop_write_failure_is_best_effort(service, session_factory, settings, vector_store, monkeypatch):
+    req = request()
+    incoming = Path(settings.faces_dir) / "incoming" / str(req.incident_id)
+    incoming.mkdir(parents=True)
+    (incoming / "00.jpg").write_bytes(b"x")
+
+    def refuse(self, data):
+        raise PermissionError(f"read-only: {self}")
+
+    monkeypatch.setattr(Path, "write_bytes", refuse)
+    v = unit(1)
+    result = await service.process_request(req, [face(v)])
+    assert result.status == "matched"
+    assert not incoming.exists()
+    async with session_factory() as s:
+        row = (await s.execute(select(SubjectFace))).scalar_one()
+        assert row.qdrant_synced is True
+    assert vector_store.search(v, 1)[0].score > 0.99
+
+
+async def test_index_step_failure_is_best_effort(service, settings, monkeypatch):
+    req = request()
+    incoming = Path(settings.faces_dir) / "incoming" / str(req.incident_id)
+    incoming.mkdir(parents=True)
+
+    async def broken(rows):
+        raise RuntimeError("index step exploded")
+
+    monkeypatch.setattr(service, "_index_faces", broken)
+    result = await service.process_request(req, [face(unit(1))])
+    assert result.status == "matched"
+    assert not incoming.exists()
+
+
+async def test_synced_flag_update_failure_is_swallowed(session_factory, vector_store, settings):
+    calls = {"n": 0}
+
+    def flaky_factory():
+        calls["n"] += 1
+        if calls["n"] == 2:  # the second session is _index_faces' synced-flag update
+            raise ConnectionError("db blip")
+        return session_factory()
+
+    service = SubjectService(flaky_factory, vector_store, settings)
+    result = await service.process_request(request(), [face(unit(1))])
+    assert result.status == "matched"
+    async with session_factory() as s:
+        assert (await s.execute(select(SubjectFace.qdrant_synced))).scalar_one() is False
