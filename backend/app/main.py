@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.api.routes import cameras, health, config_routes, events, roi, alerts, evidence, lpr, analytics, system, devices, reports
+from app.api.routes import cameras, health, config_routes, events, roi, alerts, evidence, lpr, analytics, system, devices, reports, subjects
 from app.api.routes import logs as log_routes
 from app.config.settings import settings
 from app.ws import metadata as ws_metadata
@@ -88,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(system.router, prefix="/api")
     app.include_router(devices.router, prefix="/api")
     app.include_router(reports.router, prefix="/api")
+    app.include_router(subjects.router, prefix="/api")
     app.include_router(log_routes.router, prefix="/api")
     app.include_router(ws_metadata.router, prefix="/ws")
     app.include_router(ws_events.router, prefix="/ws")
