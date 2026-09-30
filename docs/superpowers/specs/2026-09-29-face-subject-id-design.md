@@ -270,6 +270,11 @@ All actions run in one transaction, then sync to Qdrant, then write an access-lo
   - Counts on the old subject are recomputed; if it has no incidents left, it is deleted.
 - **Delete subject:** DB rows, Qdrant points and crop files are removed. The access-log row remains. The alert's badge then shows nothing, because the join finds no subject.
 
+**Plan-time refinements (2026-09-29):** detaching a subject's *only* incident returns 409 instead of creating an empty subject;
+if Qdrant search fails, matching falls back to an exact search over the embeddings stored in Postgres; the sidebar's pending-review
+count uses `GET /api/subjects/reviews/count`, which is not access-logged because it carries no personal data.
+Merge and detach reassign faces without moving their crop files — `subject_faces.crop_path` stays authoritative, and deleting a subject removes only its own faces' files. Infrastructure errors (database/connection) in the subject-worker are retried until the database is back instead of being skipped.
+
 ## 9. API (`backend/app/api/routes/subjects.py`)
 
 Every route depends on `require_admin` and writes `subject_access_log` with actor and `request.client.host`.

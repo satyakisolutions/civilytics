@@ -106,6 +106,7 @@ services:
       WW_MEDIAMTX_API_URL: http://mediamtx:9997
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
       WW_KEYCLOAK_URL: http://keycloak:8080
+      WW_QDRANT_URL: http://qdrant:6333
     depends_on:
       postgres:
         condition: service_healthy
@@ -113,9 +114,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     volumes:
       - tts_data:/tmp/wastewatch/tts
       - evidence_data:/app/evidence
+      - faces_private:/app/faces_private
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
     restart: unless-stopped
 
@@ -196,6 +200,32 @@ services:
     command: ["python3", "-m", "services.combined_workers.main"]
     restart: unless-stopped
 
+  # ── Subject worker: violation-time face matching (CPU) ─────────
+  # docs/superpowers/specs/2026-09-29-face-subject-id-design.md
+  subject-worker:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WW_DATABASE_URL: ${WW_DATABASE_URL}
+      WW_QDRANT_URL: http://qdrant:6333
+      # Stricter than the 0.55 code default for the first week (spec §16);
+      # lower to 0.55 once logged scores show no false auto-matches.
+      WW_FACE_MATCH_AUTO: ${WW_FACE_MATCH_AUTO:-0.60}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    volumes:
+      - faces_private:/app/faces_private
+    command: ["python3", "-m", "services.subjects.main"]
+    restart: unless-stopped
+
   pipeline:
     build:
       context: ./pipeline
@@ -211,8 +241,10 @@ services:
       # primary GIE opt-in. Default 0 (bbox 2-class model stays live).
       # See pipeline/app/pipeline.py and pipeline/configs/nvinfer_rfdetr_seg.txt.
       WW_USE_SEG_MODEL: ${WW_USE_SEG_MODEL:-1}
+      WW_FACE_CAPTURE_ENABLED: ${WW_FACE_CAPTURE_ENABLED:-1}
     volumes:
       - evidence_data:/app/evidence
+      - faces_private:/app/faces_private
     depends_on:
       kafka:
         condition: service_healthy
@@ -274,3 +306,4 @@ volumes:
   qdrant_data:
   evidence_data:
   pipeline_models:
+  faces_private:
