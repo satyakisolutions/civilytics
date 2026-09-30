@@ -1,0 +1,4 @@
+# Face crops and galleries are personal data -- never commit them.
+runs/
+gallery/
+.venv/

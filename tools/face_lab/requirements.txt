@@ -1,0 +1,5 @@
+# Standalone face-ID lab (own venv: the GUI build of OpenCV conflicts with the backend's headless one)
+numpy>=1.26
+onnxruntime>=1.20
+opencv-python>=4.10
+pytest>=8.3
