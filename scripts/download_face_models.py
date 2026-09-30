@@ -16,11 +16,17 @@ from pathlib import Path
 URL = "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
 WANTED = ("det_10g.onnx", "w600k_r50.onnx")
 DEST = Path(__file__).resolve().parent.parent / "backend" / "models" / "face"
+# Git LFS pointer files (a few hundred bytes) must not count as models.
+MIN_MODEL_BYTES = 1_000_000
+
+
+def model_present(path: Path) -> bool:
+    return path.is_file() and path.stat().st_size > MIN_MODEL_BYTES
 
 
 def main() -> int:
     DEST.mkdir(parents=True, exist_ok=True)
-    if all((DEST / name).exists() for name in WANTED):
+    if all(model_present(DEST / name) for name in WANTED):
         print(f"Face models already present in {DEST}")
         return 0
     print("NOTE: InsightFace weights are licensed for non-commercial research use only.")
@@ -33,7 +39,7 @@ def main() -> int:
             if name in WANTED:
                 (DEST / name).write_bytes(zf.read(member))
                 print(f"  wrote {DEST / name}")
-    missing = [n for n in WANTED if not (DEST / n).exists()]
+    missing = [n for n in WANTED if not model_present(DEST / n)]
     if missing:
         print(f"ERROR: missing after download: {missing}", file=sys.stderr)
         return 1
