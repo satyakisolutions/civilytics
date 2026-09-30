@@ -334,7 +334,7 @@ New constants in `backend/app/config/kafka.py`: `TOPIC_FACES_REQUESTS = "wastewa
 | Only violators' faces stored | Crops live in pipeline memory only; nothing is written without `begin_incident`. Non-violator rings are evicted within ~5 s. |
 | No comparison outside violations | Matching runs only in `subject-worker` on `faces.requests`. |
 | Retention | Daily sweep. Subjects with `last_seen_at` older than `WW_SUBJECT_RETENTION_DAYS` (90) are fully deleted. `incoming/` folders and `no_face` data older than 7 days are deleted. `merged` tombstones are deleted after the same retention period. |
-| Private storage | New volume `faces_private` mounted at `/app/faces_private`: pipeline (rw, writes only `incoming/`), subject-worker (rw), api (rw, because merge and delete remove files). It is never under `/evidence`. The pipeline creates `incoming/` and `subjects/` with mode 0777 at startup, because it runs as root while the backend image runs as `appuser`. |
+| Private storage | New volume `faces_private` mounted at `/app/faces_private`: pipeline (rw, writes only `incoming/`), subject-worker (rw), api (rw, because merge and delete remove files). It is never under `/evidence`. Both the pipeline and the backend images run as a non-root `appuser` (their uids may differ) and pre-create `/app/faces_private/{incoming,subjects}` with mode 0777, so Docker seeds a new, empty volume with world-writable folders. The pipeline's `ensure_faces_dirs` is best-effort (a `chmod` on a folder owned by the other uid is ignored); if the volume cannot be prepared, face capture is disabled with an error log and the pipeline keeps running. |
 | Human in the loop | Uncertain matches never auto-link. Every automatic link can be undone with detach. |
 | Audit | `subject_access_log` covers every read and every change. |
 | No public exposure | Subject data is never included in TTS text, Telegram or SIP messages. |
@@ -415,3 +415,12 @@ Testing follows TDD for every pure unit.
 - **CCTV resolution:** a face under ~40 px is rejected. Cameras far from the dump spot may rarely yield subjects.
 - **Tracker ID switches:** if the tracker reassigns the person's ID near the violation, the ring for the new ID is short. Post-roll partly compensates.
 - **Auth gap:** the dashboard sends no token today. With `WW_AUTH_DEV_MODE` off, subject routes return 401 and the Subjects view cannot load. With it on, the routes are effectively open and only the IP access log applies. Real protection needs the separate dashboard-login task.
+
+## 18. Known limitations / follow-ups
+
+Deferred on purpose; none of these loses data, but each is worth a follow-up:
+
+- **No row locks for concurrent operator actions.** Two admins merging/detaching the same subjects at the same moment (or an action racing the worker attaching a new incident) are not serialised with `SELECT … FOR UPDATE`; the review status check catches most double actions, not all.
+- **Qdrant payload staleness.** After merge/detach, a point's `subject_id` payload is stale until the post-commit upsert or the next `resync_index()` (faces are flagged `qdrant_synced=false`); a search in that window can score against the old subject, which `_score_subjects` then filters to active subjects only.
+- **Subjects grid shows only the first 50** (`limit=50`); there is no pagination UI yet.
+- **Detach does not create a negative constraint.** A detached incident's person can be auto-matched back to the old subject by their next violation; there is no "not the same person" record between the two subjects.

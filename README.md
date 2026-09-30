@@ -893,7 +893,7 @@ Website: https://satyaki.co.in
 
 ## Face subject IDs (repeat violators)
 
-When a violation alert fires, the pipeline keeps the violator's clean (pre-overlay) head crops and the
+When a person's first critical violation alert fires, the pipeline keeps the violator's clean (pre-overlay) head crops and the
 `subject-worker` assigns an anonymous ID (`S-001`, ...). Repeat violations by the same person are
 linked automatically when the face match is confident, or queued for operator review in
 **Subjects → Review** when it is not. Design: `docs/superpowers/specs/2026-09-29-face-subject-id-design.md`.
@@ -902,6 +902,7 @@ linked automatically when the face match is confident, or queued for operator re
 - Thresholds: `WW_FACE_MATCH_AUTO` (compose default 0.60 for the first week, code default 0.55) and `WW_FACE_MATCH_REVIEW` (0.40).
 - Retention: subjects with no new incident for `WW_SUBJECT_RETENTION_DAYS` (90) are deleted with their faces.
 - Face images live only in the `faces_private` volume and are served only via `/api/subjects/faces/{id}` (admin, access-logged).
+- Before the first deployment of this build, remove any pre-existing `faces_private` volume created by an earlier run (`docker volume rm <project>_faces_private`) — Docker only seeds empty volumes with the images' 0777 folders.
 - Models: `python scripts/download_face_models.py` (InsightFace buffalo_l — **non-commercial research licence**; a paid deployment needs a commercial licence or a replacement model).
 - Only the Python metadata path fires alerts, so faces are not captured when the native `wastewatchmeta` plugin path is active.
 - Face processing and the `incoming/` clean-up depend on the `subject-worker` service running: while it is down, captured crops wait in `faces_private/incoming/` and alerts show `Face not captured` once 120 s pass without a result (`FACE_RESULT_TIMEOUT_S`); a worker that comes back later still processes the queued requests and the badge then updates.
