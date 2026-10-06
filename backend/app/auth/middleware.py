@@ -22,19 +22,27 @@ async def get_current_user(request: Request) -> dict:
     a valid Bearer token.
     """
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    token = ""
+
+    if auth_header.startswith("Bearer "):
+        # Service-to-service / integration callers.
+        token = auth_header[7:]
+    else:
+        # Browser session from the branded login form. The token lives in an
+        # httpOnly cookie so JavaScript cannot read it (see
+        # api/routes/auth.py). Cookie is checked only when no Bearer header
+        # was supplied, so an explicit header always wins.
+        token = request.cookies.get("ww_access", "")
+
+    if not token:
         if _is_dev_mode():
-            logger.debug("Dev mode: returning mock user (no auth header)")
+            logger.debug("Dev mode: returning mock user (no credentials)")
             return {
                 "sub": "dev-user",
                 "preferred_username": "dev",
                 "realm_access": {"roles": ["owner", "admin", "viewer"]},
             }
-        raise HTTPException(status_code=401, detail="Authorization header required")
-
-    token = auth_header[7:]
-    if not token:
-        raise HTTPException(status_code=401, detail="Empty Bearer token")
+        raise HTTPException(status_code=401, detail="Not authenticated")
     claims = await validate_token(token)
     if not claims:
         raise HTTPException(status_code=401, detail="Invalid or expired token")

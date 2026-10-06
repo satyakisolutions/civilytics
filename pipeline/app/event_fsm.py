@@ -44,6 +44,7 @@ class TrackFSM:
     observe_threshold_s: float = 10.0
     violation_threshold_s: float = 15.0
     person_violation_threshold_s: float = 10.0
+    vehicle_stop_threshold_s: float = 20.0
     exit_timeout_s: float = 300.0
     outside_roi_frames: int = 0
     # A paired waste attribution owns its lifecycle by person visibility,
@@ -60,12 +61,17 @@ class TrackFSM:
 
 
 class EventFSMManager:
-    def __init__(self, enter_threshold_s: float = 3.0, observe_threshold_s: float = 10.0, violation_threshold_s: float = 15.0, person_violation_threshold_s: float = 10.0, exit_timeout_s: float = 300.0, violation_exit_hysteresis_frames: int = 10, suspicious_speed_px_s: float = 7.5):
+    def __init__(self, enter_threshold_s: float = 3.0, observe_threshold_s: float = 10.0, violation_threshold_s: float = 15.0, person_violation_threshold_s: float = 10.0, vehicle_stop_threshold_s: float = 20.0, exit_timeout_s: float = 300.0, violation_exit_hysteresis_frames: int = 10, suspicious_speed_px_s: float = 7.5, vehicle_stop_speed_px_s: float = 3.0):
         self._fsms: dict[tuple[str, int], TrackFSM] = {}
         self._enter_threshold = enter_threshold_s
         self._observe_threshold = observe_threshold_s
         self._violation_threshold = violation_threshold_s
         self._person_violation_threshold = person_violation_threshold_s
+        self._vehicle_stop_threshold = vehicle_stop_threshold_s
+        # A vehicle only counts as "stopped" well below the generic
+        # loitering speed -- a person shuffling at 7px/s is suspicious,
+        # a vehicle creeping at that speed is just driving slowly.
+        self._vehicle_stop_speed_px_s = vehicle_stop_speed_px_s
         self._exit_timeout = exit_timeout_s
         # "Suspicious" also covers barely-moving, not just fully stationary
         # (dwell_time_s only accrues while genuinely still) -- a person
@@ -132,6 +138,7 @@ class EventFSMManager:
                     observe_threshold_s=self._observe_threshold,
                     violation_threshold_s=self._violation_threshold,
                     person_violation_threshold_s=self._person_violation_threshold,
+                    vehicle_stop_threshold_s=self._vehicle_stop_threshold,
                     exit_timeout_s=self._exit_timeout,
                 )
                 self._fsms[key] = fsm
@@ -162,6 +169,7 @@ class EventFSMManager:
                     observe_threshold_s=self._observe_threshold,
                     violation_threshold_s=self._violation_threshold,
                     person_violation_threshold_s=self._person_violation_threshold,
+                    vehicle_stop_threshold_s=self._vehicle_stop_threshold,
                     exit_timeout_s=self._exit_timeout,
                 )
 
@@ -231,6 +239,24 @@ class EventFSMManager:
                     fsm.forced_by_waste = True
                     self._escalated_tracks.add(key)
                     logger.info("FSM %s track=%d: fast-track OBSERVE→VIOLATION (carried item)", camera_id, track_id)
+                elif class_name == "vehicle":
+                    # Vehicle suspicious activity is "stopped AND lingering",
+                    # not dwell alone: a vehicle queued or crawling through
+                    # the ROI for 15s is traffic, not a dumping run. Require
+                    # it to actually come to rest (speed below the vehicle
+                    # stop gate) and hold that for the stop threshold.
+                    _vehicle_stopped = (
+                        speed_px_s is not None
+                        and speed_px_s <= self._vehicle_stop_speed_px_s
+                        and dwell_time_s >= 1.0  # same speed-history warmup as _is_slow
+                    )
+                    if _vehicle_stopped and dwell_time_s >= fsm.vehicle_stop_threshold_s:
+                        fsm.state = FSMState.VIOLATION
+                        self._escalated_tracks.add(key)
+                        logger.info(
+                            "FSM %s track=%d: vehicle stopped %.1fs (speed=%.1f px/s) → VIOLATION",
+                            camera_id, track_id, dwell_time_s, speed_px_s or 0.0,
+                        )
                 elif (
                     dwell_time_s >= (
                         fsm.person_violation_threshold_s if class_name == "person"

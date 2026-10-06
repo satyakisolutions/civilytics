@@ -1,6 +1,8 @@
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.auth.ws_auth import authenticate_ws
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -22,7 +24,10 @@ async def broadcast_alert(data: dict):
 
 @router.websocket("/alerts")
 async def ws_alerts(websocket: WebSocket):
-    await websocket.accept()
+    # SECURITY: validate before accept() -- an unauthenticated peer must
+    # never enter the subscriber set or receive a single frame.
+    if await authenticate_ws(websocket, role="viewer") is None:
+        return
     _subscribers.add(websocket)
     logger.info("AlertWebSocket connected, total=%d", len(_subscribers))
     try:

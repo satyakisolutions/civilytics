@@ -217,6 +217,40 @@ def _build_engine(spec: EngineSpec) -> bool:
         return False
 
 
+def _engine_is_loadable(engine_path: Path) -> bool:
+    """Deserialise *engine_path* to prove it is usable, not merely present.
+
+    A size>0 check is not enough: an engine truncated by a full disk, a
+    killed trtexec, or an interrupted container build is non-empty but
+    invalid. DeepStream then fails at nvinfer load, which surfaces as a
+    cryptic pipeline death at startup rather than a clear build error.
+
+    Returns True if TensorRT accepts the file. If TensorRT's Python module
+    is unavailable we cannot judge, so we return True and leave the
+    existing size check as the only gate -- refusing to start on an engine
+    we simply could not inspect would be worse than trying it.
+    """
+    try:
+        import tensorrt as trt  # noqa: PLC0415 -- optional, container-only
+    except ImportError:
+        logger.debug("tensorrt module unavailable — skipping deserialise check")
+        return True
+
+    try:
+        trt_logger = trt.Logger(trt.Logger.ERROR)
+        with open(engine_path, "rb") as f:
+            blob = f.read()
+        runtime = trt.Runtime(trt_logger)
+        engine = runtime.deserialize_cuda_engine(blob)
+        if engine is None:
+            logger.warning("Engine failed to deserialise: %s", engine_path)
+            return False
+        return True
+    except Exception as exc:
+        logger.warning("Engine deserialise raised %s: %s", type(exc).__name__, exc)
+        return False
+
+
 def ensure_engines(skip_missing_onnx: bool = False) -> dict[str, str]:
     """Check and build all required TensorRT engines.
 
@@ -257,12 +291,33 @@ def ensure_engines(skip_missing_onnx: bool = False) -> dict[str, str]:
         logger.info("")
         logger.info("--- %s ---", spec.name)
 
-        # 1. Check if engine already exists
+        # 1. Engine present AND loadable? Then skip. Present but corrupt
+        #    (truncated by a full disk, a killed trtexec, an interrupted
+        #    build) is quarantined and rebuilt below, because nvinfer would
+        #    otherwise die at load with no useful message.
         if spec.engine_path.exists() and spec.engine_path.stat().st_size > 0:
             size_mb = spec.engine_path.stat().st_size / (1024 * 1024)
-            logger.info("Engine exists: %s (%.1f MB) — skipping", spec.engine_path, size_mb)
-            results[spec.name] = "ready"
-            continue
+            if _engine_is_loadable(spec.engine_path):
+                logger.info("Engine exists: %s (%.1f MB) — skipping", spec.engine_path, size_mb)
+                results[spec.name] = "ready"
+                continue
+            logger.warning(
+                "Engine present but NOT loadable: %s (%.1f MB) — rebuilding",
+                spec.engine_path, size_mb,
+            )
+            try:
+                # Move aside rather than delete, so a failed rebuild leaves
+                # evidence of what was there for debugging.
+                spec.engine_path.replace(spec.engine_path.with_suffix(
+                    spec.engine_path.suffix + ".corrupt"))
+            except OSError as exc:
+                logger.warning("Could not quarantine corrupt engine: %s", exc)
+                try:
+                    spec.engine_path.unlink()
+                except OSError:
+                    logger.error("Cannot remove corrupt engine %s", spec.engine_path)
+                    results[spec.name] = "corrupt_unwritable"
+                    continue
 
         # 2. Check if we can build
         if not has_gpu:

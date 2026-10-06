@@ -32,7 +32,10 @@ async def acknowledge_alert(
     alert_id: uuid.UUID,
     body: AlertAcknowledge,
     db: AsyncSession = Depends(get_db),
-    _user: dict = Depends(require_admin),
+    # Acknowledging one alert is the control-room operator's primary action.
+    # Gating it on `admin` left a viewer able to watch their queue fill but
+    # not clear it. Bulk POST /clear stays admin -- that one is destructive.
+    _user: dict = Depends(require_viewer),
 ):
     result = await db.execute(select(Alert).where(Alert.id == alert_id))
     alert = result.scalar_one_or_none()
@@ -47,7 +50,11 @@ async def acknowledge_alert(
 @router.post("/clear", status_code=200)
 async def clear_all_alerts(
     db: AsyncSession = Depends(get_db),
-    _user: dict = Depends(require_viewer),
+    # SECURITY: bulk-resolves every active alert in one statement, including
+    # ones no one has looked at, and cannot be undone. Previously this was
+    # `require_viewer` while acknowledging a SINGLE alert required `admin` --
+    # exactly backwards. Destructive bulk action stays admin-only.
+    _user: dict = Depends(require_admin),
 ):
     """Resolve all active alerts in one bulk UPDATE."""
     result = await db.execute(

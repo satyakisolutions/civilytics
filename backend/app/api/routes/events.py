@@ -116,7 +116,10 @@ async def update_event(
     event_id: uuid.UUID,
     body: ViolationEventUpdate,
     db: AsyncSession = Depends(get_db),
-    _user: dict = Depends(require_admin),
+    # Recording a review verdict is operator work -- it is what the
+    # "detection to first operator review" metric measures. Gating it on
+    # `admin` meant no operator could mark anything reviewed.
+    _user: dict = Depends(require_viewer),
 ):
     result = await db.execute(select(ViolationEvent).where(ViolationEvent.id == event_id))
     event = result.scalar_one_or_none()

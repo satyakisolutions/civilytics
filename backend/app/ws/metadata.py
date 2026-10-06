@@ -3,6 +3,8 @@ import logging
 from collections import defaultdict
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.auth.ws_auth import authenticate_ws
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -31,7 +33,10 @@ async def broadcast_to_all(data: dict):
 
 @router.websocket("/metadata/{camera_id}")
 async def ws_metadata(websocket: WebSocket, camera_id: str):
-    await websocket.accept()
+    # SECURITY: validate before accept() -- this stream carries live
+    # detection metadata per camera and was previously open to any peer.
+    if await authenticate_ws(websocket, role="viewer") is None:
+        return
     _subscribers[camera_id].add(websocket)
     logger.info(
         "WebSocket connected: camera_id=%s, total=%d",

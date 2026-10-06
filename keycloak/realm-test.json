@@ -1,0 +1,132 @@
+{
+  "realm": "wastewatch",
+  "enabled": true,
+  "displayName": "Civilytics WasteWatch (test)",
+  "_comment_roles": "owner and admin are COMPOSITE. require_role() in app/auth/middleware.py matches an exact string, and realm roles are otherwise flat -- without these composites an owner would hold only 'owner' and would be rejected by require_admin and require_viewer.",
+  "roles": {
+    "realm": [
+      {
+        "name": "viewer",
+        "description": "Read dashboards, acknowledge alerts"
+      },
+      {
+        "name": "admin",
+        "description": "Manage cameras, thresholds, and onboard viewers",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "viewer"
+          ]
+        }
+      },
+      {
+        "name": "owner",
+        "description": "Full control; onboards admins",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "admin"
+          ]
+        }
+      }
+    ]
+  },
+  "_comment_smtp": "Points at the mailpit container. Mail is captured in a web inbox at http://localhost:9025 and never leaves the host, so clicking an onboarding link in test cannot mail a real address.",
+  "smtpServer": {
+    "host": "mailpit",
+    "port": "1025",
+    "from": "wastewatch@satyaki.co.in",
+    "fromDisplayName": "Civilytics WasteWatch",
+    "ssl": "false",
+    "starttls": "false",
+    "auth": "false"
+  },
+  "clients": [
+    {
+      "clientId": "wastewatch-api",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "_comment": "Confidential: the secret stays server side (api/routes/auth.py does the token exchange), and a confidential client is what makes a service account possible at all.",
+      "publicClient": false,
+      "secret": "test-client-secret-not-for-production",
+      "_comment_dag": "Direct access grants are OFF by default on new clients in recent Keycloak. The branded login form uses grant_type=password, so it must be on or every login returns 401.",
+      "directAccessGrantsEnabled": true,
+      "_comment_sa": "Service account = the client_credentials identity kc_admin.py uses to create users.",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": [],
+      "webOrigins": [
+        "*"
+      ],
+      "fullScopeAllowed": true,
+      "attributes": {
+        "post.logout.redirect.uris": "+"
+      },
+      "_comment_mapper": "Publishes ww_tenant into the access token. Without it every onboarding request falls back to an extra Admin API lookup of the caller's own record (routes/users.py::_tenant_of_actor).",
+      "protocolMappers": [
+        {
+          "name": "ww_tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "ww_tenant",
+            "claim.name": "ww_tenant",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "multivalued": "false",
+            "aggregate.attrs": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "_comment": "Service account user. clientRoles here is what grants kc_admin.py the right to create users; without it every admin call returns 403.",
+      "username": "service-account-wastewatch-api",
+      "enabled": true,
+      "serviceAccountClientId": "wastewatch-api",
+      "clientRoles": {
+        "realm-management": [
+          "manage-users",
+          "view-users",
+          "query-users"
+        ]
+      }
+    },
+    {
+      "_comment": "Seed owner. Test-only credentials; prod seeds its owner through the Keycloak admin console.",
+      "username": "owner",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "owner@test.local",
+      "firstName": "Test",
+      "lastName": "Owner",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "owner-test-pass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "owner"
+      ]
+    }
+  ],
+  "_comment_tokens": "Short access token so the frontend's refresh path is actually exercised in test rather than only in a long prod session.",
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "bruteForceProtected": true,
+  "failureFactor": 10,
+  "waitIncrementSeconds": 60
+}

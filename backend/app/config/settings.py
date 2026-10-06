@@ -49,6 +49,18 @@ class Settings(BaseSettings):
     keycloak_realm: str = "wastewatch"
     keycloak_client_id: str = "wastewatch-api"
     keycloak_client_secret: str = ""
+    # Cookie-based session for the branded login form (see api/routes/auth.py).
+    # auth_cookie_secure MUST be true in production -- without it the browser
+    # will send the session cookie over plain HTTP.
+    auth_cookie_secure: bool = True
+    auth_cookie_samesite: str = "lax"
+    auth_cookie_domain: str = ""
+
+    # Static file roots. Defaults are the in-container paths; overridable so
+    # the test suite can import the app outside Docker, where /app is not
+    # writable.
+    evidence_dir: str = "/app/evidence"
+    tts_dir: str = "/tmp/wastewatch/tts"
 
     model_config = SettingsConfigDict(env_prefix="WW_", env_file=".env")
 

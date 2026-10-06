@@ -62,20 +62,34 @@ namespace {
 constexpr int kNumQueries = 100;
 constexpr int kNumLogitChannels = 5;   // labels last dim (matches [1,100,5] ONNX output)
 constexpr int kMaskGrid = 96;          // masks spatial dim (netW/4, netH/4)
-// v12 retrain added old_waste back as a real class (bag/person/waste ->
-// bag/new_waste/old_waste/person). rfdetr's COCO loader drops the
-// unannotated background category (id 0, "Waste-watch"), then assigns
-// real-class indices alphabetically by name (confirmed against the
+// v13 retrain dropped old_waste and added vehicle (bag/new_waste/
+// old_waste/person -> bag/new_waste/person/vehicle). rfdetr's COCO loader
+// drops the unannotated background category (id 0, "Waste-watch"), then
+// assigns real-class indices alphabetically by name (confirmed against the
 // working 3-class deploy: category ids were bag=1/waste=2/person=4 but
 // live detections matched channel order bag=0/person=1/waste=2, i.e.
 // alphabetical, not id-sorted), and appends the implicit "no object"
 // class at the END (standard DETR num_classes+1 convention).
-// Alphabetical 4-class order: bag, new_waste, old_waste, person.
-constexpr int kBackgroundChannelLo = 4;  // "no object" -- last channel
-constexpr int kBackgroundChannelHi = 4;
-constexpr int kRealClassChannelsLo = 0;
-constexpr int kRealClassChannelsHi = 3; // inclusive: 0=bag,1=new_waste,2=old_waste,3=person
-constexpr unsigned int kOldWasteChannel = 2; // ignored entirely, see below
+// Alphabetical 4-class order: bag, new_waste, person, vehicle.
+//
+// NOTE: person moved 3 -> 2 and vehicle took 3. Any channel-drop filter
+// keyed on a literal index (this file previously dropped channel 2 as
+// old_waste) would now delete every person, so there is deliberately no
+// per-channel drop here any more -- all four classes are real.
+//
+// The v13 export does NOT follow the alphabetical/background-last layout
+// the v12 model used: it keeps the dataset's COCO ids, so the unannotated
+// supercategory ("Civilytics", id 0) is the dead channel and the real
+// classes sit at 1..4. Verified by running the ONNX directly on a frame
+// containing a parked van: per-channel max probabilities came back
+// [0.001, 0.023, 0.065, 0.093, 0.983] -- channel 0 dead, the van on
+// channel 4. Assuming background-last here made the parser read vehicle
+// as the "no object" score, which both hid every vehicle and let a strong
+// vehicle score suppress other detections on the same query.
+constexpr int kBackgroundChannelLo = 0;  // "no object" -- unannotated supercategory
+constexpr int kBackgroundChannelHi = 0;
+constexpr int kRealClassChannelsLo = 1;
+constexpr int kRealClassChannelsHi = 4; // inclusive: 1=bag,2=new_waste,3=person,4=vehicle
 
 inline float sigmoidf(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
@@ -144,16 +158,7 @@ extern "C" bool NvDsInferParseCustomRfdetrSeg(
       continue;
     }
 
-    const unsigned int classId = static_cast<unsigned int>(bestChannel - kRealClassChannelsLo); // 0=bag,1=new_waste,2=old_waste,3=person
-    // old_waste (channel 2) is explicitly ignored end-to-end -- excluded
-    // here at the parser so it never becomes a NvDsInferInstanceMaskInfo
-    // object at all: no bbox, no OSD render, no tracker ID, never reaches
-    // the FSM/alerting Python side. Still competes fairly in the argmax
-    // above (a real old_waste-looking region won't get miscounted as
-    // bag/new_waste/person just because we drop it here).
-    if (classId == kOldWasteChannel) {
-      continue;
-    }
+    const unsigned int classId = static_cast<unsigned int>(bestChannel - kRealClassChannelsLo); // 0=bag,1=new_waste,2=person,3=vehicle
     if (classId >= detectionParams.perClassPreclusterThreshold.size()) {
       continue;
     }

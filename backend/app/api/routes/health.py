@@ -12,14 +12,25 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.auth.middleware import require_admin
 from app.config.settings import settings
 from app.schemas.health import HealthResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["system"])
+
+# SECURITY: only the bare `GET /health` liveness probe is public -- load
+# balancers and container orchestrators need it unauthenticated, and it
+# returns nothing but ok/degraded/critical.
+#
+# The /health/* detail endpoints were ALSO public, which leaked the camera
+# inventory, the IP-speaker/device topology and host CPU/RAM/GPU/disk
+# figures to anyone who could reach the port. Note the inconsistency that
+# made this obvious: the same information under /api/system/health/*
+# already required `admin`. These now match.
 
 REDIS_HEALTH_PREFIX = "ww:health"
 
@@ -72,7 +83,12 @@ async def _read_all_health() -> dict[str, Any]:
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
-    """Simple health probe — returns OK, degraded, or critical."""
+    """Simple health probe — returns OK, degraded, or critical.
+
+    DELIBERATELY UNAUTHENTICATED. Docker healthchecks, the nginx /healthz
+    path and any load balancer need this without credentials. It exposes
+    only an aggregate status string and no component detail.
+    """
     overall = await _read_health_key("overall")
     if overall and isinstance(overall, dict):
         status = overall.get("status", "ok")
@@ -87,7 +103,7 @@ async def health_check() -> HealthResponse:
 
 
 @router.get("/health/full")
-async def full_health() -> dict[str, Any]:
+async def full_health(_user: dict = Depends(require_admin)) -> dict[str, Any]:
     """Full system health — reads cached status from health monitor.
 
     Returns the aggregated health status of all monitored components
@@ -103,7 +119,7 @@ async def full_health() -> dict[str, Any]:
 
 
 @router.get("/health/cameras")
-async def camera_health() -> dict[str, Any]:
+async def camera_health(_user: dict = Depends(require_admin)) -> dict[str, Any]:
     """Per-camera input and output stream health."""
     input_streams = await _read_health_key("input_streams")
     output_streams = await _read_health_key("output_streams")
@@ -114,14 +130,14 @@ async def camera_health() -> dict[str, Any]:
 
 
 @router.get("/health/speakers")
-async def speaker_health() -> dict[str, Any]:
+async def speaker_health(_user: dict = Depends(require_admin)) -> dict[str, Any]:
     """IP speaker connection status."""
     speakers = await _read_health_key("ip_speakers")
     return {"speakers": speakers or []}
 
 
 @router.get("/health/models")
-async def model_health() -> dict[str, Any]:
+async def model_health(_user: dict = Depends(require_admin)) -> dict[str, Any]:
     """VLM, TTS, and LPR model status."""
     vlm = await _read_health_key("vlm")
     tts = await _read_health_key("tts")
@@ -134,14 +150,14 @@ async def model_health() -> dict[str, Any]:
 
 
 @router.get("/health/system")
-async def system_health() -> dict[str, Any]:
+async def system_health(_user: dict = Depends(require_admin)) -> dict[str, Any]:
     """CPU, RAM, GPU, and disk status."""
     system = await _read_health_key("system")
     return system or {"status": "unknown"}
 
 
 @router.get("/health/services")
-async def services_health() -> dict[str, Any]:
+async def services_health(_user: dict = Depends(require_admin)) -> dict[str, Any]:
     """Kafka, Redis, PostgreSQL, Qdrant, and pipeline status."""
     kafka = await _read_health_key("kafka")
     redis_status = await _read_health_key("redis")

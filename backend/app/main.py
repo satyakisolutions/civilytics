@@ -10,12 +10,15 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from app.api.routes import auth as auth_routes
+from app.api.routes import users as user_routes
 from app.api.routes import cameras, health, config_routes, events, roi, alerts, evidence, lpr, analytics, system, devices, reports
 from app.api.routes import logs as log_routes
 from app.config.settings import settings
 from app.ws import metadata as ws_metadata
 from app.ws import events as ws_events
 from app.ws import alerts as ws_alerts
+from app.ws import client_logs as ws_client_logs
 from app.services.kafka_consumer import MetadataConsumer
 from app.services.event_consumer import EventConsumer
 from app.services.alert_consumer import AlertConsumer
@@ -76,6 +79,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.include_router(auth_routes.router, prefix="/api")
+    app.include_router(user_routes.router, prefix="/api")
     app.include_router(health.router, prefix="/api")
     app.include_router(cameras.router, prefix="/api")
     app.include_router(config_routes.router, prefix="/api")
@@ -92,14 +97,15 @@ def create_app() -> FastAPI:
     app.include_router(ws_metadata.router, prefix="/ws")
     app.include_router(ws_events.router, prefix="/ws")
     app.include_router(ws_alerts.router, prefix="/ws")
+    app.include_router(ws_client_logs.router, prefix="/ws")
 
     # Serve TTS audio files so the browser can fetch and play them
-    tts_dir = Path("/tmp/wastewatch/tts")
+    tts_dir = Path(settings.tts_dir)
     tts_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/tts", StaticFiles(directory=str(tts_dir)), name="tts")
 
     # Serve evidence files (keyframes, video clips)
-    evidence_dir = Path("/app/evidence")
+    evidence_dir = Path(settings.evidence_dir)
     evidence_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/evidence", StaticFiles(directory=str(evidence_dir)), name="evidence")
 

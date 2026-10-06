@@ -7,10 +7,18 @@ def test_create_app():
     from app.main import create_app
     app = create_app()
     assert app.title == "WasteWatch API"
-    # Check routes are registered
-    routes = [r.path for r in app.routes]
-    assert "/api/health" in routes
-    assert "/api/cameras" in routes or any("/cameras" in r for r in routes)
+    # Check routes are registered.
+    # app.routes mixes real routes with _IncludedRouter entries (one per
+    # include_router call) which carry no .path, so read it defensively.
+    routes = [p for p in (getattr(r, "path", None) for r in app.routes) if p]
+    # Routers added via include_router are not flattened into app.routes in
+    # this FastAPI version (they appear as _IncludedRouter), so assert against
+    # the generated OpenAPI paths instead -- that reflects what is actually
+    # served.
+    paths = app.openapi()["paths"]
+    assert "/api/health" in paths
+    assert "/api/cameras" in paths
+    assert "/api/auth/login" in paths
 
 
 def test_app_cors():
@@ -22,21 +30,27 @@ def test_app_cors():
 
 
 @pytest.mark.asyncio
-async def test_lifespan_starts_workers():
+async def test_lifespan_starts_consumers():
+    """The lifespan starts the four Kafka consumers that feed the WebSockets.
+
+    This test previously patched app.main.VLMWorker, AlertDispatcher, TTSWorker,
+    EvidenceWorker, LPRWorker and LogWorker -- none of which main.py imports any
+    more. It failed on the first missing attribute, but that was masked by an
+    earlier PermissionError from the hardcoded /app/evidence mount, so the drift
+    went unnoticed. Asserted against what lifespan() actually constructs.
+    """
     from app.main import create_app
     with patch("app.main.MetadataConsumer") as MC, \
          patch("app.main.EventConsumer") as EC, \
-         patch("app.main.VLMWorker") as VW, \
-         patch("app.main.AlertDispatcher") as AD, \
-         patch("app.main.TTSWorker") as TW, \
-         patch("app.main.EvidenceWorker") as EW, \
-         patch("app.main.LPRWorker") as LW, \
-         patch("app.main.LogWorker") as LogW:
-        for cls in [MC, EC, VW, AD, TW, EW, LW, LogW]:
-            instance = AsyncMock()
-            cls.return_value = instance
+         patch("app.main.AlertConsumer") as AC, \
+         patch("app.main.CameraStatusConsumer") as CSC:
+        for cls in (MC, EC, AC, CSC):
+            cls.return_value = AsyncMock()
 
         app = create_app()
-        # Trigger lifespan
         async with app.router.lifespan_context(app):
-            pass  # Workers started and stopped
+            pass
+
+        for cls in (MC, EC, AC, CSC):
+            cls.return_value.start.assert_awaited_once()
+            cls.return_value.stop.assert_awaited_once()

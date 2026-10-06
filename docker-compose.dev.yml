@@ -1,9 +1,288 @@
+# ──────────────────────────────────────────────────────────────────────
+# Civilytics / WasteWatch — DEV (local workstation)
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#
+# 9 containers. Source is bind-mounted so edits apply on container
+# restart instead of an image rebuild (the pipeline image is ~42 GB).
+#
+# Keycloak IS included here deliberately. Without it the only way to run
+# is WW_AUTH_DEV_MODE=1, which bypasses REST *and* WebSocket auth and
+# grants owner+admin+viewer — so login and role gating would never be
+# exercised before prod.
+#
+# Removed vs the legacy files (see docker/legacy/, docs/CONTAINER_PLAN.md):
+#   qdrant, vlm, vlm-worker, tts-worker, history-publisher,
+#   rtsp-streamer, onnx-to-engine
+# onnx-to-engine is redundant: pipeline/entrypoint.py Phase 1 already
+# calls app.engine_builder.ensure_engines() before the pipeline starts.
+# ──────────────────────────────────────────────────────────────────────
+
+# Separate compose project per environment. Without an explicit
+# name all three files default to the directory name, share one project,
+# and `docker compose -f ... ps` would list (and `down` would stop) the
+# containers of whichever stack happened to be running.
+name: civilytics-dev
+
+x-ww-env: &ww-env
+  WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  WW_REDIS_URL: redis://:${REDIS_PASSWORD:-wastewatch_dev}@redis:6379/0
+  WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
+  WW_MEDIAMTX_API_URL: http://mediamtx:9997
+  # Derived from POSTGRES_PASSWORD so dev needs no .env entry. Generated
+  # passwords are kept alphanumeric by scripts/bootstrap.sh precisely so
+  # they are safe to interpolate into a URL like this without encoding.
+  WW_DATABASE_URL: postgresql+asyncpg://wastewatch:${POSTGRES_PASSWORD:-wastewatch_dev}@postgres:5432/wastewatch
+
 services:
-  api:
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+  # ── Data stores ────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: wastewatch
+      POSTGRES_USER: wastewatch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wastewatch_dev}
+    ports:
+      - "5433:5432"
     volumes:
-      - ./backend:/app
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wastewatch"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:3.7.0
+    environment:
+      # KRaft mode — no ZooKeeper. Single node is both broker and controller.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: wastewatch-kafka-cluster-01
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:-wastewatch_dev}
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-wastewatch_dev}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── Identity ───────────────────────────────────────────────────────
+  # ── SMTP relay (capture-only) ─────────────────────────────────
+  # Keycloak sends the onboarding "set your password" email itself, from its
+  # REALM smtp config -- WW_SMTP_* only reaches our own reports worker, so
+  # without a relay here the onboarding link is never delivered and a new
+  # user can never sign in.
+  #
+  # Mailpit accepts everything on 1025 and delivers NOTHING outbound; mail
+  # lands in a web inbox instead. That is what you want off production: the
+  # onboarding link is clickable during development without any risk of
+  # mailing a real municipal address. Both Keycloak's realm and our reports
+  # worker point at this one relay.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: civilytics-dev-mailpit
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      - "8025:8025"      # web inbox -- open this to click the setup link
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/wastewatch
+      KC_DB_USERNAME: wastewatch
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:-wastewatch_dev}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    ports:
+      - "8180:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Media ──────────────────────────────────────────────────────────
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    ports:
+      - "8554:8554"       # RTSP
+      - "8889:8889"       # WebRTC HTTP (WHEP)
+      - "8189:8189/udp"   # WebRTC media (ICE/UDP) — matches webrtcLocalUDPAddress
+      - "9997:9997"       # API
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    restart: unless-stopped
+
+  # ── Application ────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+    ports:
+      - "8082:8080"       # 8080 collides with another container on this box
+    env_file:
+      - .env
+    environment:
+      <<: *ww-env
+      WW_KEYCLOAK_URL: http://keycloak:8080
+      WW_EVIDENCE_DIR: /app/evidence
+      WW_TTS_DIR: /tmp/wastewatch/tts
+      # Cookies go over plain HTTP in dev, so Secure must be off or the
+      # browser silently drops the session cookie.
+      WW_AUTH_COOKIE_SECURE: "false"
+      # Confidential-client secret for the branded login's server-side
+      # token exchange. Must match the client created in the dev realm.
+      WW_KEYCLOAK_CLIENT_SECRET: ${WW_KEYCLOAK_CLIENT_SECRET:-dev-client-secret}
+      # Leave auth ON by default. Set to 1 in .env only if you have not
+      # configured the Keycloak realm yet — it bypasses ALL auth.
+      WW_AUTH_DEV_MODE: ${WW_AUTH_DEV_MODE:-0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app:rw        # dev: edit without rebuilding
+      - tts_data:/tmp/wastewatch/tts
+      - evidence_data:/app/evidence
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+    restart: unless-stopped
+
+  backend-workers:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      <<: *ww-env
+      WW_SMTP_HOST: ${WW_SMTP_HOST:-mailpit}
+      WW_SMTP_PORT: ${WW_SMTP_PORT:-1025}
+      WW_SMTP_USER: ${WW_SMTP_USER:-}
+      WW_SMTP_PASSWORD: ${WW_SMTP_PASSWORD:-}
+      WW_SMTP_FROM: ${WW_SMTP_FROM:-wastewatch@satyaki.co.in}
+      WW_SMTP_TLS: ${WW_SMTP_TLS:-false}
+      # Optional outbound channels, off by default in dev so a local run
+      # cannot message real recipients or sound a real speaker.
+      WW_SMTP_ENABLED: ${WW_SMTP_ENABLED:-true}
+      WW_TELEGRAM_ENABLED: ${WW_TELEGRAM_ENABLED:-false}
+      WW_SIP_ENABLED: ${WW_SIP_ENABLED:-false}
+      WW_IP_SPEAKER_ENABLED: ${WW_IP_SPEAKER_ENABLED:-false}
+      WW_TTS_ENABLED: ${WW_TTS_ENABLED:-false}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app:rw
+      - ./backend/services:/app/services:rw
+      - evidence_data:/tmp/wastewatch/evidence
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # healer inspects containers
+    ports:
+      - "9100:9100"       # healer MCP server
+    command: ["python3", "-m", "services.combined_workers.main"]
+    restart: unless-stopped
 
   pipeline:
-    profiles:
-      - gpu
+    build:
+      context: ./pipeline
+    env_file:
+      - .env
+    environment:
+      <<: *ww-env
+      WW_EVIDENCE_DIR: /app/evidence
+      WW_USE_SEG_MODEL: ${WW_USE_SEG_MODEL:-1}
+      # Empty: cameras are registered dynamically from the DB so they
+      # carry their real ROI polygons. A static cam-01 entry here has no
+      # ROI, so nothing on it can ever reach ENTER/VIOLATION.
+      WW_SOURCES: ""
+      GST_DEBUG: ${GST_DEBUG:-nvinfer:4}
+    volumes:
+      # Bind-mounted so model/config/code changes are a container restart
+      # rather than a 42 GB image rebuild.
+      - ./pipeline/models:/app/models:rw
+      - ./pipeline/configs:/app/configs:rw
+      - ./pipeline/app:/app/app:rw
+      - ./scripts:/scripts:ro
+      - evidence_data:/app/evidence
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mediamtx:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: ["sh", "-c", "npm install --legacy-peer-deps --no-audit --no-fund && npm run dev -- --host 0.0.0.0 --port 8080"]
+    ports:
+      - "5174:8080"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"   # HMR over a bind mount needs polling
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  kafka_data:
+  redis_data:
+  tts_data:
+  evidence_data:

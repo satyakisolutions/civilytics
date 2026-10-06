@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Alert } from '@/types/monitoring';
 import { API_BASE, WS_BASE } from '@/lib/api-base';
+import { openAuthedWebSocket } from '@/lib/api-client';
 import { useToast } from '@/hooks/use-toast';
 import { useNotifications } from '@/hooks/useNotifications';
 
@@ -118,8 +119,11 @@ export function useAlerts() {
   const fetchFromApiRef = useRef(fetchFromApi);
   fetchFromApiRef.current = fetchFromApi;
 
-  const connectWs = useCallback(() => {
-    const ws = new WebSocket(`${WS_BASE}/alerts`);
+  const connectWs = useCallback(async () => {
+    // The socket carries the access token as a subprotocol; without a session
+    // the backend closes it with 1008, so don't open one at all.
+    const ws = await openAuthedWebSocket(`${WS_BASE}/alerts`);
+    if (!ws) return;
     wsRef.current = ws;
 
     ws.onopen = () => {

@@ -1,6 +1,7 @@
 """Route tests with mocked database dependency."""
 import pytest
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import ASGITransport, AsyncClient
 
@@ -215,13 +216,50 @@ async def test_analytics_hourly_via_route(mclient, mock_db):
 
 @pytest.mark.asyncio
 async def test_logs_search_no_query(mclient, mock_db):
-    resp = await mclient.get("/api/system/logs")
+    """No query now returns the newest rows rather than an empty placeholder.
+
+    The endpoint used to run a Qdrant semantic search and refuse without a
+    query string. Qdrant was dropped from test and prod, so this is plain
+    filtered SQL over log_entries and a bare GET is a valid "tail the logs".
+    """
+    with patch("app.api.routes.logs.async_session") as session_factory:
+        session = AsyncMock()
+        session.execute.return_value = MagicMock(
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        )
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=session)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        session_factory.return_value = cm
+        resp = await mclient.get("/api/system/logs")
     assert resp.status_code == 200
     assert resp.json()["results"] == []
 
 @pytest.mark.asyncio
 async def test_logs_search_with_query(mclient, mock_db):
-    with patch("app.api.routes.logs._qdrant") as mock_qdrant:
-        mock_qdrant.search = AsyncMock(return_value=[{"message": "test"}])
-        resp = await mclient.get("/api/system/logs?q=error")
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    row = SimpleNamespace(
+        id=_uuid.uuid4(),
+        service="browser",
+        level="error",
+        message="an error happened",
+        meta={"session_id": "sess-1"},
+        timestamp=datetime(2026, 10, 6, tzinfo=timezone.utc),
+    )
+    with patch("app.api.routes.logs.async_session") as session_factory:
+        session = AsyncMock()
+        session.execute.return_value = MagicMock(
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[row])))
+        )
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=session)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        session_factory.return_value = cm
+        resp = await mclient.get("/api/system/logs?q=error&service=browser")
     assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 1
+    assert body["results"][0]["message"] == "an error happened"
+    assert body["results"][0]["metadata"]["session_id"] == "sess-1"

@@ -83,17 +83,14 @@ BBOX_CLASS_MAP: dict[int, str] = {
 # pipeline/configs/labels_seg.txt / nvinfer_rfdetr_seg.txt). Selected
 # instead of BBOX_CLASS_MAP when WW_USE_SEG_MODEL=1.
 #
-# v12 retrain added old_waste back as a real class (bag/new_waste/
-# old_waste/person) at channel 2, but old_waste is dropped entirely by
-# the custom parser (nvdsparseseg_RfdetrSeg.cpp: kOldWasteChannel) --
-# it never becomes an object at all (no bbox, no OSD, no tracker ID),
-# so classId 2 is unreachable here. Explicit instruction: "completely
-# ignore old waste... don't bbox or highlight it, don't consider it in
-# the algorithm too."
+# v13 retrain dropped old_waste and added vehicle, so the alphabetical
+# channel order is now bag/new_waste/person/vehicle -- person moved from
+# channel 3 to 2, and no channel is dropped by the parser any more.
 SEG_CLASS_MAP: dict[int, str] = {
     0: "bag",
-    1: "waste",   # new_waste -- the only waste class that ever reaches here
-    3: "person",
+    1: "waste",   # new_waste -- the only waste class the model emits
+    2: "person",
+    3: "vehicle",
 }
 
 COCO_CLASS_MAP: dict[int, str] = (
@@ -126,6 +123,9 @@ CLASS_CATEGORIES: dict[str, str] = {
     # furniture/appliance classes below).
     "bag": "carried_item",
     "waste": "waste_object",
+    # v13 seg model detects vehicles directly as one class, rather than the
+    # bbox model's COCO car/bus/truck split mapped above.
+    "vehicle": "vehicle",
     "bottle": "waste_object", "wine_glass": "waste_object", "cup": "waste_object",
     "bowl": "waste_object",
     "chair": "waste_object", "couch": "waste_object",
@@ -835,13 +835,51 @@ def decorate_for_osd(
             # border -- pure OSD metadata (rect.bg_color), not real pixel
             # blur, which crashed the pipeline earlier this session and
             # was reverted.
+            # Red is one-way: once a track has been announced red it never
+            # drops back to yellow/none, even if the evidence map or FSM
+            # state later softens (attribution can be transient, dwell can
+            # reset on a detector miss). An operator who saw a red alert
+            # must keep seeing it for as long as the track lives.
+            _red_tracks = ctx.setdefault("osd_red_tracks", set())
+            _red_key = (camera_id, track_id)
+            # The tracker hands the same physical object a NEW id after an
+            # occlusion, so a track-id-keyed set alone lets a re-acquired
+            # vehicle come back yellow after it was already announced red.
+            # Remember where red was drawn and let an overlapping new track
+            # inherit it.
+            _red_boxes = ctx.setdefault("osd_red_boxes", {})
+
+            def _box_is_red(cam: str, r) -> bool:
+                ax1, ay1, ax2, ay2 = r.left, r.top, r.left + r.width, r.top + r.height
+                for bx1, by1, bx2, by2 in _red_boxes.get(cam, []):
+                    ix = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+                    iy = max(0.0, min(ay2, by2) - max(ay1, by1))
+                    inter = ix * iy
+                    if inter <= 0:
+                        continue
+                    union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+                    if union > 0 and inter / union >= 0.5:
+                        return True
+                return False
+
+            def _remember_red(cam: str, r) -> None:
+                _red_boxes.setdefault(cam, [])
+                box = (r.left, r.top, r.left + r.width, r.top + r.height)
+                lst = _red_boxes[cam]
+                lst.append(box)
+                del lst[:-20]  # bounded; only recent reds matter for re-acquire
+
             if category == "person":
                 rect.border_width = 0
                 _dumper_map_here = ctx.get("waste_dumper_map") or {}
-                _is_attributed_here = any(
+                _is_attributed_here = _red_key in _red_tracks or any(
                     wk[0] == camera_id and pid == track_id
                     for wk, pid in _dumper_map_here.items()
-                ) or (fsm_mgr is not None and fsm_mgr.is_forced_by_waste(camera_id, track_id))
+                ) or (fsm_mgr is not None and fsm_mgr.is_forced_by_waste(camera_id, track_id)) \
+                    or _box_is_red(camera_id, rect)
+                if _is_attributed_here:
+                    _red_tracks.add(_red_key)
+                    _remember_red(camera_id, rect)
                 # Red only when this person is actually tied to real
                 # evidence -- waste_dumper_map (attribution flow) OR
                 # fsm.forced_by_waste (bag proximity+dwell fast-track,
@@ -894,6 +932,34 @@ def decorate_for_osd(
                         (obj_meta.unique_component_id, obj_meta.class_id,
                          rect.left, rect.top, rect.width, _face_h)
                     )
+            elif category == "vehicle":
+                # Same treatment as person: yellow while merely suspicious
+                # (FSM OBSERVE -- in ROI, dwelling), solid red once the
+                # stop/dwell rule escalates it to VIOLATION, nothing
+                # otherwise. No per-state label text either.
+                rect.has_bg_color = 0
+                _veh_red = (
+                    _red_key in _red_tracks
+                    or fsm_state == "violation"
+                    or (fsm_mgr is not None and fsm_mgr.is_escalated(camera_id, track_id))
+                    or _box_is_red(camera_id, rect)
+                )
+                if _veh_red:
+                    _red_tracks.add(_red_key)
+                    _remember_red(camera_id, rect)
+                    rect.border_width = 8
+                    rect.border_color.red = 1.0
+                    rect.border_color.green = 0.0
+                    rect.border_color.blue = 0.0
+                    rect.border_color.alpha = 1.0
+                elif fsm_state == "observe":
+                    rect.border_width = 4
+                    rect.border_color.red = 1.0
+                    rect.border_color.green = 0.85
+                    rect.border_color.blue = 0.0
+                    rect.border_color.alpha = 1.0
+                else:
+                    rect.border_width = 0
             else:
                 border_w = _STATE_BORDER_WIDTH.get(fsm_state, 2)
                 br, bg, bb, ba = _STATE_BORDER_COLOUR.get(fsm_state, _STATE_BORDER_COLOUR["idle"])
@@ -988,8 +1054,9 @@ def decorate_for_osd(
             # real snapshot saved via _save_alert_snapshot).
 
             # --- Text params ---
-            # Person: no label at all (no box either, see above).
-            if category == "person":
+            # Person and vehicle: no label at all, the border colour alone
+            # carries the state.
+            if category in ("person", "vehicle"):
                 obj_meta.text_params.display_text = ""
             else:
                 txt = obj_meta.text_params
@@ -1449,6 +1516,13 @@ def extract_metadata(
             logger.info("Resetting track/FSM state for %s after confirmed scene cut", camera_id)
             track_manager.reset_camera(camera_id)
             fsm_manager.reset_camera(camera_id)
+            # Sticky red is per track id; a scene cut invalidates those ids,
+            # so drop this camera's entries or a recycled id inherits red.
+            _red = ctx.get("osd_red_tracks")
+            if _red:
+                _red.difference_update({k for k in _red if k[0] == camera_id})
+            if ctx.get("osd_red_boxes"):
+                ctx["osd_red_boxes"].pop(camera_id, None)
             for _d in (
                 ctx.get("waste_dumper_map"),
                 ctx.get("waste_attribution_pair"),
@@ -1602,7 +1676,7 @@ def extract_metadata(
                     # state never advanced past IDLE no matter how long it
                     # sat there).
                     in_roi = (
-                        class_name in ("person", "waste")
+                        class_name in ("person", "waste", "vehicle")
                         and roi_manager.is_in_any_roi(camera_id, bbox_center_x, bbox_center_y)
                     )
 
@@ -3253,6 +3327,21 @@ def main() -> None:
         if _rotation_counter["ticks"] >= 360:
             _rotation_counter["ticks"] = 0
             evidence_writer.rotate()
+
+        # Liveness heartbeat. Writes a file for the Docker healthcheck and
+        # sets ww:pipeline:status/fps/active_sources in Redis, which
+        # services/health_monitor has always read but nothing ever wrote.
+        try:
+            from app.heartbeat import write_heartbeat  # noqa: PLC0415
+
+            write_heartbeat(
+                ctx.get("redis_client"),
+                active_sources=len(source_manager.active_sources),
+                fps=float(ctx.get("current_fps") or 0.0),
+            )
+        except Exception:
+            # Never let housekeeping die for a heartbeat.
+            logger.debug("Heartbeat write failed", exc_info=True)
 
         return True  # Keep the timeout alive
 

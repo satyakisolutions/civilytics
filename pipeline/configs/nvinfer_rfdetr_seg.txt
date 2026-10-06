@@ -84,10 +84,12 @@ pre-cluster-threshold=0.20
 [class-attrs-1]
 pre-cluster-threshold=0.05
 
-# old_waste (2) — same starting point as new_waste until re-tuned.
+# person (2) — allow weaker tracks so tracker's hysteresis picks them up.
 [class-attrs-2]
-pre-cluster-threshold=0.05
+pre-cluster-threshold=0.30
 
-# person (3) — allow weaker tracks so tracker's hysteresis picks them up.
+# vehicle (3) — same as person; vehicles are large and score high, the
+# looser gate is for partially-occluded/parked ones that must still hold
+# a stable track for the stop/dwell timer.
 [class-attrs-3]
 pre-cluster-threshold=0.30

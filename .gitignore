@@ -53,3 +53,20 @@ backend/models/piper/*.onnx
 backend/models/piper/*.json
 *.onnx.bak
 *.engine.bak
+
+# ── Research artefacts (2026-10-06) ────────────────────────────────
+# 51 GB of SAM3 masking output, datasets and extracted archives. A job
+# writes into research/ while the repo is in use, so this is also a guard
+# against committing a half-written dataset.
+research/
+
+# Paper PDFs and dataset archives kept locally for reference, not source.
+docs/*.pdf
+docs/*.zip
+
+# Model weight backups kept beside the live weights.
+pipeline/models/**/v1*_backup/
+*.bak
+
+# Tooling scratch state
+.understand-anything/

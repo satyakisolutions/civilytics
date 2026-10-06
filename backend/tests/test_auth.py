@@ -79,6 +79,7 @@ async def test_get_current_user_dev_mode():
     from app.auth.middleware import get_current_user
     req = MagicMock()
     req.headers.get.return_value = ""
+    req.cookies = {}  # no browser session; middleware also checks cookies
     # WW_AUTH_DEV_MODE is set in conftest.py
     user = await get_current_user(req)
     assert user["sub"] == "dev-user"
@@ -93,6 +94,7 @@ async def test_get_current_user_prod_mode_no_header():
     from app.auth.middleware import get_current_user
     req = MagicMock()
     req.headers.get.return_value = ""
+    req.cookies = {}
     old = os.environ.pop("WW_AUTH_DEV_MODE", None)
     try:
         with pytest.raises(HTTPException) as exc_info:
@@ -109,6 +111,7 @@ async def test_get_current_user_valid_token():
     claims = {"sub": "real-user", "realm_access": {"roles": ["viewer"]}}
     req = MagicMock()
     req.headers.get.return_value = "Bearer valid_token"
+    req.cookies = {}
 
     with patch("app.auth.middleware.validate_token", new_callable=AsyncMock, return_value=claims):
         user = await get_current_user(req)
@@ -121,6 +124,7 @@ async def test_get_current_user_invalid_token():
     from app.auth.middleware import get_current_user
     req = MagicMock()
     req.headers.get.return_value = "Bearer invalid_token"
+    req.cookies = {}
 
     with patch("app.auth.middleware.validate_token", new_callable=AsyncMock, return_value=None):
         with pytest.raises(HTTPException) as exc_info:
@@ -146,3 +150,36 @@ async def test_require_role_forbidden():
     with pytest.raises(HTTPException) as exc_info:
         await checker(user=user)
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_accepts_cookie_session():
+    """Browser session: token arrives in the httpOnly cookie, not a header."""
+    from app.auth.middleware import get_current_user
+    claims = {"sub": "cookie-user", "realm_access": {"roles": ["viewer"]}}
+    req = MagicMock()
+    req.headers.get.return_value = ""           # no Authorization header
+    req.cookies = {"ww_access": "cookie_token"}
+
+    with patch("app.auth.middleware.validate_token", new_callable=AsyncMock, return_value=claims):
+        user = await get_current_user(req)
+    assert user["sub"] == "cookie-user"
+
+
+@pytest.mark.asyncio
+async def test_bearer_header_wins_over_cookie():
+    """An explicit Authorization header takes precedence over the cookie."""
+    from app.auth.middleware import get_current_user
+    seen = {}
+
+    async def _capture(token):
+        seen["token"] = token
+        return {"sub": "hdr", "realm_access": {"roles": ["viewer"]}}
+
+    req = MagicMock()
+    req.headers.get.return_value = "Bearer header_token"
+    req.cookies = {"ww_access": "cookie_token"}
+
+    with patch("app.auth.middleware.validate_token", new=_capture):
+        await get_current_user(req)
+    assert seen["token"] == "header_token"
