@@ -125,7 +125,10 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
           if (now - lastNotifyTime.current < 3_000) continue;
           lastNotifyTime.current = now;
           fireNotification(alert.title, alert.message || '', alert.severity, `alert-${alert.id}`, alert.ttsAudioUrl);
-          setIsAlertPanelOpen(true);
+          // CI-53: do NOT force-open the alert drawer on every alert — that
+          // stole the screen every few seconds. The browser push + audio from
+          // fireNotification already surfaces the alert; the operator opens the
+          // drawer themselves via the sidebar bell when they want it.
           fired += 1;
           if (fired >= 3) break; // cap per poll so a backlog doesn't spam
         }
