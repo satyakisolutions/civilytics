@@ -17,13 +17,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # "newest N rows for this service", the default log-viewer query.
-    op.create_index(
-        "ix_log_entries_service_timestamp",
-        "log_entries",
-        ["service", "timestamp"],
-        postgresql_using="btree",
-    )
+    # NOTE: ix_log_entries_service_timestamp is NOT created here -- migration
+    # 005 already creates it. Adding it again raises DuplicateTableError and
+    # aborts the upgrade.
+    #
     # "everything from one browser session", for following a bug report.
     # Expression index on the JSONB key, since session_id lives in metadata
     # rather than its own column -- log_entries already existed and adding a
@@ -36,4 +33,3 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS ix_log_entries_session_id")
-    op.drop_index("ix_log_entries_service_timestamp", table_name="log_entries")

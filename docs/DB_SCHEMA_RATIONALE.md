@@ -2,9 +2,16 @@
 
 Date: 2026-10-06. Source: `backend/app/db/models.py`, migrations 001–008.
 
-This is the **target** schema, not the as-built one. Columns that do not exist
-yet are marked **NEW**; columns that should go are marked **DROP**; columns
-that exist but are wrong are marked **CHANGE**.
+**STATUS: implemented.** Migration `009_schema_rationale_fixes.py` applies
+every change below; the dev database is at revision 009 and the full test
+suite is unchanged (336 passing, 12 pre-existing failures). The **NEW** /
+**CHANGE** / **DROP** markers now record what 009 did, not what is pending.
+
+**One thing 009 does NOT do: enforce tenancy on reads.** `cameras.tenant_id`
+exists and is populated, but `api/routes/cameras.py` still uses a bootstrap
+`_DEFAULT_TENANT` and never consults the caller's own tenant. The column is
+the prerequisite for T1; the filtering is still to come. Until then this is
+a single-tenant deployment with the schema ready for more.
 
 Each column answers one question: *what breaks if it is absent?* A column
 that cannot answer it does not belong.

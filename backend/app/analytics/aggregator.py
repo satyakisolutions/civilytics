@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import ViolationEvent, Camera, TrackSession, AlertSeverity, AlertStatus
+from app.db.models import ViolationEvent, Camera, TrackSession, AlertSeverity, AlertStatus, Zone
 
 logger = logging.getLogger(__name__)
 
@@ -116,14 +116,20 @@ async def get_hourly_stats(db: AsyncSession, hours: int = 24) -> list[dict]:
 
 
 async def get_by_zone(db: AsyncSession) -> list[dict]:
-    """Event counts grouped by camera zone."""
+    """Event counts grouped by zone.
+
+    Grouped on Zone.id, not the name: grouping by name would merge two
+    different zones that happen to share a label across tenants, and would
+    re-split history whenever a zone is renamed.
+    """
     result = await db.execute(
         select(
-            Camera.zone,
+            Zone.name.label("zone"),
             func.count(ViolationEvent.id).label("event_count"),
         )
         .join(Camera, ViolationEvent.camera_id == Camera.id)
-        .group_by(Camera.zone)
+        .join(Zone, Camera.zone_id == Zone.id)
+        .group_by(Zone.id, Zone.name)
         .order_by(func.count(ViolationEvent.id).desc())
     )
     return [{"zone": row.zone, "event_count": row.event_count} for row in result]
@@ -135,11 +141,12 @@ async def get_by_camera(db: AsyncSession) -> list[dict]:
         select(
             Camera.id,
             Camera.name,
-            Camera.zone,
+            Zone.name.label("zone"),
             func.count(ViolationEvent.id).label("event_count"),
         )
         .join(Camera, ViolationEvent.camera_id == Camera.id)
-        .group_by(Camera.id, Camera.name, Camera.zone)
+        .join(Zone, Camera.zone_id == Zone.id)
+        .group_by(Camera.id, Camera.name, Zone.name)
         .order_by(func.count(ViolationEvent.id).desc())
     )
     return [
