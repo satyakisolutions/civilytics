@@ -40,6 +40,15 @@ function roleAtLeast(roles: string[], required: Role): boolean {
   return Math.max(...held) >= RANK[required];
 }
 
+/** Highest app role held, for display (CI-51 sidebar badge). Unknown roles ignored. */
+export function topRole(roles: string[]): Role | null {
+  let best: Role | null = null;
+  for (const r of roles) {
+    if (Object.hasOwn(RANK, r) && (!best || RANK[r as Role] > RANK[best])) best = r as Role;
+  }
+  return best;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);

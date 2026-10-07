@@ -17,10 +17,13 @@ import {
   Map,
   PlayCircle,
   XCircle,
+  LogOut,
+  UserCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { API_BASE } from '@/lib/api-base';
 import { useMonitoring } from '@/context/MonitoringContext';
+import { useAuth, topRole } from '@/context/AuthContext';
 import { mockSystemStatus } from '@/data/mockData';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -51,6 +54,8 @@ export function Sidebar({ className }: SidebarProps) {
     isAlertPanelOpen,
     setIsAlertPanelOpen,
   } = useMonitoring();
+  const { user, logout } = useAuth();
+  const role = user ? topRole(user.roles) : null;
 
   const activeAlerts = alerts.filter(a => a.status === 'active').length;
   const systemStatus = mockSystemStatus;
@@ -229,6 +234,39 @@ export function Sidebar({ className }: SidebarProps) {
       <div className="p-4 border-t border-sidebar-border">
         <TimeDisplay />
       </div>
+
+      {/* Signed-in identity + sign out (CI-51). Lives in the sidebar so it is
+          on every page; a shared office PC must be able to end the session. */}
+      {user && (
+        <div className="p-3 border-t border-sidebar-border flex items-center gap-2">
+          <UserCircle className="w-8 h-8 text-muted-foreground flex-shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium truncate">{user.name || user.username}</div>
+            {user.email && (
+              <div className="text-[10px] text-muted-foreground truncate">{user.email}</div>
+            )}
+            {role && (
+              <Badge variant="secondary" className="mt-0.5 h-4 px-1.5 text-[9px] uppercase">
+                {role}
+              </Badge>
+            )}
+          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 flex-shrink-0"
+                onClick={() => logout()}
+                aria-label="Sign out"
+              >
+                <LogOut className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Sign out</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
 
       {/* Powered By Footer */}
       <div className="px-4 pb-3 border-t border-sidebar-border pt-2">
