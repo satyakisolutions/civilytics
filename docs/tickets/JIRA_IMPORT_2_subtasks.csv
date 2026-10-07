@@ -1,0 +1,65 @@
+Summary,Issue Type,Parent,Priority,Description,Labels,Source Key
+Login form,Sub-task,TK-LOGIN,Medium,"The two boxes (username, password) and the Sign in button, laid out and working.",Frontend,TK-LOGIN-S1
+Input validation,Sub-task,TK-LOGIN,Medium,"Stop the form from submitting until both boxes are filled, and show a clear error if sign-in fails.",Frontend,TK-LOGIN-S2
+Alignment & spacing,Sub-task,TK-LOGIN,Medium,"Everything centred and evenly spaced, with the Civilytics logo and company name in place.",Frontend,TK-LOGIN-S3
+Responsiveness,Sub-task,TK-LOGIN,Medium,"The page looks right and is usable on a phone, a tablet and a desktop.",Frontend,TK-LOGIN-S4
+UI (look),Sub-task,TK-LOGIN,Medium,"Colours, fonts and the brand mark match the Civilytics style.",Frontend,TK-LOGIN-S5
+UX review,Sub-task,TK-LOGIN,Medium,"A person walks through signing in and confirms it feels obvious and quick, with no confusing steps.",Frontend,TK-LOGIN-S6
+Camera grid,Sub-task,TK-LAND,Medium,"Show all cameras as tiles; let the user switch between 2x2, 3x3 and other layouts.",Frontend,TK-LAND-S1
+Live video in each tile,Sub-task,TK-LAND,Medium,Play the real camera stream inside every tile.,Frontend,TK-LAND-S2
+Alert panel,Sub-task,TK-LAND,Medium,A side panel that lists live alerts and lets the user acknowledge them.,Frontend,TK-LAND-S3
+Violation highlight,Sub-task,TK-LAND,Medium,Make a tile light up when its camera detects a dump; blue when hovered.,Frontend,TK-LAND-S4
+Sidebar & navigation,Sub-task,TK-LAND,Medium,"The left menu that switches between the seven pages, with who is signed in and a sign-out button.",Frontend,TK-LAND-S5
+Responsiveness,Sub-task,TK-LAND,Medium,"On a phone, show one camera plus a list instead of nine tiles at once.",Frontend,TK-LAND-S6
+UX review,Sub-task,TK-LAND,Medium,A person confirms alerts are noticeable but do not block their work.,Frontend,TK-LAND-S7
+Alerts & notifications section,Sub-task,TK-SET,Medium,"Toggles for email, WhatsApp and call alerts, each actually saved.",Frontend,TK-SET-S1
+Detection settings section,Sub-task,TK-SET,Medium,A sensitivity slider that really changes how strict the detector is.,Frontend,TK-SET-S2
+Storage & backup section,Sub-task,TK-SET,Medium,Choose where evidence is backed up and for how long it is kept.,Frontend,TK-SET-S3
+Access control section,Sub-task,TK-SET,Medium,A shortcut into User Management and the audit-log switch.,Frontend,TK-SET-S4
+Wire every control to save,Sub-task,TK-SET,Medium,Make each toggle and field actually save and load (today they do nothing).,Frontend,TK-SET-S5
+Remove fake controls,Sub-task,TK-SET,Medium,"Delete switches that have nothing behind them (SMS, two-factor, repeat-offender).",Frontend,TK-SET-S6
+UX review,Sub-task,TK-SET,Medium,A person confirms every change they make is remembered and has a visible effect.,Frontend,TK-SET-S7
+Open the live camera picture,Sub-task,TK-ROI,Medium,Show the chosen camera's live feed to draw on.,Camera-Integration,TK-ROI-S1
+Draw the watch-area shape,Sub-task,TK-ROI,Medium,Let the admin draw and adjust a shape around the dumping spot.,Camera-Integration,TK-ROI-S2
+Set the linger time,Sub-task,TK-ROI,Medium,Enter how many seconds someone must stay before it counts as dumping.,Camera-Integration,TK-ROI-S3
+Save and apply live,Sub-task,TK-ROI,Medium,Save the shape and time so the detector starts using them straight away.,Camera-Integration,TK-ROI-S4
+Confirm on a test,Sub-task,TK-ROI,Medium,Watch one detection to confirm the area and timing are right.,Camera-Integration,TK-ROI-S5
+Add Camera form,Sub-task,TK-ADDCAM,Medium,"The form for name, stream link and zone.",Camera-Integration,TK-ADDCAM-S1
+Validate the stream link,Sub-task,TK-ADDCAM,Medium,Check the link format and that a picture actually comes through before saving.,Camera-Integration,TK-ADDCAM-S2
+Show live preview,Sub-task,TK-ADDCAM,Medium,Play the camera in the app so the admin confirms it is the right one.,Camera-Integration,TK-ADDCAM-S3
+Handle a bad or offline camera,Sub-task,TK-ADDCAM,Medium,"Show a clear message if the camera cannot be reached, instead of a blank tile.",Camera-Integration,TK-ADDCAM-S4
+Read the recorder label,Sub-task,TK-DEVTYPE,Medium,"Note DVR / NVR / XVR / standalone, brand and model.",Camera-Integration,TK-DEVTYPE-S1
+Count the channels,Sub-task,TK-DEVTYPE,Medium,How many cameras and which channel number each one is.,Camera-Integration,TK-DEVTYPE-S2
+Note the brand's link style,Sub-task,TK-DEVTYPE,Medium,Hikvision and Dahua build RTSP links differently; record which applies.,Camera-Integration,TK-DEVTYPE-S3
+Get the admin login,Sub-task,TK-DEVTYPE,Medium,Obtain the recorder's username and password from the customer.,Camera-Integration,TK-DEVTYPE-S4
+Confirm VPN truly is not possible,Sub-task,TK-PORTFWD,Medium,Port forwarding is the last resort; use it only if a VPN cannot be set up.,Camera-Integration,TK-PORTFWD-S1
+Find the recorder's local address and port,Sub-task,TK-PORTFWD,Medium,Usually 192.168.x.x on port 554.,Camera-Integration,TK-PORTFWD-S2
+Log in to the site router,Sub-task,TK-PORTFWD,Medium,Get the router admin login from the customer or their ISP.,Camera-Integration,TK-PORTFWD-S3
+Add the forwarding rule,Sub-task,TK-PORTFWD,Medium,Point a chosen outside port to the recorder's address and port 554.,Camera-Integration,TK-PORTFWD-S4
+Lock it to our server only,Sub-task,TK-PORTFWD,Medium,"Restrict the open door so ONLY our server's address can use it, not the whole internet.",Camera-Integration,TK-PORTFWD-S5
+Change default camera passwords,Sub-task,TK-PORTFWD,Medium,Never expose a camera on its factory password; set a strong one first.,Camera-Integration,TK-PORTFWD-S6
+Test from outside and from our server,Sub-task,TK-PORTFWD,Medium,Confirm the stream plays through the public address from our server.,Camera-Integration,TK-PORTFWD-S7
+Write down the rule,Sub-task,TK-PORTFWD,Medium,Record the port and rule so it can be found and removed later.,Camera-Integration,TK-PORTFWD-S8
+Pick the tunnel type,Sub-task,TK-NET-VPN,Medium,"Site-to-site VPN on the router, or a small on-site device that dials out.",Camera-Integration,TK-NET-VPN-S1
+Set up both ends,Sub-task,TK-NET-VPN,Medium,"Configure our server and the site end, confirm they connect.",Camera-Integration,TK-NET-VPN-S2
+Reach a camera over the tunnel,Sub-task,TK-NET-VPN,Medium,Play one camera by its local address through the VPN to prove it works.,Camera-Integration,TK-NET-VPN-S3
+Document the tunnel,Sub-task,TK-NET-VPN,Medium,Record how it is set up so it can be fixed if it drops.,Camera-Integration,TK-NET-VPN-S4
+Top number cards,Sub-task,TK-ANL,Medium,"Today's count, this week, repeat offenders, average response time.",Frontend,TK-ANL-S1
+7-day trend chart,Sub-task,TK-ANL,Medium,A line/area chart of dumps per day for the last week.,Frontend,TK-ANL-S2
+24-hour chart,Sub-task,TK-ANL,Medium,Bars showing dumps per hour for the last day.,Frontend,TK-ANL-S3
+Top zones list,Sub-task,TK-ANL,Medium,"The areas with the most dumping, worst first.",Frontend,TK-ANL-S4
+System health card,Sub-task,TK-ANL,Medium,A quick green/red summary of whether the system is healthy.,Frontend,TK-ANL-S5
+Derived-category view,Sub-task,TK-ANL,Medium,"Show the auto-found patterns: midnight-vehicle, daytime-work, etc., with odd ones left uncategorised.",Frontend,TK-ANL-S6
+Empty / loading / error states,Sub-task,TK-ANL,Medium,"Show 'no data', a loading hint, or a clear error — never a blank box or a fake zero.",Frontend,TK-ANL-S7
+'As of' freshness label,Sub-task,TK-ANL,Medium,"Say when the numbers were last updated, since they are not live to the second.",Frontend,TK-ANL-S8
+Responsiveness,Sub-task,TK-ANL,Medium,Charts stack and stay readable on a phone.,Frontend,TK-ANL-S9
+UX review,Sub-task,TK-ANL,Medium,A person confirms the charts answer 'where and when is dumping worst'.,Frontend,TK-ANL-S10
+Filter bar,Sub-task,TK-HIST,Medium,"Search box, zone picker, severity picker, date range, repeat-offender toggle.",Frontend,TK-HIST-S1
+Event table,Sub-task,TK-HIST,Medium,"The list of past events with camera, zone, time, confidence and status.",Frontend,TK-HIST-S2
+Evidence viewer,Sub-task,TK-HIST,Medium,Open an event to see its photo and video clip.,Frontend,TK-HIST-S3
+Review actions,Sub-task,TK-HIST,Medium,Mark an event as genuine or as a false alarm.,Frontend,TK-HIST-S4
+Export to file,Sub-task,TK-HIST,Medium,Download the filtered list as a spreadsheet.,Frontend,TK-HIST-S5
+Pagination,Sub-task,TK-HIST,Medium,"Page through older events, not just the latest 100.",Frontend,TK-HIST-S6
+Empty / loading / error states,Sub-task,TK-HIST,Medium,Clear messages when there are no results or a load fails.,Frontend,TK-HIST-S7
+Responsiveness,Sub-task,TK-HIST,Medium,The table becomes readable cards on a phone.,Frontend,TK-HIST-S8
+UX review,Sub-task,TK-HIST,Medium,A person confirms they can actually find a specific past event.,Frontend,TK-HIST-S9

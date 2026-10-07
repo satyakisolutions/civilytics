@@ -1,0 +1,202 @@
+Summary,Issue Type,Epic Name,Epic Link,Priority,Description,Labels,Source Key
+Train the AI that spots dumping,Epic,Train the AI that spots dumping,,P1,"Teach the computer to recognise people, bags, vehicles and dumped waste in camera footage. This happens before the app can detect anything.",Model-Training,EP-1
+Build the app people use,Epic,Build the app people use,,P0,"Everything a user clicks, sees and types: the screens, the buttons, the login, and the engine behind them that stores and serves data.",App-Development,EP-2
+Set up the servers and make it live safely,Epic,Set up the servers and make it live safely,,P0,"The plumbing that runs the app: the gateway that handles secure web traffic, the video server, the message bus, the database, and how it all starts up on a real machine.",Infrastructure-&-Deployment,EP-3
+Robot tests that check the app still works,Epic,Robot tests that check the app still works,,P1,"Automated checks (Playwright) that open the app in a real browser and click through it like a user, so a broken screen is caught before a customer sees it.",QA-Automated-Tests,EP-4
+Get the customer set up and keep them happy,Epic,Get the customer set up and keep them happy,,P2,"Installing at the customer site, adding their cameras and users, training their staff, and checking in after go-live.",Customer-Onboarding-&-Follow-up,EP-5
+"Run it reliably on cloud servers, and ship updates safely",Epic,"Run it reliably on cloud servers, and ship updates safely",,P1,"Everything to put the system on cloud machines and keep it running: automated build-and-release, secrets and certificates, backups, monitoring and alerts for the servers themselves, and a safe way to roll out a new version or roll back a bad one.",Cloud-DevOps-&-Deployment,EP-6
+Connect the customer's real cameras to the system,Epic,Connect the customer's real cameras to the system,,P0,"At each customer site, find their CCTV cameras, get the right stream address and login for each, confirm the picture comes through, place each camera on the map, and draw the watch-area. This is the bridge between our software and their hardware.",Customer-Side-Camera-Integration,EP-7
+The screens the user sees,Story,,CIV-EPIC::EP-2,P0,"The part of the app that runs in the web browser: every page, button and form the user interacts with.",Frontend,ST-FE
+The engine behind the screens,Story,,CIV-EPIC::EP-2,P0,"The service the screens talk to. It checks who you are, reads and saves data, and answers every request the screens make.",Backend-API,ST-API
+The background helpers,Story,,CIV-EPIC::EP-2,P1,"Programs that run quietly in the background doing scheduled jobs: sending alerts, saving evidence, making reports, health checks.",Worker,ST-WRK
+Prepare the training pictures,Story,,CIV-EPIC::EP-1,P1,"Collect camera frames and mark where the waste, bags, people and vehicles are, so the AI has correct examples to learn from.",Dataset-&-Masking,ST-DATA
+The model that finds objects,Story,,CIV-EPIC::EP-1,P1,The trained model that looks at each video frame and outlines what it sees.,Detection-Model,ST-DETECT
+The model that links a person to a bag,Story,,CIV-EPIC::EP-1,P2,"A model that decides whether a person is carrying or dropping a bag, so we know a dump actually happened.",Relation-Model,ST-RELATE
+The secure front door,Story,,CIV-EPIC::EP-3,P0,The single secure entrance to the system. All web traffic goes through it over HTTPS; nothing else is exposed to the outside.,NGINX,ST-NGINX
+The video server,Story,,CIV-EPIC::EP-3,P0,Receives the live camera streams and hands them to the app for viewing.,MediaMTX,ST-MTX
+The message bus,Story,,CIV-EPIC::EP-3,P1,The internal conveyor belt that carries events (like 'a dump was detected') from the detector to the background helpers.,Kafka,ST-KAFKA
+The permanent record,Story,,CIV-EPIC::EP-3,P0,"Where everything is stored for good: cameras, events, alerts, users, evidence records.",Database,ST-DB
+The live video analyser,Story,,CIV-EPIC::EP-3,P0,"Watches every camera in real time, runs the detection model on each frame, and raises an event when it sees a dump.",DeepStream-Pipeline,ST-DS
+Automatic build and release,Story,,CIV-EPIC::EP-6,P1,"When code is approved, it is automatically built, tested and prepared for release, so deploying is a button press, not a manual chore.",CI-CD-Pipeline,ST-CICD
+Set up the cloud machines,Story,,CIV-EPIC::EP-6,P1,"Create the servers, network, storage and GPU machine in the cloud in a repeatable way, so the exact same setup can be rebuilt any time.",Cloud-Provisioning,ST-CLOUD
+Keep passwords and HTTPS certificates safe,Story,,CIV-EPIC::EP-6,P0,"Store every password, key and certificate securely, and renew the HTTPS certificate before it expires so the site never goes insecure.",Secrets-&-Certificates,ST-SECRETS
+Watch the servers and keep safe copies,Story,,CIV-EPIC::EP-6,P1,"Alert the team if a server is down, disk is full or GPU is overheating, and take regular backups of the database and evidence so nothing is lost.",Monitoring-&-Backups,ST-OBS
+"Ship a new version, or undo it fast",Story,,CIV-EPIC::EP-6,P1,"A safe way to roll out a new version with no downtime, and to go back to the previous version within minutes if something breaks.",Release-&-Rollback,ST-RELEASE
+List the customer's cameras,Story,,CIV-EPIC::EP-7,P0,"Visit or remotely review the site, list every CCTV camera, and note which ones cover dumping hotspots worth watching.",Site-Survey,ST-SURVEY
+Get each camera's video into the system,Story,,CIV-EPIC::EP-7,P0,"For each chosen camera, get its stream address and login, and confirm a clear picture reaches the app.",Stream-Connection,ST-STREAM
+Put cameras on the map and draw where to watch,Story,,CIV-EPIC::EP-7,P0,Mark each camera's location on the map and draw the exact area on the picture the system should watch for dumping.,Placement-&-Watch-Area,ST-PLACEMENT
+Prove it works and hand over,Story,,CIV-EPIC::EP-7,P1,"Run a live test at the site, show the customer a real detection, and get their sign-off that the cameras are correctly connected.",Site-Acceptance,ST-HANDOVER
+Browser tests for every screen,Story,,CIV-EPIC::EP-4,P1,"Robot tests that sign in, click through each page and confirm what the user should see is actually there.",Frontend-UI-Tests,ST-QA-UI
+Login page,Story,,CIV-EPIC::EP-2,P0,"The first screen. The user types their username and password here to get into the system.
+Flow: User opens the app -> sees the sign-in screen -> types username and password -> presses Sign in -> the dashboard opens.
+Data: Sends: {""username"":""priya"",""password"":""••••••""}   Gets back: {""username"":""priya"",""roles"":[""admin""]}
+Expected: The dashboard opens. Wrong details show a red message: 'Invalid username or password'.
+Source: WW-LGN-*",Frontend,TK-LOGIN
+Landing page (Live Monitoring),Story,,CIV-EPIC::EP-2,P0,"The main screen after signing in. Shows all camera feeds in a grid and live alerts.
+Flow: User signs in -> camera grid appears -> a dump happens -> that camera lights up and an alert slides in.
+Data: Loads camera list and live alerts. No data typed in.
+Expected: Every camera shows live video. New alerts appear without reloading the page.
+Source: WW-LND-*",Frontend,TK-LAND
+Analytics page,Story,,CIV-EPIC::EP-2,P1,"Charts and numbers summarising dumping over time, by zone and by camera.
+Flow: User clicks Analytics -> sees today's count, a 7-day trend and the worst zones.
+Data: Reads pre-calculated summaries. Nothing typed in.
+Expected: Charts match the real events. Empty periods show 'no data', not a blank box.
+Source: WW-ANL-*",Frontend,TK-ANL
+Event History page,Story,,CIV-EPIC::EP-2,P0,"A searchable list of every past dumping event with its photo and video evidence.
+Flow: User clicks Event History -> filters by zone and date -> opens one event -> views its photo and clip.
+Data: Filters sent: zone, date range, severity. Gets back matching events.
+Expected: The list shows only events matching the filters. Each has a photo and a working evidence link.
+Source: WW-HIS-*",Frontend,TK-HIST
+Settings page,Story,,CIV-EPIC::EP-2,P1,"Where an admin changes how the system behaves: alerts, detection sensitivity, storage, and users.
+Flow: Admin clicks Settings -> turns on WhatsApp alerts -> changes detection sensitivity -> it takes effect.
+Data: Saves: {""key"":""notify.whatsapp"",""value"":true}
+Expected: Each setting is remembered and actually changes what the system does.
+Source: WW-SET-*",Frontend,TK-SET
+Timeline Playback page,Story,,CIV-EPIC::EP-2,P1,"A video-editor-style timeline. Scroll through time to find and replay recorded dumping clips.
+Flow: User opens Timeline -> drags left to go back in time -> clicks a marker -> the clip plays.
+Data: Reads recorded clip markers for the last 3 days.
+Expected: Clips appear as markers on a 24-hour timeline; clicking one plays it. Older than 3 days points to the backup drive.
+Source: plan-timeline-playback.md",Frontend,TK-TL
+User Management page,Story,,CIV-EPIC::EP-2,P0,"Where an owner adds admins and an admin adds viewers. This is the only way to create accounts — there is no public sign-up.
+Flow: Admin opens User Management -> fills name, email, phone, zone -> picks role Viewer -> Save -> the new user gets a set-password email.
+Data: Saves: {""username"":""ravi"",""email"":""ravi@ward.gov"",""phone"":""+919845012345"",""zone"":""Adugodi Main Road"",""role"":""viewer""}
+Expected: The new user appears in the list and receives an email to set their own password. An admin can never create another admin.
+Source: plan-user-onboarding-tenancy.md",Frontend,TK-USERS
+Find and list the site's cameras,Story,,CIV-EPIC::EP-7,P0,"Walk the site (or use the customer's camera list) and write down every camera, where it points, and whether it covers a dumping spot.
+Flow: Engineer visits the ward -> notes 14 cameras -> marks 5 that face known dumping corners -> those 5 are chosen for Civilytics.
+Data: A simple list: camera name, rough location, points-at-a-hotspot yes/no.
+Expected: A signed-off list of which cameras will be connected.",Camera-Integration,TK-DISCOVER
+Get each camera's stream address and login,Story,,CIV-EPIC::EP-7,P0,"For each chosen camera, obtain its RTSP stream link and username/password from the customer's CCTV system (NVR/DVR).
+Flow: Engineer asks the customer's CCTV vendor -> gets rtsp link + login for each camera -> tests it plays in a video tool before adding it.
+Data: Per camera: rtsp://user:pass@192.168.1.10:554/stream1
+Expected: Every chosen camera has a verified, working stream link.",Camera-Integration,TK-RTSP
+Add each camera in the app,Story,,CIV-EPIC::EP-7,P0,"Enter each camera's details into Camera Management so the system starts watching it.
+Flow: Admin opens Camera Management -> Add Camera -> enters name, stream link, picks the zone -> saves -> live video appears.
+Data: Saves: {""name"":""Main-Gate"",""stream_url"":""rtsp://..."",""zone"":""Adugodi Main Road""}
+Expected: The camera shows live video on the dashboard within a few seconds of saving.
+Source: TK-ADDCAM links to frontend Camera Management",Camera-Integration,TK-ADDCAM
+Place the camera on the map,Story,,CIV-EPIC::EP-7,P1,"Drop each camera's pin at its real location so it appears correctly on the Camera Map.
+Flow: Admin opens the camera's settings -> drags the map pin onto the real spot (or types the coordinates) -> saves.
+Data: Saves: {""gps_lat"":12.9382,""gps_lng"":77.6104}
+Expected: The camera appears at the right place on the map. Wrong or swapped coordinates are rejected.",Camera-Integration,TK-GEO
+Draw the watch-area on the picture,Story,,CIV-EPIC::EP-7,P0,"On the camera's live picture, draw the exact zone the system should watch for dumping, and set how long someone must linger before it counts.
+Flow: Admin opens the camera feed -> draws a shape around the dumping corner -> sets 'linger 12 seconds' -> saves -> the detector uses it immediately.
+Data: Saves the drawn shape (a polygon) plus the linger-time threshold for that camera.
+Expected: The system only raises dumps inside the drawn area, after the set linger time.",Camera-Integration,TK-ROI
+Prove a real detection at the site,Story,,CIV-EPIC::EP-7,P1,"With the customer watching, stage a safe test dump and confirm the system detects it, alerts, and saves evidence.
+Flow: Engineer places a bag in the watch-area -> waits the linger time -> the dashboard lights up, an alert fires, a clip is saved -> customer signs off.
+Data: No data entry; this is a live acceptance test.
+Expected: Customer sees a real detection end-to-end and signs the acceptance form.",Camera-Integration,TK-SITETEST
+Automatic build-test-release on approval,Story,,CIV-EPIC::EP-6,P1,"Set up the automation so that approved code is built, tested and packaged into a release with no manual steps.
+Flow: A change is approved -> the robot builds it -> runs the tests -> if green, prepares a release image.
+Data: Trigger: code merged to the main branch.
+Expected: A ready-to-deploy release is produced automatically; a failed test blocks it.",Cloud-DevOps,TK-PIPELINE
+Auto-renew the HTTPS certificate,Story,,CIV-EPIC::EP-6,P0,"Make the HTTPS certificate renew itself before it expires, so the site is never flagged as insecure.
+Flow: Certificate nears expiry -> it renews automatically -> the gateway picks up the new one -> users never notice.
+Data: Domain name + certificate authority account.
+Expected: The padlock in the browser never lapses; renewal needs no human.
+Source: scripts/make-certs.sh exists",Cloud-DevOps,TK-CERT
+Scheduled database and evidence backups,Story,,CIV-EPIC::EP-6,P1,"Take regular, safe copies of the database and the evidence files so a server failure never loses data.
+Flow: Every night -> the system copies the database and new evidence to secure storage -> keeps copies per the retention rule.
+Data: Schedule + backup destination (cloud bucket).
+Expected: A fresh backup exists every day and can be restored in a test.",Cloud-DevOps,TK-BACKUP
+Alert the team if a server is unhealthy,Story,,CIV-EPIC::EP-6,P1,"Watch the servers themselves (down, disk full, GPU too hot) and message the team when something is wrong.
+Flow: Disk passes 90% full -> the team gets a message -> they clear space before it fails.
+Data: Thresholds for disk, memory, GPU temperature, service up/down.
+Expected: The team hears about a server problem before a customer does.",Cloud-DevOps,TK-SRVALERT
+Zero-downtime deploy with one-click rollback,Story,,CIV-EPIC::EP-6,P1,"Roll out a new version without taking the app offline, and be able to return to the previous version within minutes.
+Flow: New version deployed -> app stays up -> a bug is spotted -> one command rolls back to the last good version.
+Data: Release version number to deploy or roll back to.
+Expected: Updates cause no visible downtime; a bad release is undone in minutes.",Cloud-DevOps,TK-DEPLOY
+Login does not fit a phone screen,Bug,,CIV-EPIC::EP-2,P1,"The sign-in page was built for desktop only. On a phone the boxes can run off the edge and the bottom can get cut off by the browser bar.
+Flow: Open the app on a phone -> the Sign in button is partly hidden or the page scrolls sideways.
+Expected: On a 375px-wide phone the whole form is visible with no sideways scrolling.
+Source: WW-LGN-012",Frontend,IS-LGN-01
+"No way to sign out, and you cannot see who is logged in",Bug,,CIV-EPIC::EP-2,P0,"Once signed in there is no sign-out button anywhere, and the screen never shows whose account is in use. On a shared office computer the next person inherits the session.
+Flow: User finishes their shift -> cannot log out -> walks away -> next person is still signed in as them.
+Expected: A sign-out button and the signed-in name sit at the bottom-left of the menu, on every page.
+Source: WW-LGN-008",Frontend,IS-LGN-02
+Camera tile does not light up on a dump,Bug,,CIV-EPIC::EP-2,P1,"When a dump is detected the camera tile is supposed to get a coloured border, but a styling conflict means the border never shows.
+Flow: A dump happens -> the alert arrives -> but the camera tile looks exactly the same as always.
+Expected: The tile that detected the dump shows a clear coloured border at every grid size.
+Source: WW-LND-006",Frontend,IS-LAND-01
+A pop-up covers the whole screen on every alert,Bug,,CIV-EPIC::EP-2,P0,"When an alert arrives the panel opens with a dark overlay behind it that blocks everything. During busy periods it keeps stealing the screen.
+Flow: User is editing a camera's detection area -> an alert fires -> a dark overlay covers their work -> repeats every few seconds.
+Expected: New alerts show without blocking what the user is doing.
+Source: WW-LND-011",Frontend,IS-LAND-02
+Changing a detection setting does nothing,Bug,,CIV-EPIC::EP-2,P0,"The Settings page saves a value in the database but never tells the live detector, so the detector keeps using its old setting.
+Flow: Admin lowers detection sensitivity -> presses Save -> the detector keeps behaving exactly as before.
+Expected: Changing a detection setting changes the live detector within a few seconds.
+Source: WW-SET-BUG-001",Settings,IS-SET-01
+History filters do not actually filter,Bug,,CIV-EPIC::EP-2,P0,"The search box, zone picker, date range and severity picker look like they work, but the list ignores them and always shows the latest 100 events.
+Flow: User picks zone 'Adugodi' and last week -> the list still shows the newest 100 events from everywhere.
+Expected: The list shows only events matching the chosen zone, dates and severity.
+Source: WW-HIS-BUG-005",Frontend,IS-HIST-01
+Two cards show numbers nobody calculates,Bug,,CIV-EPIC::EP-2,P1,"The 'Average Response' and 'Resolution Status' cards display values that no part of the system actually works out, so they are blank or zero.
+Flow: User opens Analytics -> 'Average Response' shows nothing meaningful.
+Expected: Either the numbers are really calculated, or the cards are removed. No card shows a made-up value.
+Source: WW-ANL-BUG-002",Analytics,IS-ANL-01
+Find out what kind of recorder the site has,Story,,CIV-EPIC::EP-7,P0,"Before anything, work out how the cameras are recorded. The type decides how we get the video. Four common types: DVR (old analog cameras on thick coax cable), NVR (modern IP cameras on network cable), XVR (a mix of both), or a standalone IP camera with no recorder.
+Flow: Engineer looks at the box the cameras plug into -> reads the label (DVR/NVR/XVR) -> counts channels -> notes the brand (Hikvision, Dahua, CP Plus...).
+Data: Noted per site: device type, brand, model, number of channels, firmware if visible.
+Expected: A clear note of recorder type and brand, which picks the connection method below.",Camera-Integration,TK-DEVTYPE
+Connect cameras behind an NVR (IP cameras),Story,,CIV-EPIC::EP-7,P0,"An NVR holds modern IP cameras. We can usually pull each camera's video either straight from the camera or through the NVR channel. Direct-from-camera is better quality and one less thing in the way.
+Flow: Find each camera's IP on the network -> get its login -> build the RTSP link -> test it plays -> add it.
+Data: Hikvision: rtsp://user:pass@CAM_IP:554/Streaming/Channels/101   Dahua/CP Plus: rtsp://user:pass@CAM_IP:554/cam/realmonitor?channel=1&subtype=0
+Expected: Each IP camera streams into the app with a clear picture.",Camera-Integration,TK-NVR
+Connect cameras behind a DVR (old analog cameras),Story,,CIV-EPIC::EP-7,P0,"Analog cameras have no network address of their own; the DVR turns them into digital streams. So we pull each camera from a DVR CHANNEL, not from the camera.
+Flow: Get the DVR's IP and login -> build the RTSP link using the channel number -> test -> add. Channel 1 is usually '...101' (main) or '...102' (sub).
+Data: Hikvision DVR: rtsp://user:pass@DVR_IP:554/Streaming/Channels/201 (channel 2, main)   Dahua DVR: rtsp://user:pass@DVR_IP:554/cam/realmonitor?channel=2&subtype=0
+Expected: Each analog camera streams into the app through its DVR channel.",Camera-Integration,TK-DVR
+Connect cameras behind an XVR (mixed analog + IP),Story,,CIV-EPIC::EP-7,P1,"An XVR handles both old analog and new IP cameras at once. Treat analog channels like the DVR steps and IP channels like the NVR steps, all from the same XVR address.
+Flow: List which channels are analog and which are IP -> use the DVR link style for analog channels and the IP-camera link for the IP ones -> test each.
+Data: Same RTSP channel format as the DVR, with channel numbers matching the XVR's layout.
+Expected: Both camera kinds on the XVR stream into the app.",Camera-Integration,TK-XVR
+Connect a standalone IP camera (no recorder),Story,,CIV-EPIC::EP-7,P1,"Some cameras run on their own with no DVR/NVR. We talk to the camera directly. Many support auto-discovery (ONVIF) which finds the right stream link for us.
+Flow: Find the camera's IP -> try ONVIF auto-discovery, or build the RTSP link by brand -> test -> add.
+Data: Generic: rtsp://user:pass@CAM_IP:554/   Hikvision: .../Streaming/Channels/101   Dahua: .../cam/realmonitor?channel=1&subtype=0
+Expected: The lone camera streams into the app.",Camera-Integration,TK-STANDALONE
+Check the video quality and format,Story,,CIV-EPIC::EP-7,P1,"Pick the right stream and format. Each camera usually offers a sharp 'main' stream and a light 'sub' stream. Also confirm the format (H.264 or H.265) plays smoothly, and that the site's internet can carry all cameras at once.
+Flow: Play the main stream -> if smooth, use it; if the network struggles, use the sub stream -> add up all cameras' bandwidth and check the site's upload speed can handle it.
+Data: Per camera: resolution, frames per second, codec (H.264/H.265), bitrate. Example budget: 12 cameras x 2 Mbps = 24 Mbps upload needed.
+Expected: Every camera plays smoothly and the total fits the site's internet speed.",Camera-Integration,TK-CODEC
+Cameras on the same private network as our server,Story,,CIV-EPIC::EP-7,P0,"The best case: our server sits on the same local network as the cameras, so it can reach them directly with no internet exposure.
+Flow: Confirm our server and the cameras are on the same network -> reach each camera by its local address (192.168.x.x) -> add. Nothing is exposed to the internet.
+Data: Local addresses only, e.g. rtsp://user:pass@192.168.1.10:554/...
+Expected: All cameras reachable privately; no internet exposure at all. Safest setup.",Camera-Integration,TK-NET-LAN
+Cameras at a remote site — connect over a VPN,Story,,CIV-EPIC::EP-7,P0,"When our server is NOT at the camera site, the safe way to reach the cameras is a private tunnel (VPN) between our server and the site. The cameras stay hidden from the public internet.
+Flow: Set up a VPN between our server and the site router (or a small on-site device) -> once connected, reach the cameras by their local addresses as if we were on-site -> add.
+Data: Over the VPN, still local addresses: rtsp://user:pass@192.168.1.10:554/...
+Expected: Remote cameras reachable securely; nothing about the customer's cameras is exposed to the internet.",Camera-Integration,TK-NET-VPN
+Reach a camera over a public internet address (port forwarding),Story,,CIV-EPIC::EP-7,P1,"Sometimes the only option is to reach the recorder through the site's public internet address by opening a 'door' on the router (port forwarding). This WORKS but is RISKY — it can expose the camera to the whole internet — so it is a last resort with extra locking-down.
+Flow: Only if VPN is not possible: open a specific door on the site router that points to the recorder, lock it to our server's address only, then reach it from outside.
+Data: Public form: rtsp://user:pass@SITE_PUBLIC_IP:CHOSEN_PORT/...  mapped on the router to the recorder's local 554.
+Expected: The camera is reachable from our server over the internet, with the open door restricted to our server only.",Camera-Integration,TK-PORTFWD
+Remote site with no public address (mobile/4G or CGNAT),Story,,CIV-EPIC::EP-7,P2,"Many sites (especially on 4G/mobile internet) have no public address at all, so port forwarding is impossible. The fix is a small on-site device that dials OUT to us and carries the video, or a cloud relay.
+Flow: Place a small on-site box (or use the recorder's own cloud) that connects outward to our server and streams the cameras through that outbound link -> add.
+Data: The on-site box exposes the cameras to our server over its outbound tunnel; links look local to our server.
+Expected: Cameras reachable even with no public address and no port forwarding.",Camera-Integration,TK-NET-CGNAT
+Install a brand-new camera where none exists,Story,,CIV-EPIC::EP-7,P1,"A hotspot may have no camera at all. Then we install one: choose a spot with a clear view of the dumping area, run power and network, mount it, and give it a fixed local address.
+Flow: Pick the mounting spot for the best view of the hotspot -> run power + network (or PoE) -> mount and aim the camera -> give it a fixed address -> then follow the standalone-camera steps.
+Data: New camera: fixed local IP, login set, aimed at the hotspot.
+Expected: A new, correctly aimed camera is online and ready to connect.",Camera-Integration,TK-NEWCAM
+Cameras exposed to the whole internet on default passwords,Bug,,CIV-EPIC::EP-7,P0,"If a camera is port-forwarded to the public internet while still on its factory password, anyone online can watch it or take it over. This is a common and serious real-world mistake.
+Flow: Engineer opens a router port to a camera -> leaves the factory password -> the camera is now searchable and open to strangers.
+Expected: A port-forwarded camera is always locked to our server's address only AND has its default password changed before the door is opened.
+Source: security",Camera-Integration,IS-CAM-01
+The auto-category feature has nowhere to show,Bug,,CIV-EPIC::EP-2,P2,"The system is meant to group dumping into patterns (midnight-vehicle, daytime-work). The grouping engine is not built yet, so there is no card for it and the data is empty.
+Flow: User opens Analytics -> expects to see dumping patterns -> there is no such section.
+Expected: Once the grouping engine runs, a card shows the four patterns with counts, and odd events as 'uncategorised'.
+Source: WW-ANL-004",Analytics,IS-ANL-02
+Cannot see events older than the latest 100,Bug,,CIV-EPIC::EP-2,P1,"The list always loads only the newest 100 events and the 'Previous' button does nothing, so older evidence cannot be reached in the app at all.
+Flow: User looks for an event from last month -> it is beyond the newest 100 -> there is no way to page back to it.
+Expected: The user can page through the full history, oldest to newest.
+Source: WW-HIS-006",Frontend,IS-HIST-02
+Fake switches that do nothing,Bug,,CIV-EPIC::EP-2,P1,"Settings shows switches for SMS alerts, two-factor login and repeat-offender tracking, but none of these have anything behind them. A user turning them on believes a feature is active when it is not.
+Flow: Admin turns on 'SMS Notifications' -> nothing happens -> they assume SMS alerts are now being sent.
+Expected: Switches with no feature behind them are removed, so every control shown actually does something.
+Source: WW-SET-007",Settings,IS-SET-02
+Wrong storage location shown,Bug,,CIV-EPIC::EP-2,P2,"The storage path field shows '/var/wastewatch/evidence', which is both the wrong folder (the real one is /app/evidence) and the retired product name.
+Flow: Admin reads the storage path -> it points at a folder that does not exist and uses the old name.
+Expected: The field shows the correct evidence folder and the Civilytics name.
+Source: WW-SET-007",Settings,IS-SET-03

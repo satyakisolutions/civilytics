@@ -149,10 +149,14 @@
     box-shadow: var(--glow-primary);
   }
 
+  /* Static destructive fallback only. The red pulse is owned by
+     `.animate-alert-border` (see below); the old `animation:
+     border-pulse-critical` here referenced a keyframe that never existed
+     (CI-52), so it was removed. This rule is retained as a non-animated
+     fallback in case a future consumer re-adds an `alert` class. */
   .camera-feed.alert {
     @apply border-destructive;
     box-shadow: var(--glow-destructive);
-    animation: border-pulse-critical 1.5s ease-in-out infinite;
   }
 
   /* Control panel styling */
