@@ -452,7 +452,7 @@ class ReportScheduler:
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = (
-            f"WasteWatch {report_type.title()} Report \u2014 {period_end}"
+            f"Civilytics {report_type.title()} Report \u2014 {period_end}"
         )
         msg["From"] = self._smtp_from
         msg["To"] = ", ".join(recipients)
@@ -662,7 +662,7 @@ class ReportScheduler:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WasteWatch {period_label} Report</title>
+    <title>Civilytics {period_label} Report</title>
     <!--[if mso]>
     <style type="text/css">
         table, td {{font-family: Arial, sans-serif;}}
@@ -684,7 +684,7 @@ class ReportScheduler:
 <tr>
     <td style="background:#101010;padding:32px 24px;text-align:center;">
         <h1 style="margin:0 0 4px 0;color:#FCA719;font-family:'Poppins',Helvetica,Arial,sans-serif;
-            font-size:28px;font-weight:700;letter-spacing:-0.5px;">WasteWatch</h1>
+            font-size:28px;font-weight:700;letter-spacing:-0.5px;">Civilytics</h1>
         <p style="margin:0 0 4px 0;color:#ffffff;font-family:'Poppins',Helvetica,Arial,sans-serif;
             font-size:16px;font-weight:500;">{period_label} Surveillance Report</p>
         <p style="margin:0;color:#9ca3af;font-size:13px;">
@@ -863,13 +863,13 @@ class ReportScheduler:
         <p style="margin:0 0 8px 0;color:#FCA719;font-family:'Poppins',Helvetica,Arial,sans-serif;
             font-size:14px;font-weight:600;">Powered by Satyaki Solutions</p>
         <p style="margin:0 0 4px 0;color:#6b7280;font-size:12px;">
-            WasteWatch AI Surveillance Platform</p>
+            Civilytics AI Surveillance Platform</p>
         <p style="margin:0 0 12px 0;color:#6b7280;font-size:12px;">
             Lake Shore Gardens, Vidyaranyapura, Bangalore 560097</p>
         <div style="border-top:1px solid #374151;padding-top:12px;margin-top:4px;">
             <p style="margin:0;color:#4b5563;font-size:11px;">
                 This is an automated report. To change recipients or unsubscribe,
-                visit the WasteWatch dashboard settings.</p>
+                visit the Civilytics dashboard settings.</p>
             <p style="margin:8px 0 0 0;color:#374151;font-size:11px;">
                 &copy; 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.</p>
         </div>

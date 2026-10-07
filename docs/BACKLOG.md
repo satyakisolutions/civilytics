@@ -1,4 +1,4 @@
-# Civilytics / WasteWatch — consolidated backlog
+# Civilytics — consolidated backlog
 
 Compiled 6 Oct 2026. Every item below was verified against the code in this
 repo; file:line references are real. Nothing here is speculative unless marked

@@ -1,4 +1,4 @@
-# WasteWatch: Business Impact Assessment
+# Civilytics: Business Impact Assessment
 
 ---
 
@@ -20,7 +20,7 @@
 | Manual patrol | INR 15-25K/guard/month | <10% of incidents | Eyewitness (weak) | Linear cost |
 | CCTV + manual review | INR 5-10K/camera/month | <20% (reviewer fatigue) | Raw footage (no metadata) | Reviewer bottleneck |
 | Complaint-based | Free | Post-facto only | Photos (no timestamp proof) | Community dependent |
-| **WasteWatch** | **INR 2-4K/camera/month** | **>80% in ROI zones** | **Annotated + timestamped** | **GPU-bound, not human** |
+| **Civilytics** | **INR 2-4K/camera/month** | **>80% in ROI zones** | **Annotated + timestamped** | **GPU-bound, not human** |
 
 ---
 
@@ -30,13 +30,13 @@
 
 **Scenario: 10-camera pilot deployment in one municipality**
 
-| Category | Current Annual Cost | With WasteWatch | Saving |
+| Category | Current Annual Cost | With Civilytics | Saving |
 |---|---|---|---|
 | Clean-up labor (reactive) | INR 40,00,000 | INR 16,00,000 (60% reduction via deterrence) | INR 24,00,000 |
 | Security personnel (dump sites) | INR 30,00,000 | INR 6,00,000 (80% reduction) | INR 24,00,000 |
 | Health & sanitation response | INR 10,00,000 | INR 5,00,000 | INR 5,00,000 |
 | **Total annual savings** | | | **INR 53,00,000** |
-| **WasteWatch annual cost** | | **INR 8,00,000** (hardware amortization + cloud + maintenance) | |
+| **Civilytics annual cost** | | **INR 8,00,000** (hardware amortization + cloud + maintenance) | |
 | **Net annual benefit** | | | **INR 45,00,000** |
 | **ROI** | | | **562%** |
 
@@ -45,7 +45,7 @@
 With automated evidence collection (timestamped snapshots, video, license plates):
 
 - Current fine collection from illegal dumping: **Near zero** (no prosecutable evidence)
-- Projected with WasteWatch evidence packages:
+- Projected with Civilytics evidence packages:
   - 50 violations/month with actionable evidence
   - Average fine per violation: INR 5,000 - 25,000 (Kerala Municipality Act)
   - **Projected annual fine revenue: INR 30-75 lakhs per municipality**
@@ -153,13 +153,13 @@ Studies on automated surveillance for environmental violations show:
 
 | Solution | Detection | Evidence | LPR | Cost/Camera | Local Processing |
 |---|---|---|---|---|---|
-| **WasteWatch** | AI (VLM + DeepStream) | Auto-packaged | Yes | ~INR 3K/mo | Yes (on-premise GPU) |
+| **Civilytics** | AI (VLM + DeepStream) | Auto-packaged | Yes | ~INR 3K/mo | Yes (on-premise GPU) |
 | Generic CCTV analytics | Motion detection only | Raw video | No | INR 5-10K/mo | Cloud-dependent |
 | Verkada / Rhombus | Object detection | Cloud clips | Some | INR 15-25K/mo | Cloud only |
 | Manual monitoring | Human observers | Eyewitness | No | INR 20-30K/mo | N/A |
 | Custom ML pipeline | Requires ML team | Manual | Manual | INR 50K+/mo | Varies |
 
-**WasteWatch advantages**:
+**Civilytics advantages**:
 - Purpose-built for waste dumping (not generic "security")
 - VLM understands context (person loitering vs. dumping vs. cleaning)
 - Fully on-premise — no per-camera cloud fees, no data sovereignty issues

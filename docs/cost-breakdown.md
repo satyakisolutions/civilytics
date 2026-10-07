@@ -1,4 +1,4 @@
-# WasteWatch — AWS Deployment Cost Breakdown
+# Civilytics — AWS Deployment Cost Breakdown
 
 **Satyaki Solutions Pvt Ltd** | https://satyaki.co.in
 **Document Version**: 1.0 | **Date**: April 2026
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-WasteWatch is deployed as a microservices architecture on AWS, leveraging GPU instances for real-time video AI (DeepStream + VLM) and Fargate for CPU-bound services. This document details the cost structure across three deployment tiers.
+Civilytics is deployed as a microservices architecture on AWS, leveraging GPU instances for real-time video AI (DeepStream + VLM) and Fargate for CPU-bound services. This document details the cost structure across three deployment tiers.
 
 | Tier | Cameras | Monthly (Reserved) | Monthly (On-Demand) | Annual (Reserved) |
 |:----:|:-------:|-------------------:|--------------------:|------------------:|
@@ -275,7 +275,7 @@ Per Camera/Month       $344         $293        $177
 
 **Location**: Lake Shore Gardens, Vidyaranyapura, Bangalore
 
-The WasteWatch reference deployment runs on Neeraj's local server at Lake Shore Gardens (LSG), Bangalore. This is the first production site and the baseline for on-premise cost calculations.
+The Civilytics reference deployment runs on Neeraj's local server at Lake Shore Gardens (LSG), Bangalore. This is the first production site and the baseline for on-premise cost calculations.
 
 ### Server Specifications
 
@@ -343,11 +343,11 @@ The WasteWatch reference deployment runs on Neeraj's local server at Lake Shore 
 
 ### Recommended Pricing for Bangalore / Tier-1 Indian Customers
 
-WasteWatch is positioned as a **SaaS / Managed Service** for residential communities (like Lake Shore Gardens), BBMP ward offices, industrial estates, tech parks, and smart city projects.
+Civilytics is positioned as a **SaaS / Managed Service** for residential communities (like Lake Shore Gardens), BBMP ward offices, industrial estates, tech parks, and smart city projects.
 
 ### Pricing Tiers
 
-#### Tier 1: WasteWatch Starter (Residential Community / Small Site)
+#### Tier 1: Civilytics Starter (Residential Community / Small Site)
 
 | Item | Description | Price (INR) |
 |------|-------------|------------:|
@@ -360,7 +360,7 @@ WasteWatch is positioned as a **SaaS / Managed Service** for residential communi
 | **Year 1 Total** | Setup + hardware + 12 months | **₹7,20,000** |
 | **Year 2+ Total** | Subscription only | **₹3,00,000/yr** |
 
-#### Tier 2: WasteWatch Professional (Industrial Estate / Tech Park)
+#### Tier 2: Civilytics Professional (Industrial Estate / Tech Park)
 
 | Item | Description | Price (INR) |
 |------|-------------|------------:|
@@ -373,7 +373,7 @@ WasteWatch is positioned as a **SaaS / Managed Service** for residential communi
 | **Year 1 Total** | Setup + hardware + 12 months | **₹15,40,000** |
 | **Year 2+ Total** | Subscription only | **₹6,00,000/yr** |
 
-#### Tier 3: WasteWatch Enterprise (Smart City / Multi-Site)
+#### Tier 3: Civilytics Enterprise (Smart City / Multi-Site)
 
 | Item | Description | Price (INR) |
 |------|-------------|------------:|
@@ -399,13 +399,13 @@ WasteWatch is positioned as a **SaaS / Managed Service** for residential communi
 
 ### Competitive Positioning (Bangalore Market)
 
-| Competitor / Alternative | Price Range | WasteWatch Advantage |
+| Competitor / Alternative | Price Range | Civilytics Advantage |
 |--------------------------|-------------|----------------------|
 | Manual CCTV monitoring (guards) | ₹30,000-50,000/mo per site | 24/7 automated, no human fatigue, evidence-grade recording |
 | Generic CCTV analytics (Hikvision/Dahua) | ₹5-15 lakh setup + AMC | No waste-specific detection, no VLM, no action SGIE |
 | IBM Maximo / SAP IoT | ₹50+ lakh/yr | Overkill for waste monitoring, long deployment |
 | Custom ML solution (consultancy) | ₹20-50 lakh + ₹5-10 lakh/yr | 6-12 month build time, no productized platform |
-| **WasteWatch** | **₹7.2 lakh Y1, ₹3 lakh/yr** | **Purpose-built, <1s alerts, VLM + LPR, production-ready** |
+| **Civilytics** | **₹7.2 lakh Y1, ₹3 lakh/yr** | **Purpose-built, <1s alerts, VLM + LPR, production-ready** |
 
 ### Target Customers in Bangalore
 
@@ -429,7 +429,7 @@ WasteWatch is positioned as a **SaaS / Managed Service** for residential communi
 
 ### ROI Pitch for Customer
 
-| Metric | Without WasteWatch | With WasteWatch |
+| Metric | Without Civilytics | With Civilytics |
 |--------|-------------------:|----------------:|
 | Waste dumping incidents/month | 15-30 | 2-5 (80% reduction) |
 | Fine collection (per incident, BBMP) | ₹0 (no evidence) | ₹5,000-25,000 |
@@ -438,7 +438,7 @@ WasteWatch is positioned as a **SaaS / Managed Service** for residential communi
 | **Monthly ROI** | — | **₹70,000-2,50,000** |
 | **Payback period** | — | **3-6 months** |
 
-> **Key pitch**: WasteWatch pays for itself in 3-6 months through fine collection and cleanup cost savings. After payback, it generates net revenue for the community or municipality.
+> **Key pitch**: Civilytics pays for itself in 3-6 months through fine collection and cleanup cost savings. After payback, it generates net revenue for the community or municipality.
 
 ---
 
@@ -513,7 +513,7 @@ After payback, every month is **₹1,15,000 net positive** for the customer.
 | **Tech Park** (Manyata, RMZ) | ₹15,000 | 6 | ₹1,30,000 | ₹50,000 | **5 months** |
 | **Smart City SPV** | ₹10,000 | 20 | ₹2,40,000 | ₹1,50,000 | **6 months** |
 
-### Without vs With WasteWatch
+### Without vs With Civilytics
 
 | Metric | Without | With | Improvement |
 |--------|--------:|-----:|:-----------:|
@@ -528,9 +528,9 @@ After payback, every month is **₹1,15,000 net positive** for the customer.
 
 ### One-Slide Pitch
 
-> **"For ₹25,000/month, WasteWatch catches 8+ illegal dumpers that you're currently missing. At BBMP fine rates, that's ₹80,000 to ₹2,00,000/month in recoverable fines alone — plus ₹40,000/month in cleanup savings. The system pays for itself in 5 months. After that, it's pure revenue for your municipality."**
+> **"For ₹25,000/month, Civilytics catches 8+ illegal dumpers that you're currently missing. At BBMP fine rates, that's ₹80,000 to ₹2,00,000/month in recoverable fines alone — plus ₹40,000/month in cleanup savings. The system pays for itself in 5 months. After that, it's pure revenue for your municipality."**
 
 ---
 
 *Copyright 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.*
-*WasteWatch is a product of Satyaki Solutions Pvt Ltd — https://satyaki.co.in*
+*Civilytics is a product of Satyaki Solutions Pvt Ltd — https://satyaki.co.in*

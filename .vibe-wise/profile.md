@@ -5,7 +5,7 @@ Onboarding: complete
 
 ## Project
 Situation: Existing
-Building: Civilytics / WasteWatch — CCTV illegal-dumping detection for a municipal client (Satyaki Solutions). DeepStream pipeline + FastAPI backend + React UI.
+Building: Civilytics — CCTV illegal-dumping detection for a municipal client (Satyaki Solutions). DeepStream pipeline + FastAPI backend + React UI.
 Codebase familiarity: Know it well
 Learning scope: Whole system
 

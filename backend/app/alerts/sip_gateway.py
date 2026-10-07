@@ -456,7 +456,7 @@ class SIPGateway:
                 f"Application: Playback\r\n"
                 f"Data: {audio_base}\r\n"
                 f"Timeout: {self._config.max_ring_time_s * 1000}\r\n"
-                f"CallerID: WasteWatch <wastewatch>\r\n"
+                f"CallerID: Civilytics <wastewatch>\r\n"
                 f"Async: true\r\n"
                 f"\r\n"
             )

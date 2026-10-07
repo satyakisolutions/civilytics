@@ -1,4 +1,4 @@
-# WasteWatch: Executive Summary
+# Civilytics: Executive Summary
 
 **AI-Powered Real-Time Illegal Waste Dumping Detection for LSG Kerala**
 
@@ -10,7 +10,7 @@ Illegal waste dumping is a persistent public health and environmental crisis acr
 
 ## The Solution
 
-WasteWatch is a real-time AI surveillance platform that transforms existing IP camera infrastructure into an intelligent waste dumping detection and evidence collection system. It runs on a single NVIDIA RTX 3090 GPU node, keeping hardware costs under $2,000 while delivering enterprise-grade capabilities.
+Civilytics is a real-time AI surveillance platform that transforms existing IP camera infrastructure into an intelligent waste dumping detection and evidence collection system. It runs on a single NVIDIA RTX 3090 GPU node, keeping hardware costs under $2,000 while delivering enterprise-grade capabilities.
 
 ### How It Works
 
@@ -28,7 +28,7 @@ WasteWatch is a real-time AI surveillance platform that transforms existing IP c
 
 ## Key Differentiators
 
-| Capability | WasteWatch | Traditional CCTV |
+| Capability | Civilytics | Traditional CCTV |
 |---|---|---|
 | Detection latency | 15-30 seconds | Hours to days (manual review) |
 | Evidence quality | Annotated snapshots + video + metadata | Raw footage (if retained) |

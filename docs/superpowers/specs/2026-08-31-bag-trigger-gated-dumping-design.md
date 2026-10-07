@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 Status: Recommended proof-of-concept direction
-Scope: First production-oriented vertical slice under the target WasteWatch architecture
+Scope: First production-oriented vertical slice under the target Civilytics architecture
 Supersedes: the original version of this file (bag-count-decrease as primary trigger signal, latest-frame-only cache, single warning threshold) — corrected below after review found several unsafe/incomplete details. Also supersedes the always-on/full-state-machine scope in `docs/superpowers/specs/2026-08-21-minicpmo-vlm-design.md` Phase 2 as the near-term build target; that spec's Phase 1 (MiniCPM-o trigger-model config swap) is unaffected and can still ship independently.
 
 ## 1. Decision
@@ -370,7 +370,7 @@ Provide rate limiting, quiet hours where required, manual mute, replay protectio
 
 Generate or select a separate audio message after confirmation:
 
-> WasteWatch alert for Camera 3. A possible dumping event was detected near the tree at 10:42. A light-colored bag appeared to be left on the ground, and the person moved away without retrieving it. Please review incident WW-1042.
+> Civilytics alert for Camera 3. A possible dumping event was detected near the tree at 10:42. A light-colored bag appeared to be left on the ground, and the person moved away without retrieving it. Please review incident WW-1042.
 
 The SIP gateway is only the delivery adapter. Add idempotency, retry limits, persisted call status, and acknowledgement later if operationally required.
 

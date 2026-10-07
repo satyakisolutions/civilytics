@@ -1,0 +1,132 @@
+Test ID,Page,Feature,Title,Preconditions,Steps,Expected Result,Playwright Selector Hints,Test Data,Priority,Automatable Now,Linked Ticket
+TC-LGN-001,Login,Page render,Login page renders branding and both fields,Signed out. Navigate to /,"1. Go to /
+2. Wait for the form",Heading 'Sign in' visible. 'Civilytics' and 'Satyaki Solutions Pvt Ltd' visible. Username and Password fields visible. Sign in button visible.,"getByRole('heading',{name:'Sign in'})
+getByText('Civilytics')
+getByLabel('Username')
+getByLabel('Password')
+getByRole('button',{name:'Sign in'})",-,P0,Yes,WW-LGN-001
+TC-LGN-002,Login,Autofocus,Username is focused on load,Signed out,"1. Go to /
+2. Read document.activeElement",Username input holds focus without any click.,await expect(page.getByLabel('Username')).toBeFocused(),-,P2,Yes,WW-LGN-001
+TC-LGN-003,Login,Submit gating,Sign in is disabled until both fields have content,"Signed out, form visible","1. Observe button
+2. Type into Username only
+3. Observe button
+4. Type into Password",Disabled on load. Still disabled with only Username. Enabled once both have content.,"getByRole('button',{name:'Sign in'})
+toBeDisabled() / toBeEnabled()","username='owner'
+password='owner-test-pass'",P1,Yes,WW-LGN-002
+TC-LGN-004,Login,Password masking,Password field masks input,Signed out,"1. Type into Password
+2. Read the type attribute",Input type is 'password'; the value is not rendered as readable text.,"await expect(page.getByLabel('Password')).toHaveAttribute('type','password')",password='owner-test-pass',P1,Yes,WW-LGN-001
+TC-LGN-005,Login,Successful sign-in (owner),Owner signs in and lands on Live Monitoring,Test realm seeded. User 'owner' exists with role owner,"1. Go to /
+2. Fill Username
+3. Fill Password
+4. Click Sign in
+5. Wait for the dashboard",Login form is replaced by the dashboard. 'Live Monitoring' heading visible. Sidebar with 7 items visible.,"getByRole('heading',{name:'Live Monitoring'})
+getByRole('navigation') / aside",owner / owner-test-pass,P0,Yes,WW-LGN-001
+TC-LGN-006,Login,Submitting state,Button shows a spinner and 'Signing in…' during submit,Signed out. Route /api/auth/login delayed ~1s via page.route,"1. Fill both fields
+2. Click Sign in
+3. Observe the button before the response lands",Button label reads 'Signing in…'. Button disabled. Both inputs disabled.,"getByRole('button',{name:/Signing in/})
+page.route('**/api/auth/login', delay)",owner / owner-test-pass,P1,Yes,WW-LGN-003
+TC-LGN-007,Login,Session cookie is httpOnly,Access token is not readable from JavaScript,Signed in as owner,"1. Sign in
+2. Evaluate document.cookie
+3. Read context.cookies()",document.cookie contains neither ww_access nor ww_refresh. context.cookies() shows both with httpOnly true.,"page.evaluate(() => document.cookie)
+context.cookies()",owner / owner-test-pass,P0,Yes,WW-LGN-001
+TC-LGN-008,Login,Session restore,Reload keeps the user signed in,Signed in as owner,"1. Sign in
+2. page.reload()
+3. Wait for the dashboard",Dashboard renders directly. Login form never appears.,"await expect(page.getByLabel('Username')).toHaveCount(0)
+getByRole('heading',{name:'Live Monitoring'})",owner / owner-test-pass,P0,Yes,WW-LGN-006
+TC-LGN-009,Login,Deep-link guard,Signed-out visit to any path shows Login,"Signed out, cookies cleared","1. Go to /
+2. Confirm Login
+3. Go to /?view=analytics
+4. Confirm Login",Login form shown both times. No dashboard content is rendered behind it.,"getByRole('heading',{name:'Sign in'})",-,P0,Yes,WW-LGN-006
+TC-LGN-010,Login,Sign in as viewer,Viewer signs in and reaches the dashboard,Test realm has a viewer user,"1. Sign in as the viewer
+2. Wait for the dashboard",Dashboard renders. Sidebar visible.,"getByRole('heading',{name:'Live Monitoring'})",viewer / viewer-test-pass,P0,Yes,WW-LGN-001
+TC-LGN-011,Login,Sign in as admin,Admin signs in and reaches the dashboard,Test realm has an admin user,"1. Sign in as the admin
+2. Wait for the dashboard",Dashboard renders. Sidebar visible.,"getByRole('heading',{name:'Live Monitoring'})",admin / admin-test-pass,P0,Yes,WW-LGN-001
+TC-LGN-012,Login,Keyboard submit,Enter submits the form,Signed out,"1. Fill Username
+2. Fill Password
+3. Press Enter in the Password field",Form submits; dashboard renders. No mouse used.,page.getByLabel('Password').press('Enter'),owner / owner-test-pass,P1,Yes,WW-LGN-001
+TC-LGN-013,Login,Error region is announced,Error container carries role=alert,Signed out. Stub /api/auth/login to 401,"1. Fill both fields
+2. Submit
+3. Read the alert region",An element with role='alert' is visible containing the failure message.,"getByRole('alert')
+page.route('**/api/auth/login', r => r.fulfill({status:401,...}))",any / any,P1,Yes,WW-LGN-004
+TC-LGN-014,Login,Mobile layout,Login is usable at 375px,"Viewport 375x812, signed out","1. Set viewport
+2. Go to /
+3. Measure document scrollWidth","Both fields and the button are visible and tappable. scrollWidth <= 375, i.e. no horizontal scroll.","page.setViewportSize({width:375,height:812})
+page.evaluate(()=>document.documentElement.scrollWidth)",-,P1,No — WW-LGN-012 open,WW-LGN-012
+TC-LGN-015,Login,Sign out,Signing out returns to Login and ends the session,Signed in as owner,"1. Sign in
+2. Open the bottom-left sidebar block
+3. Click Sign out
+4. Reload","Login form shown. Reload still shows Login, i.e. the session did not survive.","getByTestId('sidebar-logout')
+getByRole('heading',{name:'Sign in'})",owner / owner-test-pass,P0,No — WW-LGN-008 open,WW-LGN-008
+TC-LGN-016,Login,Signed-in identity,Username and role show in the bottom-left sidebar,Signed in as owner,"1. Sign in
+2. Read the bottom-left sidebar block",Username 'owner' and role 'owner' are visible above the clock.,getByTestId('sidebar-user'),owner / owner-test-pass,P1,No — WW-LGN-009 open,WW-LGN-009
+TC-LND-001,Landing,Default view,Dashboard opens on Live Monitoring,Signed in as owner,"1. Sign in
+2. Read the page heading and the active nav item",Heading 'Live Monitoring'. The 'Live Monitoring' nav item has the active state.,"getByRole('heading',{name:'Live Monitoring'})",owner,P0,Yes,WW-LND-001
+TC-LND-002,Landing,Sidebar items,All seven navigation items are present,Signed in as owner,1. Read sidebar item labels,"Exactly these, in order: Live Monitoring, Camera Map, Analytics, Event History, Timeline Playback, Camera Management, Settings.","page.locator('aside').getByRole('button')
+toHaveText([...])",owner,P0,Yes,WW-LND-007
+TC-LND-003,Landing,Navigation,Clicking 'Camera Map' switches the main panel,"Signed in as owner, on Live Monitoring","1. Click 'Camera Map' in the sidebar
+2. Wait for the panel to change",The Camera Map view renders and its nav item shows the active state. Live Monitoring content is gone.,"page.getByRole('button',{name:'Camera Map'}).click()",owner,P0,Yes,WW-LND-007
+TC-LND-004,Landing,Navigation,Clicking 'Analytics' switches the main panel,"Signed in as owner, on Live Monitoring","1. Click 'Analytics' in the sidebar
+2. Wait for the panel to change",The Analytics view renders and its nav item shows the active state. Live Monitoring content is gone.,"page.getByRole('button',{name:'Analytics'}).click()",owner,P0,Yes,WW-LND-007
+TC-LND-005,Landing,Navigation,Clicking 'Event History' switches the main panel,"Signed in as owner, on Live Monitoring","1. Click 'Event History' in the sidebar
+2. Wait for the panel to change",The Event History view renders and its nav item shows the active state. Live Monitoring content is gone.,"page.getByRole('button',{name:'Event History'}).click()",owner,P0,Yes,WW-LND-007
+TC-LND-006,Landing,Navigation,Clicking 'Timeline Playback' switches the main panel,"Signed in as owner, on Live Monitoring","1. Click 'Timeline Playback' in the sidebar
+2. Wait for the panel to change",The Timeline Playback view renders and its nav item shows the active state. Live Monitoring content is gone.,"page.getByRole('button',{name:'Timeline Playback'}).click()",owner,P0,Yes,WW-LND-007
+TC-LND-007,Landing,Navigation,Clicking 'Camera Management' switches the main panel,"Signed in as owner, on Live Monitoring","1. Click 'Camera Management' in the sidebar
+2. Wait for the panel to change",The Camera Management view renders and its nav item shows the active state. Live Monitoring content is gone.,"page.getByRole('button',{name:'Camera Management'}).click()",owner,P0,Yes,WW-LND-007
+TC-LND-008,Landing,Navigation,Clicking 'Settings' switches the main panel,"Signed in as owner, on Live Monitoring","1. Click 'Settings' in the sidebar
+2. Wait for the panel to change",The Settings view renders and its nav item shows the active state. Live Monitoring content is gone.,"page.getByRole('button',{name:'Settings'}).click()",owner,P0,Yes,WW-LND-007
+TC-LND-009,Landing,Return navigation,Navigating away and back restores Live Monitoring,Signed in as owner,"1. Click Analytics
+2. Click Live Monitoring
+3. Read the heading",Live Monitoring renders again with the camera grid.,"getByRole('heading',{name:'Live Monitoring'})",owner,P1,Yes,WW-LND-007
+TC-LND-010,Landing,Camera grid,Grid renders one tile per camera,Signed in. Seed 3 cameras via the API before the test,"1. Sign in
+2. Count camera tiles",Tile count equals the camera count from GET /api/cameras. Each tile shows its camera name.,"getByTestId(/^camera-tile-/)
+toHaveCount(3)",3 seeded cameras,P0,Partially — needs WW-LND-026 testids,WW-LND-002
+TC-LND-011,Landing,Layout switch,Changing grid layout changes visible tile count,"Signed in, 9+ cameras seeded","1. Note the default 3x3
+2. Click the 2x2 layout control
+3. Count tiles",Tile count changes to match the selected layout and the chosen control shows an active state.,page.getByTitle('2x2').click(),9 seeded cameras,P1,Yes,WW-LND-002
+TC-LND-012,Landing,Clock,Sidebar clock shows 24-hour time and ticks,Signed in,"1. Read the clock text
+2. Wait 2s
+3. Read it again",Matches /^\d{2}:\d{2}:\d{2}$/ with no AM/PM. The second reading differs from the first.,getByTestId('sidebar-clock'),-,P2,Partially — needs testid,WW-LND-027
+TC-LND-013,Landing,Alert badge,Active alert count shows on the bell,Signed in. Seed 2 active alerts before the test,"1. Seed alerts
+2. Reload
+3. Read the badge",Badge reads '2'.,page.locator('aside').getByText('2'),2 active alerts,P1,Yes,WW-LND-009
+TC-LND-014,Landing,Open alert panel,Bell opens the alert panel,"Signed in, at least 1 active alert","1. Click the bell
+2. Wait for the panel",Panel slides in and lists the active alerts.,getByTestId('alert-panel'),1 active alert,P0,Partially — needs testid,WW-LND-010
+TC-LND-015,Landing,Close alert panel,Panel closes from its close control,Alert panel open,"1. Click the panel close control
+2. Confirm it is gone",Panel is no longer visible and the page is interactive again.,"getByTestId('alert-panel')
+toBeHidden()",-,P1,Partially — needs testid,WW-LND-010
+TC-LND-016,Landing,Alert content,"An alert row shows severity, camera and time",Signed in. Seed 1 critical alert on a known camera,"1. Open the alert panel
+2. Read the first row","Row shows the alert title, the camera name and a 24-hour timestamp.",getByTestId(/^alert-item-/).first(),"critical alert, camera 'Entry'",P1,Partially — needs testid,WW-LND-010
+TC-LND-017,Landing,Acknowledge,Acknowledging removes an alert from the active list,Signed in as viewer. Seed 1 active alert,"1. Open the panel
+2. Click Acknowledge on the row
+3. Wait for the list to update",Row leaves the active list and the bell badge decrements by one.,"getByRole('button',{name:/Acknowledge/})",1 active alert,P0,Yes,WW-LND-012
+TC-LND-018,Landing,Alert to camera,Clicking an alert focuses its camera,Signed in. Seed 1 alert on a known camera,"1. Open the panel
+2. Click the alert body
+3. Observe the grid",Panel closes and the grid focuses the alert's camera.,getByTestId(/^alert-item-/).first().click(),alert on camera 'Entry',P1,Partially — needs testid,WW-LND-010
+TC-LND-019,Landing,Alert to history,'View history' switches to Event History,Alert panel open,"1. Click 'View history'
+2. Read the heading",Event History renders and the panel closes.,"getByRole('button',{name:/View history/})",-,P1,Yes,WW-LND-010
+TC-LND-020,Landing,Sound toggle,Alert sound toggles between ON and OFF,Signed in,"1. Read the toggle state
+2. Click 'Alert Sound'
+3. Read it again",Indicator flips ON to OFF (or OFF to ON) and the new state persists across a view switch.,"page.getByRole('button',{name:/Alert Sound/})",-,P2,Yes,WW-LND-017
+TC-LND-021,Landing,Pinned ordering,A pinned camera sorts first,Signed in. Seed 3 cameras with the alphabetically last one pinned,"1. Seed
+2. Reload
+3. Read tile order",The pinned camera is the first tile despite its name.,getByTestId(/^camera-tile-/).first(),"cameras A, B, C with C pinned",P2,Partially — needs testids,WW-LND-025
+TC-LND-022,Landing,Offline camera,"An offline camera shows a placeholder, not a black tile",Signed in. Seed 1 camera with status offline,"1. Seed
+2. Reload
+3. Read that tile","Tile shows an explicit offline state with the camera name, not an empty black rectangle.",getByTestId('camera-tile-{id}'),1 offline camera,P1,Partially — needs testid,WW-LND-003
+TC-LND-023,Landing,Live video,An online camera tile plays video,Signed in. MediaMTX publishing a known path,"1. Wait up to 10s
+2. Read the <video> element's readyState and currentTime twice, 2s apart",readyState >= 2 and currentTime advances between the two reads.,page.locator('video').first().evaluate(v => v.currentTime),1 publishing camera,P0,Yes,WW-LND-003
+TC-LND-024,Landing,Empty state,A fresh install shows an add-camera CTA,Signed in as admin. Zero cameras,"1. Ensure no cameras
+2. Reload
+3. Read the grid area",An 'Add your first camera' CTA is visible and routes to Camera Management with the add dialog open.,"getByRole('button',{name:/Add your first camera/})",0 cameras,P1,No — WW-LND-022 open,WW-LND-022
+TC-LND-025,Landing,Role-gated nav,A viewer does not see admin-only navigation,Signed in as viewer,"1. Sign in as viewer
+2. Read sidebar item labels",Camera Management and Settings are absent or visibly disabled.,page.locator('aside').getByRole('button'),viewer,P0,No — WW-LND-008 open,WW-LND-008
+TC-LND-026,Landing,Mobile layout,Landing is usable at 375px,"Signed in, viewport 375x812","1. Set viewport
+2. Sign in
+3. Measure scrollWidth and locate the nav",No horizontal scroll (scrollWidth <= 375). Navigation is reachable via a drawer. At most one video element plays.,"page.setViewportSize({width:375,height:812})",-,P0,No — WW-LND-023 open,WW-LND-023
+TC-LND-027,Landing,Tablet layout,Landing is usable at 768px,"Signed in, viewport 768x1024","1. Set viewport
+2. Sign in
+3. Measure scrollWidth",No horizontal scroll. Grid reflows to a readable tile count.,"page.setViewportSize({width:768,height:1024})",-,P1,No — WW-LND-023 open,WW-LND-023
+TC-LND-028,Landing,Camera loss alert,Losing a camera raises a dashboard alert,"Signed in, 1 online camera publishing","1. Stop the publisher
+2. Wait up to 60s
+3. Read the tile and the alert panel",Tile shows offline and an alert appears without a manual reload.,getByTestId('alert-panel'),"1 camera, publisher stoppable",P0,No — WW-LND-020 open,WW-LND-020

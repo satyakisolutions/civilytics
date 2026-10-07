@@ -1,10 +1,10 @@
-# WasteWatch: Technical Approach Document
+# Civilytics: Technical Approach Document
 
 ---
 
 ## 1. System Overview
 
-WasteWatch is a monolithic single-node AI platform for real-time illegal waste dumping detection, designed to run entirely on one NVIDIA RTX 3090 GPU. The architecture prioritizes GPU utilization efficiency, event-driven processing, and graceful degradation when resources are constrained.
+Civilytics is a monolithic single-node AI platform for real-time illegal waste dumping detection, designed to run entirely on one NVIDIA RTX 3090 GPU. The architecture prioritizes GPU utilization efficiency, event-driven processing, and graceful degradation when resources are constrained.
 
 ### Design Principles
 

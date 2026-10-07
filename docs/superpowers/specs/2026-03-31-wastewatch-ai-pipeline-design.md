@@ -1,4 +1,4 @@
-# WasteWatch AI Pipeline — System Design Specification
+# Civilytics AI Pipeline — System Design Specification
 
 **Date:** 2026-03-31
 **Status:** Approved
@@ -518,7 +518,7 @@ Pydantic model with strict types. On malformed JSON: retry once with stricter pr
 
 **Telegram:** Annotated snapshot + VLM text + plate number + dwell time. Template configurable from WebUI.
 
-**SIP/VoIP:** Trigger call, play TTS audio. Script: "WasteWatch alert. Dumping detected at {zone_name}. {person_description}. Please investigate immediately."
+**SIP/VoIP:** Trigger call, play TTS audio. Script: "Civilytics alert. Dumping detected at {zone_name}. {person_description}. Please investigate immediately."
 
 **IP Speaker:** HTTP push / RTSP audio / SIP. Default cached warnings + contextual VLM command. Supports all three transport protocols.
 

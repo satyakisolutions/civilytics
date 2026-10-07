@@ -115,7 +115,7 @@ class BitNetNarrator:
     def executive_summary(self, report: dict, report_type: str) -> str:
         """Generate an executive summary for the report."""
         data = self._build_data_context(report)
-        prompt = f"""You are a surveillance analytics report writer for WasteWatch, an AI-powered waste dumping detection system deployed at Lake Shore Gardens, Bangalore.
+        prompt = f"""You are a surveillance analytics report writer for Civilytics, an AI-powered waste dumping detection system deployed at Lake Shore Gardens, Bangalore.
 
 Write a concise executive summary (2-3 paragraphs) for the {report_type} report.
 
@@ -304,7 +304,7 @@ Anomalies:"""
 
         period = "week" if report_type == "weekly" else "month"
         return (
-            f"During this {period}, the WasteWatch system recorded {total} violation events, "
+            f"During this {period}, the Civilytics system recorded {total} violation events, "
             f"a {abs(change):.1f}% {direction} compared to the previous {period} ({prev} events). "
             f"Of these, {critical} were classified as critical severity. "
             f"The VLM confirmed dumping in {report.get('vlm_confirmed', 0)} of "

@@ -146,7 +146,7 @@ class TelegramAlert:
         _loc_parts = [p for p in (zone, location, camera_name) if p]
         camera_line = " / ".join(_loc_parts) if _loc_parts else camera_id
         lines = [
-            f"{icon} <b>WasteWatch Alert</b> [{severity.upper()}]",
+            f"{icon} <b>Civilytics Alert</b> [{severity.upper()}]",
             f"\U0001f4f7 Camera: <code>{camera_line}</code>",
             f"\U0001f4ac {message}",
         ]

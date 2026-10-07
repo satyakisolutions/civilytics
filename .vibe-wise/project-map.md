@@ -1,7 +1,7 @@
 # Project Map
 
 ## Purpose
-Civilytics / WasteWatch: detect illegal waste dumping from fixed CCTV, attribute it
+Civilytics: detect illegal waste dumping from fixed CCTV, attribute it
 to a person or vehicle, and raise alerts with evidence for municipal enforcement.
 
 ## Requirements
