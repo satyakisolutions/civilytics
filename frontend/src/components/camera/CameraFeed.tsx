@@ -182,9 +182,13 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
   return (
     <div
       className={cn(
+        // Single alert-border driver: `animate-alert-border` (index.css) owns
+        // the red pulse for both camera.status==='alert' and the held-escalation
+        // path (see alertBorderClass, line ~180). The old `.alert` class and its
+        // dead `border-pulse-critical` keyframe were removed — three competing
+        // border systems on one box left the border transparent (CI-52).
         'camera-feed group flex flex-col rounded-md border-2 border-transparent transition-shadow',
         alertBorderClass,
-        camera.status === 'alert' && 'alert',
         isFullscreen && 'h-full'
       )}
       onMouseEnter={() => setIsHovered(true)}
