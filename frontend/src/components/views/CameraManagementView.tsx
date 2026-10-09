@@ -130,7 +130,7 @@ export function CameraManagementView() {
 
       {/* KPI Row */}
       <div className="px-4 sm:px-6 pb-4">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-4 gap-2 sm:gap-4">
           <KpiCard icon={CameraIcon} accent={CV_COLORS.green}  label="Cameras online" value={`${online} / ${cameras.length}`} note={warning > 0 ? `Includes ${warning} degraded stream${warning > 1 ? 's' : ''}` : 'All streams healthy'} />
           <KpiCard icon={AlertTriangle} accent={CV_COLORS.orange} label="Cameras offline" value={String(offline)} note={offlineNames || 'None'} />
           <KpiCard icon={AlertTriangle} accent={CV_COLORS.orange} label="Stream warnings" value={String(warning)} note={warningNames || 'None'} />
@@ -254,13 +254,13 @@ export function CameraManagementView() {
 
 function KpiCard({ icon: Icon, accent, label, value, note }: { icon: React.ElementType; accent: string; label: string; value: string; note: string }) {
   return (
-    <div className="rounded-lg p-[18px_20px] h-[125px] flex flex-col justify-between relative bg-cv-panel border border-cv-border">
+    <div className="rounded-lg p-2 sm:p-[18px_20px] h-auto sm:h-[125px] flex flex-col justify-between relative bg-cv-panel border border-cv-border">
       <div>
-        <p className="text-xs mb-1 text-cv-fg2">{label}</p>
-        <p className="text-[28px] font-bold tabular-nums text-cv-fg">{value}</p>
+        <p className="text-[10px] sm:text-xs mb-0.5 sm:mb-1 text-cv-fg2 truncate">{label}</p>
+        <p className="text-base sm:text-[28px] font-bold tabular-nums text-cv-fg">{value}</p>
       </div>
-      <p className="text-[11px] text-cv-muted">{note}</p>
-      <Icon className="absolute top-[18px] right-5 w-5 h-5" style={{ color: accent }} />
+      <p className="hidden sm:block text-[11px] text-cv-muted">{note}</p>
+      <Icon className="hidden sm:block absolute top-[18px] right-5 w-5 h-5" style={{ color: accent }} />
     </div>
   );
 }
