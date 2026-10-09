@@ -82,6 +82,35 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # ── Workflow orchestration ─────────────────────────────────────────
+  conductor-server:
+    image: conductoross/conductor:3.15.0
+    environment:
+      CONFIG_PROP: |
+        conductor.db.type=postgres
+        conductor.postgres.jdbcUrl=jdbc:postgresql://postgres:5432/wastewatch?currentSchema=conductor
+        conductor.postgres.jdbcUsername=wastewatch
+        conductor.postgres.jdbcPassword=${POSTGRES_PASSWORD:-wastewatch_dev}
+        conductor.queue.type=redis_standalone
+        conductor.redis.hosts=redis:6379:us-east-1c
+        conductor.redis.password=${REDIS_PASSWORD:-wastewatch_dev}
+        conductor.redis.database=1
+    ports:
+      - "5001:5000"     # Conductor UI
+      - "8081:8080"     # Conductor API
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     command: redis-server --requirepass ${REDIS_PASSWORD:-wastewatch_dev}
@@ -168,6 +197,7 @@ services:
     environment:
       <<: *ww-env
       WW_KEYCLOAK_URL: http://keycloak:8080
+      WW_CONDUCTOR_SERVER_URL: http://conductor-server:8080/api
       WW_EVIDENCE_DIR: /app/evidence
       WW_TTS_DIR: /tmp/wastewatch/tts
       # Cookies go over plain HTTP in dev, so Secure must be off or the
@@ -185,6 +215,8 @@ services:
       kafka:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      conductor-server:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app:rw        # dev: edit without rebuilding
@@ -235,7 +267,7 @@ services:
       - .env
     environment:
       <<: *ww-env
-      WW_CONDUCTOR_SERVER_URL: http://conductor:8080/api
+      WW_CONDUCTOR_SERVER_URL: http://conductor-server:8080/api
       WW_CONDUCTOR_AUTH_MODE: none
       WW_EVIDENCE_SERVICE_URL: http://api:8080
       WW_LPR_SERVICE_URL: http://api:8080
@@ -246,6 +278,8 @@ services:
       kafka:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      conductor-server:
         condition: service_healthy
     volumes:
       - ./workers/workers:/app/workers:rw
