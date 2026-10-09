@@ -87,10 +87,7 @@ services:
     image: conductoross/conductor:3.15.0
     environment:
       CONFIG_PROP: |
-        conductor.db.type=postgres
-        conductor.postgres.jdbcUrl=jdbc:postgresql://postgres:5432/wastewatch?currentSchema=conductor
-        conductor.postgres.jdbcUsername=wastewatch
-        conductor.postgres.jdbcPassword=${POSTGRES_PASSWORD:-wastewatch_dev}
+        conductor.db.type=redis_standalone
         conductor.queue.type=redis_standalone
         conductor.redis.hosts=redis:6379:us-east-1c
         conductor.redis.password=${REDIS_PASSWORD:-wastewatch_dev}
@@ -99,8 +96,6 @@ services:
       - "5001:5000"     # Conductor UI
       - "8081:8080"     # Conductor API
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
