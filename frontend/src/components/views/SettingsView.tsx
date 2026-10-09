@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { CV_COLORS } from '@/lib/cv-colors';
 import { cn } from '@/lib/utils';
+import { API_BASE } from '@/lib/api-base';
 import { useMonitoring } from '@/context/MonitoringContext';
 
 type Section = 'general' | 'users' | 'cameras' | 'evidence' | 'notifications' | 'workflows' | 'audit';
@@ -407,6 +408,37 @@ function NotificationsSection({ onSave }: { onSave: () => void }) {
   const [channels, setChannels] = useState(DELIVERY_CHANNELS);
   const [configuring, setConfiguring] = useState<ChannelConfig | null>(null);
   const [channelForm, setChannelForm] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/config/delivery_channels`).then(r => {
+      if (!r.ok) return;
+      return r.json();
+    }).then(data => {
+      if (!data?.value) return;
+      const saved = data.value as Record<string, { enabled: boolean; config?: Record<string, string> }>;
+      setChannels(prev => prev.map(ch => {
+        const s = saved[ch.id];
+        return s ? { ...ch, enabled: !!s.enabled } : ch;
+      }));
+    }).catch(() => {});
+    fetch(`${API_BASE}/api/config/notification_rules`).then(r => {
+      if (!r.ok) return;
+      return r.json();
+    }).then(data => {
+      if (!data?.value || !Array.isArray(data.value)) return;
+      setRules(data.value);
+    }).catch(() => {});
+  }, []);
+
+  const persistChannels = async (next: typeof channels) => {
+    const payload: Record<string, { enabled: boolean; config?: Record<string, string> }> = {};
+    next.forEach(ch => { payload[ch.id] = { enabled: ch.enabled }; });
+    await fetch(`${API_BASE}/api/config/delivery_channels`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: payload }),
+    });
+  };
 
   const toggle = (i: number, field: 'email' | 'inApp') => {
     const next = [...rules];
@@ -419,13 +451,33 @@ function NotificationsSection({ onSave }: { onSave: () => void }) {
       setConfiguring(ch);
       setChannelForm({});
     } else {
-      setChannels(channels.map(c => c.id === id ? { ...c, enabled: false } : c));
+      const next = channels.map(c => c.id === id ? { ...c, enabled: false } : c);
+      setChannels(next);
+      persistChannels(next);
     }
   };
-  const saveChannelConfig = () => {
+  const saveChannelConfig = async () => {
     if (!configuring) return;
-    setChannels(channels.map(c => c.id === configuring.id ? { ...c, enabled: true } : c));
+    setSaving(true);
+    // Save channel-specific config (excluding passwords from local state)
+    await fetch(`${API_BASE}/api/config/delivery_channel_${configuring.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: channelForm }),
+    });
+    const next = channels.map(c => c.id === configuring.id ? { ...c, enabled: true } : c);
+    setChannels(next);
+    await persistChannels(next);
+    setSaving(false);
     setConfiguring(null);
+  };
+  const saveRules = async () => {
+    setSaving(true);
+    await fetch(`${API_BASE}/api/config/notification_rules`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: rules }),
+    });
+    setSaving(false);
+    onSave();
   };
 
   return <>
@@ -452,8 +504,11 @@ function NotificationsSection({ onSave }: { onSave: () => void }) {
               </div>
               <div className="flex items-center gap-2">
                 {ch.enabled && (
-                  <button onClick={() => { setConfiguring(ch); setChannelForm({}); }}
-                    className="text-[10px] font-medium" style={{ color: CV_COLORS.fg2 }}>Edit</button>
+                  <button onClick={() => {
+                    setConfiguring(ch);
+                    fetch(`${API_BASE}/api/config/delivery_channel_${ch.id}`).then(r => r.ok ? r.json() : null)
+                      .then(d => setChannelForm(d?.value || {})).catch(() => setChannelForm({}));
+                  }} className="text-[10px] font-medium" style={{ color: CV_COLORS.fg2 }}>Edit</button>
                 )}
                 <Toggle on={ch.enabled} onToggle={() => toggleChannel(ch.id)} />
               </div>
@@ -488,7 +543,7 @@ function NotificationsSection({ onSave }: { onSave: () => void }) {
         <p className="text-[11px] mb-1" style={{ color: CV_COLORS.muted }}>Notification recipients</p>
         <p className="text-xs" style={{ color: CV_COLORS.fg2 }}>Sandesh C, Operations Review Desk</p>
       </div>
-      <div className="flex justify-end mt-4"><Btn primary onClick={onSave}>Save notification rules</Btn></div>
+      <div className="flex justify-end mt-4"><Btn primary onClick={saveRules}>{saving ? 'Saving…' : 'Save notification rules'}</Btn></div>
     </Panel>
 
     {/* Channel configuration modal */}
@@ -514,7 +569,7 @@ function NotificationsSection({ onSave }: { onSave: () => void }) {
         </p>
         <div className="flex justify-end gap-2 mt-4">
           <Btn onClick={() => setConfiguring(null)}>Cancel</Btn>
-          <Btn primary onClick={saveChannelConfig}>Save & enable</Btn>
+          <Btn primary onClick={saveChannelConfig}>{saving ? 'Saving…' : 'Save & enable'}</Btn>
         </div>
       </Modal>
     )}
