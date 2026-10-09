@@ -17,6 +17,11 @@ TOPIC_HEALTH = "wastewatch.health"
 TOPIC_HEALING = "wastewatch.healing"
 TOPIC_MISSES = "wastewatch.misses"
 
+# Workflow Operations
+TOPIC_DUMPING_EVENTS = "civilytics.dumping.events"
+TOPIC_DUMPING_EVENTS_DLQ = "civilytics.dumping.events.dlq"
+TOPIC_WORKFLOW_STATUS = "civilytics.workflow.status"
+
 # ---------------------------------------------------------------------------
 # Kafka consumer group IDs
 # ---------------------------------------------------------------------------
@@ -29,3 +34,4 @@ GROUP_ESCALATION = "wastewatch.group.escalation"
 GROUP_HEALTH_MONITOR = "wastewatch.group.health-monitor"
 GROUP_HEALER = "wastewatch.group.healer"
 GROUP_ANALYTICS = "wastewatch.group.analytics"
+GROUP_WORKFLOW_INTAKE = "civilytics.group.workflow-intake"

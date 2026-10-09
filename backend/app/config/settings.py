@@ -56,11 +56,29 @@ class Settings(BaseSettings):
     auth_cookie_samesite: str = "lax"
     auth_cookie_domain: str = ""
 
+    # Conductor OSS
+    conductor_server_url: str = "http://localhost:8080/api"
+    conductor_auth_mode: str = ""
+    conductor_auth_token: str = ""
+
     # Static file roots. Defaults are the in-container paths; overridable so
     # the test suite can import the app outside Docker, where /app is not
     # writable.
     evidence_dir: str = "/app/evidence"
     tts_dir: str = "/tmp/wastewatch/tts"
+
+    # Conductor OSS
+    conductor_server_url: str = "http://localhost:8080/api"
+    conductor_auth_mode: str = "none"
+    conductor_auth_token: str = ""
+
+    # Workflow Operations
+    evidence_service_url: str = "http://localhost:8090"
+    lpr_service_url: str = "http://localhost:8091"
+    clustering_service_url: str = "http://localhost:8092"
+    analytics_service_url: str = "http://localhost:8093"
+    alert_webhook_url: str = ""
+    app_base_url: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_prefix="WW_", env_file=".env")
 
