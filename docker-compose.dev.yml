@@ -228,6 +228,29 @@ services:
     command: ["python3", "-m", "services.combined_workers.main"]
     restart: unless-stopped
 
+  workflow-workers:
+    build:
+      context: ./workers
+    env_file:
+      - .env
+    environment:
+      <<: *ww-env
+      WW_CONDUCTOR_SERVER_URL: http://conductor:8080/api
+      WW_CONDUCTOR_AUTH_MODE: none
+      WW_EVIDENCE_SERVICE_URL: http://api:8080
+      WW_LPR_SERVICE_URL: http://api:8080
+      WW_CLUSTERING_SERVICE_URL: http://api:8080
+      WW_ANALYTICS_SERVICE_URL: http://api:8080
+      WW_WORKER_INSTANCE_ID: worker-dev-1
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./workers/workers:/app/workers:rw
+    restart: unless-stopped
+
   pipeline:
     build:
       context: ./pipeline
