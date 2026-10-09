@@ -8,6 +8,8 @@ import { SettingsView } from '@/components/views/SettingsView';
 import { MapView } from '@/components/views/MapView';
 import { TimelineView } from '@/components/views/TimelineView';
 import { BillingView } from '@/components/views/BillingView';
+import { PersonTrackingView } from '@/components/views/PersonTrackingView';
+import { VehicleTrackingView } from '@/components/views/VehicleTrackingView';
 
 function DashboardContent() {
   const { currentView } = useMonitoring();
@@ -19,6 +21,8 @@ function DashboardContent() {
       {currentView === 'analytics' && <AnalyticsView />}
       {currentView === 'history' && <HistoryView />}
       {currentView === 'timeline' && <TimelineView />}
+      {currentView === 'persons' && <PersonTrackingView />}
+      {currentView === 'vehicles' && <VehicleTrackingView />}
       {currentView === 'cameras' && <CameraManagementView />}
       {currentView === 'billing' && <BillingView />}
       {currentView === 'settings' && <SettingsView />}

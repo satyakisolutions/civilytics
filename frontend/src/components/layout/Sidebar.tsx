@@ -19,6 +19,8 @@ import {
   LogOut,
   UserCircle,
   CreditCard,
+  UserSearch,
+  Car,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { API_BASE } from '@/lib/api-base';
@@ -39,6 +41,8 @@ const navigationItems = [
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
   { id: 'history', label: 'Event History', icon: History },
   { id: 'timeline', label: 'Timeline Playback', icon: PlayCircle },
+  { id: 'persons', label: 'Person Tracking', icon: UserSearch },
+  { id: 'vehicles', label: 'Vehicle Tracking', icon: Car },
   { id: 'cameras', label: 'Camera Management', icon: Camera },
   { id: 'billing', label: 'Subscription & Billing', icon: CreditCard },
   { id: 'settings', label: 'Settings', icon: Settings },
