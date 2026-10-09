@@ -237,6 +237,89 @@ function CamerasSection({ onSave }: { onSave: () => void }) {
         <Btn primary onClick={onSave}>Save changes</Btn>
       </div>
     </Panel>
+
+    {/* Per-camera thresholds */}
+    <Panel>
+      <h3 className="text-xs font-semibold mb-1" style={{ color: CV_COLORS.fg }}>Per-camera detection thresholds</h3>
+      <p className="text-[10px] mb-3" style={{ color: CV_COLORS.muted }}>Override workspace defaults for individual cameras. Cameras not listed use workspace settings above.</p>
+      <CameraThresholds />
+    </Panel>
+  </>;
+}
+
+const DEMO_CAMERAS = [
+  { id: 'cam-entry', name: 'Entry Gate', zone: 'Zone A', confidence: 0.75, sensitivity: 'High', nightBoost: true, cooldown: 30 },
+  { id: 'cam-02', name: 'Cam-02', zone: 'Zone B', confidence: 0.80, sensitivity: 'Medium', nightBoost: false, cooldown: 60 },
+  { id: 'cam-03', name: 'Cam-03', zone: 'Zone C', confidence: 0.70, sensitivity: 'High', nightBoost: true, cooldown: 30 },
+];
+
+function CameraThresholds() {
+  const [cameras, setCameras] = useState(DEMO_CAMERAS);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [form, setForm] = useState({ confidence: 0.75, sensitivity: 'High', nightBoost: true, cooldown: 30 });
+
+  const openEdit = (cam: typeof DEMO_CAMERAS[0]) => {
+    setEditing(cam.id);
+    setForm({ confidence: cam.confidence, sensitivity: cam.sensitivity, nightBoost: cam.nightBoost, cooldown: cam.cooldown });
+  };
+  const saveEdit = () => {
+    if (!editing) return;
+    setCameras(cameras.map(c => c.id === editing ? { ...c, ...form } : c));
+    setEditing(null);
+  };
+
+  return <>
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
+        <thead><tr style={{ color: CV_COLORS.muted }} className="border-b">
+          {['Camera', 'Zone', 'Min confidence', 'Sensitivity', 'Night boost', 'Cooldown (s)', ''].map(h =>
+            <th key={h} className="text-left py-2 pr-3 font-medium" style={{ borderColor: CV_COLORS.border }}>{h}</th>
+          )}
+        </tr></thead>
+        <tbody>
+          {cameras.map(c => (
+            <tr key={c.id} className="border-b" style={{ borderColor: CV_COLORS.border }}>
+              <td className="py-2 pr-3 font-medium">{c.name}</td>
+              <td className="pr-3" style={{ color: CV_COLORS.fg2 }}>{c.zone}</td>
+              <td className="pr-3 font-mono">{(c.confidence * 100).toFixed(0)}%</td>
+              <td className="pr-3"><Chip label={c.sensitivity} color={c.sensitivity === 'High' ? CV_COLORS.orange : CV_COLORS.blue} /></td>
+              <td className="pr-3">{c.nightBoost ? <Chip label="On" color={CV_COLORS.cyan} /> : <Chip label="Off" color={CV_COLORS.muted} />}</td>
+              <td className="pr-3 font-mono">{c.cooldown}s</td>
+              <td><button onClick={() => openEdit(c)} className="text-[11px] font-medium" style={{ color: CV_COLORS.cyan }}>Edit</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    {editing && (
+      <Modal title={`Thresholds — ${cameras.find(c => c.id === editing)?.name}`} onClose={() => setEditing(null)}>
+        <div className="space-y-3">
+          <div>
+            <label className="text-[11px] font-medium block mb-1" style={{ color: CV_COLORS.fg2 }}>Minimum confidence (%)</label>
+            <input type="number" min={0} max={100} value={Math.round(form.confidence * 100)}
+              onChange={e => setForm({ ...form, confidence: Number(e.target.value) / 100 })}
+              className="w-full px-3 py-1.5 rounded-md text-xs outline-none"
+              style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg }} />
+            <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>Events below this threshold are ignored for this camera.</p>
+          </div>
+          <Field label="Sensitivity"><Sel value={form.sensitivity} options={['Low', 'Medium', 'High']} onChange={v => setForm({ ...form, sensitivity: v })} /></Field>
+          <Field label="Night detection boost"><Toggle on={form.nightBoost} onToggle={() => setForm({ ...form, nightBoost: !form.nightBoost })} /></Field>
+          <div>
+            <label className="text-[11px] font-medium block mb-1" style={{ color: CV_COLORS.fg2 }}>Event cooldown (seconds)</label>
+            <input type="number" min={0} max={600} value={form.cooldown}
+              onChange={e => setForm({ ...form, cooldown: Number(e.target.value) })}
+              className="w-full px-3 py-1.5 rounded-md text-xs outline-none"
+              style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg }} />
+            <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>Minimum seconds between events from this camera before a new alert triggers.</p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <Btn onClick={() => setEditing(null)}>Cancel</Btn>
+          <Btn primary onClick={saveEdit}>Save thresholds</Btn>
+        </div>
+      </Modal>
+    )}
   </>;
 }
 
