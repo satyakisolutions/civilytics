@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Settings as SettingsIcon, Users, Camera, HardDrive, Bell, Workflow, FileText,
   Check, ChevronRight, X, Plus, MoreVertical, Download, Eye, Clock,
-  ArrowRight, AlertTriangle, RefreshCw, MessageCircle, Phone, Volume2, Mail,
+  ArrowRight, AlertTriangle, RefreshCw, MessageCircle, Phone, Volume2, Mail, Database,
 } from 'lucide-react';
 import { CV_COLORS } from '@/lib/cv-colors';
 import { cn } from '@/lib/utils';
@@ -273,7 +273,7 @@ const NOTIF_RULES = [
   { label: 'Daily operational summary', email: true, inApp: false },
 ];
 
-type ChannelId = 'email' | 'whatsapp' | 'telegram' | 'ip_speaker' | 'sip_phone';
+type ChannelId = 'email' | 'whatsapp' | 'telegram' | 'ip_speaker' | 'sip_phone' | 'storage_drive';
 interface ChannelConfig {
   id: ChannelId; label: string; icon: typeof Mail; enabled: boolean;
   fields: { key: string; label: string; type?: string; placeholder: string }[];
@@ -308,6 +308,14 @@ const DELIVERY_CHANNELS: ChannelConfig[] = [
     { key: 'sip_username', label: 'Username', placeholder: 'civilytics' },
     { key: 'sip_password', label: 'Password', type: 'password', placeholder: '••••••••' },
     { key: 'sip_contacts', label: 'Escalation numbers (comma-separated)', placeholder: '+91XXXXXXXXXX' },
+  ]},
+  { id: 'storage_drive', label: 'Storage / Drive', icon: Database, enabled: false, fields: [
+    { key: 'drive_type', label: 'Storage type', placeholder: 'Google Drive / S3 / NFS / Local' },
+    { key: 'drive_endpoint', label: 'Endpoint / mount path', placeholder: 's3://bucket-name or /mnt/evidence' },
+    { key: 'drive_access_key', label: 'Access key / service account', type: 'password', placeholder: 'AKIA... or service-account.json' },
+    { key: 'drive_secret_key', label: 'Secret key', type: 'password', placeholder: '••••••••' },
+    { key: 'drive_region', label: 'Region (cloud only)', placeholder: 'ap-south-1' },
+    { key: 'drive_retention_days', label: 'Evidence retention (days)', type: 'number', placeholder: '30' },
   ]},
 ];
 
