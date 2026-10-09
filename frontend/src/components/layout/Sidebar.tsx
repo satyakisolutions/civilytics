@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { HealthPanel } from './HealthPanel';
 import {
+  Activity,
   Camera,
   Grid3X3,
   Grid2X2,
@@ -45,6 +46,7 @@ const navigationItems = [
   { id: 'vehicles', label: 'Vehicle Tracking', icon: Car },
   { id: 'cameras', label: 'Camera Management', icon: Camera },
   { id: 'billing', label: 'Subscription & Billing', icon: CreditCard },
+  { id: 'operations', label: 'Operations', icon: Activity },
   { id: 'settings', label: 'Settings', icon: Settings },
 ] as const;
 
