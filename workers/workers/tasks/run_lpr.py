@@ -1,9 +1,24 @@
 """run_lpr_analysis — license plate recognition for vehicle events."""
+import json
 import httpx
 import structlog
+from aiokafka import AIOKafkaProducer
 from workers.config import settings
 
 log = structlog.get_logger()
+
+_producer: AIOKafkaProducer | None = None
+
+
+async def _get_producer() -> AIOKafkaProducer:
+    global _producer
+    if _producer is None:
+        _producer = AIOKafkaProducer(
+            bootstrap_servers=settings.kafka_brokers,
+            value_serializer=lambda v: json.dumps(v).encode(),
+        )
+        await _producer.start()
+    return _producer
 
 
 async def handle_run_lpr(input_data: dict, task: dict) -> dict:
@@ -35,8 +50,23 @@ async def handle_run_lpr(input_data: dict, task: dict) -> dict:
     plates = result.get("plates", [])
     log.info("lpr.completed", event_id=event_id, plate_count=len(plates))
 
-    return {
+    output = {
         "lpr_status": "COMPLETED",
         "plates": plates,
         "plate_count": len(plates),
     }
+
+    producer = await _get_producer()
+    await producer.send(
+        "wastewatch.lpr",
+        value={
+            "event_id": event_id,
+            "workspace_id": event.get("workspace_id"),
+            "camera_id": event.get("camera_id"),
+            "plate_count": len(plates),
+            "plates": [p.get("plate_number", "") for p in plates],
+            "source": "workflow_worker",
+        },
+    )
+
+    return output
