@@ -140,8 +140,10 @@ export function CameraManagementView() {
 
       {/* Filter Toolbar */}
       <div className="px-4 sm:px-6 pb-3">
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 h-auto sm:h-[42px]">
-          <div className="relative flex-1">
+        <div className="flex flex-row flex-wrap items-center gap-2 sm:gap-3">
+          <FilterSelect value={zone} options={zones} onChange={setZone} />
+          <FilterSelect value={health} options={['All health states', 'Online', 'Warning', 'Offline']} onChange={setHealth} />
+          <div className="relative flex-1 min-w-[180px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cv-muted" />
             <input
               type="text"
@@ -151,14 +153,12 @@ export function CameraManagementView() {
               className="w-full h-[42px] pl-9 pr-3 rounded-md text-sm bg-cv-panel border border-cv-border text-cv-fg placeholder:text-cv-muted focus:outline-none focus:border-cv-cyan"
             />
           </div>
-          <FilterSelect value={zone} options={zones} onChange={setZone} />
-          <FilterSelect value={health} options={['All health states', 'Online', 'Warning', 'Offline']} onChange={setHealth} />
           <span className="text-xs text-cv-muted whitespace-nowrap self-center">{filtered.length} cameras</span>
         </div>
       </div>
 
       {/* Camera Table / Card List */}
-      <div className="flex-1 overflow-auto px-4 sm:px-6 pb-6">
+      <div className="flex-1 min-h-0 overflow-auto px-4 sm:px-6 pb-6">
         <div className="rounded-lg border border-cv-border bg-cv-panel">
           {isLoading ? (
             <div className="flex items-center justify-center h-40 text-sm text-cv-muted">Loading cameras…</div>
@@ -453,16 +453,35 @@ function ActionMenu({ cam, open, onToggle, onView, onEdit, onDelete }: { cam: Ca
 }
 
 function FilterSelect({ value, options, onChange }: { value: string; options: string[]; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
   return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        className="h-[42px] px-3 pr-8 rounded-md text-sm bg-cv-panel border border-cv-border text-cv-fg appearance-none cursor-pointer focus:outline-none focus:border-cv-cyan"
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="h-[42px] px-3 pr-8 rounded-md text-sm bg-cv-panel border border-cv-border text-cv-fg cursor-pointer focus:outline-none focus:border-cv-cyan text-left whitespace-nowrap"
       >
-        {options.map(o => <option key={o} value={o}>{o}</option>)}
-      </select>
+        {value}
+      </button>
       <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-cv-muted pointer-events-none" />
+      {open && (
+        <div className="absolute z-[9999] top-full left-0 mt-1 min-w-full bg-cv-panel border border-cv-border rounded-md shadow-lg py-1 max-h-48 overflow-y-auto">
+          {options.map(o => (
+            <button key={o} type="button" onClick={() => { onChange(o); setOpen(false); }} className={cn('w-full text-left px-3 py-2 text-sm hover:bg-white/5 whitespace-nowrap', o === value && 'text-cv-cyan')}>
+              {o}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
