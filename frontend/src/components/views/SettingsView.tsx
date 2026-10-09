@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Settings as SettingsIcon, Users, Camera, HardDrive, Bell, Workflow, FileText,
   Check, ChevronRight, X, Plus, MoreVertical, Download, Eye, Clock,
-  ArrowRight, AlertTriangle, RefreshCw, MessageCircle, Phone, Volume2, Globe, Mail,
+  ArrowRight, AlertTriangle, RefreshCw, MessageCircle, Phone, Volume2, Mail,
 } from 'lucide-react';
 import { CV_COLORS } from '@/lib/cv-colors';
 import { cn } from '@/lib/utils';
@@ -273,7 +273,7 @@ const NOTIF_RULES = [
   { label: 'Daily operational summary', email: true, inApp: false },
 ];
 
-type ChannelId = 'email' | 'whatsapp' | 'telegram' | 'ip_speaker' | 'sip_phone' | 'webhook';
+type ChannelId = 'email' | 'whatsapp' | 'telegram' | 'ip_speaker' | 'sip_phone';
 interface ChannelConfig {
   id: ChannelId; label: string; icon: typeof Mail; enabled: boolean;
   fields: { key: string; label: string; type?: string; placeholder: string }[];
@@ -287,13 +287,13 @@ const DELIVERY_CHANNELS: ChannelConfig[] = [
     { key: 'smtp_password', label: 'Password', type: 'password', placeholder: '••••••••' },
     { key: 'smtp_from', label: 'From address', placeholder: 'civilytics@satyaki.co.in' },
   ]},
-  { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, enabled: false, fields: [
+  { id: 'whatsapp', label: 'WhatsApp (optional)', icon: MessageCircle, enabled: false, fields: [
     { key: 'wa_api_url', label: 'API URL', placeholder: 'https://graph.facebook.com/v18.0/...' },
     { key: 'wa_phone_id', label: 'Phone number ID', placeholder: '123456789' },
     { key: 'wa_token', label: 'Access token', type: 'password', placeholder: 'Bearer token' },
     { key: 'wa_recipients', label: 'Recipient numbers (comma-separated)', placeholder: '+91XXXXXXXXXX, +91XXXXXXXXXX' },
   ]},
-  { id: 'telegram', label: 'Telegram', icon: MessageCircle, enabled: false, fields: [
+  { id: 'telegram', label: 'Telegram (optional)', icon: MessageCircle, enabled: false, fields: [
     { key: 'tg_bot_token', label: 'Bot token', type: 'password', placeholder: '123456:ABC-DEF...' },
     { key: 'tg_chat_ids', label: 'Chat IDs (comma-separated)', placeholder: '-100123456789, -100987654321' },
   ]},
@@ -308,11 +308,6 @@ const DELIVERY_CHANNELS: ChannelConfig[] = [
     { key: 'sip_username', label: 'Username', placeholder: 'civilytics' },
     { key: 'sip_password', label: 'Password', type: 'password', placeholder: '••••••••' },
     { key: 'sip_contacts', label: 'Escalation numbers (comma-separated)', placeholder: '+91XXXXXXXXXX' },
-  ]},
-  { id: 'webhook', label: 'Webhook', icon: Globe, enabled: false, fields: [
-    { key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://hooks.example.com/alerts' },
-    { key: 'webhook_secret', label: 'Signing secret (optional)', type: 'password', placeholder: 'whsec_...' },
-    { key: 'webhook_headers', label: 'Custom headers (JSON, optional)', placeholder: '{"X-Source": "civilytics"}' },
   ]},
 ];
 
