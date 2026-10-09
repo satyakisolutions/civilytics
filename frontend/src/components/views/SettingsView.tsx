@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Settings as SettingsIcon, Users, Camera, HardDrive, Bell, Workflow, FileText,
   Check, ChevronRight, X, Plus, MoreVertical, Download, Eye, Clock,
-  ArrowRight, AlertTriangle, RefreshCw,
+  ArrowRight, AlertTriangle, RefreshCw, MessageCircle, Phone, Volume2, Globe, Mail,
 } from 'lucide-react';
 import { CV_COLORS } from '@/lib/cv-colors';
 import { cn } from '@/lib/utils';
@@ -273,16 +273,113 @@ const NOTIF_RULES = [
   { label: 'Daily operational summary', email: true, inApp: false },
 ];
 
+type ChannelId = 'email' | 'whatsapp' | 'telegram' | 'ip_speaker' | 'sip_phone' | 'webhook';
+interface ChannelConfig {
+  id: ChannelId; label: string; icon: typeof Mail; enabled: boolean;
+  fields: { key: string; label: string; type?: string; placeholder: string }[];
+}
+
+const DELIVERY_CHANNELS: ChannelConfig[] = [
+  { id: 'email', label: 'Email (SMTP)', icon: Mail, enabled: true, fields: [
+    { key: 'smtp_host', label: 'SMTP host', placeholder: 'smtp.gmail.com' },
+    { key: 'smtp_port', label: 'Port', type: 'number', placeholder: '587' },
+    { key: 'smtp_user', label: 'Username', placeholder: 'alerts@example.com' },
+    { key: 'smtp_password', label: 'Password', type: 'password', placeholder: '••••••••' },
+    { key: 'smtp_from', label: 'From address', placeholder: 'civilytics@satyaki.co.in' },
+  ]},
+  { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, enabled: false, fields: [
+    { key: 'wa_api_url', label: 'API URL', placeholder: 'https://graph.facebook.com/v18.0/...' },
+    { key: 'wa_phone_id', label: 'Phone number ID', placeholder: '123456789' },
+    { key: 'wa_token', label: 'Access token', type: 'password', placeholder: 'Bearer token' },
+    { key: 'wa_recipients', label: 'Recipient numbers (comma-separated)', placeholder: '+91XXXXXXXXXX, +91XXXXXXXXXX' },
+  ]},
+  { id: 'telegram', label: 'Telegram', icon: MessageCircle, enabled: false, fields: [
+    { key: 'tg_bot_token', label: 'Bot token', type: 'password', placeholder: '123456:ABC-DEF...' },
+    { key: 'tg_chat_ids', label: 'Chat IDs (comma-separated)', placeholder: '-100123456789, -100987654321' },
+  ]},
+  { id: 'ip_speaker', label: 'IP Speaker', icon: Volume2, enabled: false, fields: [
+    { key: 'speaker_host', label: 'Speaker IP / hostname', placeholder: '192.168.1.50' },
+    { key: 'speaker_port', label: 'Port', type: 'number', placeholder: '8080' },
+    { key: 'speaker_protocol', label: 'Protocol', placeholder: 'http' },
+    { key: 'speaker_zone', label: 'Zone assignment', placeholder: 'Zone A' },
+  ]},
+  { id: 'sip_phone', label: 'SIP / Phone call', icon: Phone, enabled: false, fields: [
+    { key: 'sip_server', label: 'SIP server', placeholder: 'sip.example.com' },
+    { key: 'sip_username', label: 'Username', placeholder: 'civilytics' },
+    { key: 'sip_password', label: 'Password', type: 'password', placeholder: '••••••••' },
+    { key: 'sip_contacts', label: 'Escalation numbers (comma-separated)', placeholder: '+91XXXXXXXXXX' },
+  ]},
+  { id: 'webhook', label: 'Webhook', icon: Globe, enabled: false, fields: [
+    { key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://hooks.example.com/alerts' },
+    { key: 'webhook_secret', label: 'Signing secret (optional)', type: 'password', placeholder: 'whsec_...' },
+    { key: 'webhook_headers', label: 'Custom headers (JSON, optional)', placeholder: '{"X-Source": "civilytics"}' },
+  ]},
+];
+
 function NotificationsSection({ onSave }: { onSave: () => void }) {
   const [rules, setRules] = useState(NOTIF_RULES);
+  const [channels, setChannels] = useState(DELIVERY_CHANNELS);
+  const [configuring, setConfiguring] = useState<ChannelConfig | null>(null);
+  const [channelForm, setChannelForm] = useState<Record<string, string>>({});
+
   const toggle = (i: number, field: 'email' | 'inApp') => {
     const next = [...rules];
     next[i] = { ...next[i], [field]: !next[i][field] };
     setRules(next);
   };
+  const toggleChannel = (id: ChannelId) => {
+    const ch = channels.find(c => c.id === id)!;
+    if (!ch.enabled) {
+      setConfiguring(ch);
+      setChannelForm({});
+    } else {
+      setChannels(channels.map(c => c.id === id ? { ...c, enabled: false } : c));
+    }
+  };
+  const saveChannelConfig = () => {
+    if (!configuring) return;
+    setChannels(channels.map(c => c.id === configuring.id ? { ...c, enabled: true } : c));
+    setConfiguring(null);
+  };
+
   return <>
-    <SectionTitle title="Notifications" subtitle="Choose operational alerts for this workspace." />
+    <SectionTitle title="Notifications" subtitle="Choose operational alerts and delivery channels for this workspace." />
+
+    {/* Delivery channels */}
     <Panel>
+      <h3 className="text-xs font-semibold mb-3" style={{ color: CV_COLORS.fg }}>Delivery channels</h3>
+      <p className="text-[10px] mb-3" style={{ color: CV_COLORS.muted }}>Enable a channel and configure its connection details. Alerts are sent to all enabled channels.</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {channels.map(ch => {
+          const Icon = ch.icon;
+          return (
+            <div key={ch.id} className="flex items-center justify-between rounded-lg p-3"
+              style={{ background: CV_COLORS.bg, border: `1px solid ${ch.enabled ? CV_COLORS.cyan + '44' : CV_COLORS.border}` }}>
+              <div className="flex items-center gap-2.5">
+                <Icon className="w-4 h-4" style={{ color: ch.enabled ? CV_COLORS.cyan : CV_COLORS.muted }} />
+                <div>
+                  <p className="text-xs font-medium" style={{ color: CV_COLORS.fg }}>{ch.label}</p>
+                  <p className="text-[10px]" style={{ color: ch.enabled ? CV_COLORS.green : CV_COLORS.muted }}>
+                    {ch.enabled ? 'Connected' : 'Not configured'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {ch.enabled && (
+                  <button onClick={() => { setConfiguring(ch); setChannelForm({}); }}
+                    className="text-[10px] font-medium" style={{ color: CV_COLORS.fg2 }}>Edit</button>
+                )}
+                <Toggle on={ch.enabled} onToggle={() => toggleChannel(ch.id)} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+
+    {/* Notification rules */}
+    <Panel>
+      <h3 className="text-xs font-semibold mb-3" style={{ color: CV_COLORS.fg }}>Notification rules</h3>
       <div className="overflow-x-auto">
         <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
           <thead><tr style={{ color: CV_COLORS.muted }} className="border-b">
@@ -307,6 +404,34 @@ function NotificationsSection({ onSave }: { onSave: () => void }) {
       </div>
       <div className="flex justify-end mt-4"><Btn primary onClick={onSave}>Save notification rules</Btn></div>
     </Panel>
+
+    {/* Channel configuration modal */}
+    {configuring && (
+      <Modal title={`Configure ${configuring.label}`} onClose={() => setConfiguring(null)}>
+        <div className="space-y-3">
+          {configuring.fields.map(f => (
+            <div key={f.key}>
+              <label className="text-[11px] font-medium block mb-1" style={{ color: CV_COLORS.fg2 }}>{f.label}</label>
+              <input
+                type={f.type || 'text'}
+                value={channelForm[f.key] || ''}
+                onChange={e => setChannelForm({ ...channelForm, [f.key]: e.target.value })}
+                placeholder={f.placeholder}
+                className="w-full px-3 py-1.5 rounded-md text-xs outline-none"
+                style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg }}
+              />
+            </div>
+          ))}
+        </div>
+        <p className="text-[10px] mt-3" style={{ color: CV_COLORS.muted }}>
+          Credentials are stored server-side and never exposed in the browser.
+        </p>
+        <div className="flex justify-end gap-2 mt-4">
+          <Btn onClick={() => setConfiguring(null)}>Cancel</Btn>
+          <Btn primary onClick={saveChannelConfig}>Save & enable</Btn>
+        </div>
+      </Modal>
+    )}
   </>;
 }
 
