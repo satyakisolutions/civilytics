@@ -15,12 +15,12 @@ export interface AnalyticsSummary {
 }
 
 export interface HourlyPoint {
-  hour: string; // ISO timestamp
+  hour: string;
   count: number;
 }
 
 export interface DailyPoint {
-  date: string; // YYYY-MM-DD
+  date: string;
   count: number;
 }
 
@@ -29,15 +29,15 @@ export interface ZoneCount {
   event_count: number;
 }
 
-async function fetchJson<T>(path: string, fallback: T): Promise<T> {
-  try {
-    const resp = await fetch(`${API_BASE}${path}`);
-    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-    return await resp.json();
-  } catch (error) {
-    console.error(`Failed to fetch ${path}:`, error);
-    return fallback;
-  }
+export interface CategoryData {
+  categories: string[];
+  data: Array<Record<string, number | string>>;
+}
+
+async function fetchJson<T>(path: string): Promise<T> {
+  const resp = await fetch(`${API_BASE}${path}`);
+  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+  return await resp.json();
 }
 
 const EMPTY_SUMMARY: AnalyticsSummary = {
@@ -53,31 +53,46 @@ const EMPTY_SUMMARY: AnalyticsSummary = {
   avg_response_time_minutes: null,
 };
 
+const EMPTY_CAT: CategoryData = { categories: [], data: [] };
+
 export function useAnalytics() {
   const [summary, setSummary] = useState<AnalyticsSummary>(EMPTY_SUMMARY);
   const [hourly, setHourly] = useState<HourlyPoint[]>([]);
   const [daily, setDaily] = useState<DailyPoint[]>([]);
   const [byZone, setByZone] = useState<ZoneCount[]>([]);
+  const [heatmap, setHeatmap] = useState<CategoryData>(EMPTY_CAT);
+  const [dailyByCategory, setDailyByCategory] = useState<CategoryData>(EMPTY_CAT);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   const refetch = useCallback(async () => {
     setIsLoading(true);
-    const [s, h, d, z] = await Promise.all([
-      fetchJson<AnalyticsSummary>('/api/analytics/summary', EMPTY_SUMMARY),
-      fetchJson<HourlyPoint[]>('/api/analytics/hourly', []),
-      fetchJson<DailyPoint[]>('/api/analytics/daily', []),
-      fetchJson<ZoneCount[]>('/api/analytics/by-zone', []),
-    ]);
-    setSummary(s);
-    setHourly(h);
-    setDaily(d);
-    setByZone(z);
-    setIsLoading(false);
+    setError(false);
+    try {
+      const [s, h, d, z, hm, dbc] = await Promise.all([
+        fetchJson<AnalyticsSummary>('/api/analytics/summary'),
+        fetchJson<HourlyPoint[]>('/api/analytics/hourly'),
+        fetchJson<DailyPoint[]>('/api/analytics/daily'),
+        fetchJson<ZoneCount[]>('/api/analytics/by-zone'),
+        fetchJson<CategoryData>('/api/analytics/heatmap'),
+        fetchJson<CategoryData>('/api/analytics/daily-by-category'),
+      ]);
+      setSummary(s);
+      setHourly(h);
+      setDaily(d);
+      setByZone(z);
+      setHeatmap(hm);
+      setDailyByCategory(dbc);
+    } catch {
+      setError(true);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     refetch();
   }, [refetch]);
 
-  return { summary, hourly, daily, byZone, isLoading, refetch };
+  return { summary, hourly, daily, byZone, heatmap, dailyByCategory, isLoading, error, refetch };
 }

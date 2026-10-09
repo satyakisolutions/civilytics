@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import { CV_COLORS } from "./src/lib/cv-colors";
 
 export default {
   darkMode: ["class"],
@@ -77,6 +78,7 @@ export default {
           border: "hsl(var(--camera-border))",
           "border-inactive": "hsl(var(--camera-border-inactive))",
         },
+        cv: CV_COLORS,
         chart: {
           "1": "hsl(var(--chart-1))",
           "2": "hsl(var(--chart-2))",
