@@ -48,7 +48,6 @@ export function ROIOverlay({
   // so the editor never fails to render before the ResizeObserver fires.
   const pct = (v: number) => `${v * 100}%`;
   const canFinish = currentPoints.length >= 3;
-
   return (
     <>
       <svg

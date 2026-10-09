@@ -2,7 +2,6 @@
   "realm": "wastewatch",
   "enabled": true,
   "displayName": "Civilytics WasteWatch (test)",
-  "_comment_roles": "owner and admin are COMPOSITE. require_role() in app/auth/middleware.py matches an exact string, and realm roles are otherwise flat -- without these composites an owner would hold only 'owner' and would be rejected by require_admin and require_viewer.",
   "roles": {
     "realm": [
       {
@@ -31,7 +30,6 @@
       }
     ]
   },
-  "_comment_smtp": "Points at the mailpit container. Mail is captured in a web inbox at http://localhost:9025 and never leaves the host, so clicking an onboarding link in test cannot mail a real address.",
   "smtpServer": {
     "host": "mailpit",
     "port": "1025",
@@ -46,12 +44,9 @@
       "clientId": "wastewatch-api",
       "enabled": true,
       "protocol": "openid-connect",
-      "_comment": "Confidential: the secret stays server side (api/routes/auth.py does the token exchange), and a confidential client is what makes a service account possible at all.",
       "publicClient": false,
       "secret": "test-client-secret-not-for-production",
-      "_comment_dag": "Direct access grants are OFF by default on new clients in recent Keycloak. The branded login form uses grant_type=password, so it must be on or every login returns 401.",
       "directAccessGrantsEnabled": true,
-      "_comment_sa": "Service account = the client_credentials identity kc_admin.py uses to create users.",
       "serviceAccountsEnabled": true,
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false,
@@ -63,7 +58,6 @@
       "attributes": {
         "post.logout.redirect.uris": "+"
       },
-      "_comment_mapper": "Publishes ww_tenant into the access token. Without it every onboarding request falls back to an extra Admin API lookup of the caller's own record (routes/users.py::_tenant_of_actor).",
       "protocolMappers": [
         {
           "name": "ww_tenant",
@@ -86,7 +80,6 @@
   ],
   "users": [
     {
-      "_comment": "Service account user. clientRoles here is what grants kc_admin.py the right to create users; without it every admin call returns 403.",
       "username": "service-account-wastewatch-api",
       "enabled": true,
       "serviceAccountClientId": "wastewatch-api",
@@ -99,7 +92,6 @@
       }
     },
     {
-      "_comment": "Seed owner. Test-only credentials; prod seeds its owner through the Keycloak admin console.",
       "username": "owner",
       "enabled": true,
       "emailVerified": true,
@@ -118,7 +110,6 @@
       ]
     }
   ],
-  "_comment_tokens": "Short access token so the frontend's refresh path is actually exercised in test rather than only in a long prod session.",
   "accessTokenLifespan": 300,
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 28800,

@@ -1,5 +1,7 @@
-import { 
-  Camera, 
+import { useState, useEffect } from 'react';
+import { HealthPanel } from './HealthPanel';
+import {
+  Camera,
   Grid3X3, 
   Grid2X2,
   LayoutGrid,
@@ -31,6 +33,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 
 interface SidebarProps {
   className?: string;
+  onNavigate?: () => void;
 }
 
 const navigationItems = [
@@ -43,7 +46,7 @@ const navigationItems = [
   { id: 'settings', label: 'Settings', icon: Settings },
 ] as const;
 
-export function Sidebar({ className }: SidebarProps) {
+export function Sidebar({ className, onNavigate }: SidebarProps) {
   const { 
     currentView, 
     setCurrentView, 
@@ -132,15 +135,16 @@ export function Sidebar({ className }: SidebarProps) {
           return (
             <button
               key={item.id}
-              onClick={() => setCurrentView(item.id)}
+              onClick={() => { setCurrentView(item.id); onNavigate?.(); }}
               className={cn(
-                'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200',
-                isActive 
-                  ? 'bg-primary/10 text-primary border border-primary/30' 
+                'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-[13px] transition-all duration-200 relative',
+                isActive
+                  ? 'text-cv-cyan bg-cv-nav-active'
                   : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
               )}
             >
-              <Icon className={cn('w-4 h-4', isActive && 'text-primary')} />
+              {isActive && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-sm bg-cv-cyan" />}
+              <Icon className="w-[18px] h-[18px]" />
               <span className="font-medium">{item.label}</span>
             </button>
           );
@@ -288,10 +292,10 @@ export function Sidebar({ className }: SidebarProps) {
 function TimeDisplay() {
   const [time, setTime] = useState(new Date());
 
-  useState(() => {
+  useEffect(() => {
     const interval = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(interval);
-  });
+  }, []);
 
   return (
     <div className="text-center">
@@ -310,5 +314,3 @@ function TimeDisplay() {
   );
 }
 
-import { useState } from 'react';
-import { HealthPanel } from './HealthPanel';
