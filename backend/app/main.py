@@ -14,6 +14,7 @@ from app.api.routes import auth as auth_routes
 from app.api.routes import users as user_routes
 from app.api.routes import cameras, health, config_routes, events, roi, alerts, evidence, lpr, analytics, system, devices, reports, billing
 from app.api.routes import logs as log_routes
+from app.api.routes import operations
 from app.config.settings import settings
 from app.ws import metadata as ws_metadata
 from app.ws import events as ws_events
@@ -95,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(reports.router, prefix="/api")
     app.include_router(billing.router, prefix="/api")
     app.include_router(log_routes.router, prefix="/api")
+    app.include_router(operations.router, prefix="/api")
     app.include_router(ws_metadata.router, prefix="/ws")
     app.include_router(ws_events.router, prefix="/ws")
     app.include_router(ws_alerts.router, prefix="/ws")
