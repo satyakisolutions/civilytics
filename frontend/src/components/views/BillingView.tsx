@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Camera,
   HardDrive,
@@ -12,19 +12,35 @@ import {
   HelpCircle,
   X,
   ChevronRight,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import { CV_COLORS } from '@/lib/cv-colors';
+import { API_BASE } from '@/lib/api-base';
 import { useMonitoring } from '@/context/MonitoringContext';
 
 const INR = (n: number) => '₹' + n.toLocaleString('en-IN');
 
 type ModalKind = 'help' | 'editContact' | 'requestCam' | 'serviceChange' | null;
 
-const INVOICES = [
-  { id: 'INV-CIV-2026-1001', period: '01 Oct – 31 Oct 2026', issued: '01 Oct 2026', due: '15 Oct 2026', amount: 11750, status: 'due' as const },
-  { id: 'INV-CIV-2026-0901', period: '01 Sep – 30 Sep 2026', issued: '01 Sep 2026', due: '15 Sep 2026', amount: 11750, status: 'paid' as const },
-  { id: 'INV-CIV-2026-0801', period: '01 Aug – 31 Aug 2026', issued: '01 Aug 2026', due: '15 Aug 2026', amount: 11750, status: 'paid' as const },
-];
+interface SubData {
+  id: string; plan_name: string; description: string | null; status: string;
+  billing_cycle: string; start_date: string; next_renewal: string;
+  monthly_amount_rupees: number; subscription_ext_id: string;
+}
+interface InvData {
+  id: string; invoice_number: string; billing_period_start: string; billing_period_end: string;
+  issued_date: string; due_date: string; amount_rupees: number; tax_rupees: number;
+  total_rupees: number; payment_status: string;
+}
+interface ContactData {
+  id: string; org_name: string; contact_name: string; email: string; phone: string | null; address: string | null;
+}
+interface UsageData {
+  active_cameras: number; total_cameras: number; events_this_period: number; storage_gb: number;
+  cameras: { id: string; name: string; location: string; status: string }[];
+  billing_period_start: string; billing_period_end: string;
+}
 
 const SERVICES = [
   'Shared cloud infrastructure and platform services',
@@ -41,19 +57,63 @@ const SERVICE_QUANTITIES: Record<string, string> = {
   'Analytics dashboard and event history': '5 dashboard users',
 };
 
+const fmtDate = (s: string) => new Date(s + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+const fmtPeriod = (a: string, b: string) => `${fmtDate(a)} – ${fmtDate(b)}`;
+
 export function BillingView() {
   const { setCurrentView } = useMonitoring();
   const [modal, setModal] = useState<ModalKind>(null);
   const [toast, setToast] = useState('');
   const planRef = useRef<HTMLDivElement>(null);
 
+  const [sub, setSub] = useState<SubData | null>(null);
+  const [invoices, setInvoices] = useState<InvData[]>([]);
+  const [contact, setContact] = useState<ContactData | null>(null);
+  const [usage, setUsage] = useState<UsageData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const fetchAll = useCallback(async () => {
+    try {
+      const [s, i, c, u] = await Promise.all([
+        fetch(`${API_BASE}/api/billing/subscription`).then(r => r.ok ? r.json() : null),
+        fetch(`${API_BASE}/api/billing/invoices`).then(r => r.ok ? r.json() : []),
+        fetch(`${API_BASE}/api/billing/contact`).then(r => r.ok ? r.json() : null),
+        fetch(`${API_BASE}/api/billing/usage`).then(r => r.ok ? r.json() : null),
+      ]);
+      setSub(s); setInvoices(i); setContact(c); setUsage(u);
+      setError('');
+    } catch { setError('Billing data is unavailable'); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(''), 3000); return () => clearTimeout(t); } }, [toast]);
 
   const scrollToPlan = () => planRef.current?.scrollIntoView({ behavior: 'smooth' });
 
+  if (loading) return (
+    <div className="flex items-center justify-center h-full" style={{ background: CV_COLORS.bg }}>
+      <Loader2 className="w-8 h-8 animate-spin" style={{ color: CV_COLORS.muted }} />
+    </div>
+  );
+
+  if (error) return (
+    <div className="flex flex-col items-center justify-center h-full gap-3" style={{ background: CV_COLORS.bg }}>
+      <AlertTriangle className="w-10 h-10" style={{ color: CV_COLORS.orange }} />
+      <h2 className="text-sm font-semibold" style={{ color: CV_COLORS.fg }}>{error}</h2>
+      <p className="text-xs" style={{ color: CV_COLORS.fg2 }}>Refresh the page or contact support if the issue continues.</p>
+      <div className="flex gap-2 mt-2">
+        <button onClick={fetchAll} className="px-3 py-1.5 rounded-md text-xs font-medium" style={{ background: CV_COLORS.cyan, color: CV_COLORS.bg }}>Retry</button>
+        <button onClick={() => window.location.reload()} className="px-3 py-1.5 rounded-md text-xs" style={{ border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg2 }}>Refresh page</button>
+      </div>
+    </div>
+  );
+
+  const monthlyAmt = sub?.monthly_amount_rupees ?? 0;
+
   return (
     <div className="flex flex-col h-full overflow-y-auto" style={{ background: CV_COLORS.bg }}>
-      {/* Toast */}
       {toast && (
         <div className="fixed top-4 right-4 z-[9999] px-4 py-2.5 rounded-lg text-sm font-medium shadow-lg" style={{ background: CV_COLORS.green, color: CV_COLORS.bg }}>
           {toast}
@@ -76,41 +136,43 @@ export function BillingView() {
 
       <div className="px-4 sm:px-8 py-6 space-y-5 max-w-[1336px]">
         {/* Subscription Summary */}
-        <div className="rounded-[10px] p-5 sm:p-6" style={{ border: `1px solid ${CV_COLORS.border}`, background: CV_COLORS.panel }}>
-          <p className="text-[10px] uppercase tracking-wider font-semibold mb-3" style={{ color: CV_COLORS.muted }}>Current Subscription</p>
-          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
-            <div className="flex-1">
-              <h2 className="text-base font-semibold" style={{ color: CV_COLORS.fg }}>Civilytics Monitoring Plan</h2>
-              <p className="text-xs mt-1" style={{ color: CV_COLORS.fg2 }}>Continuous video processing, event detection, evidence, and dashboard access.</p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2 mt-4">
-                {[
-                  ['Status', <StatusChip key="s" status="active" />],
-                  ['Billing cycle', 'Monthly'],
-                  ['Start date', '01 Oct 2026'],
-                  ['Next renewal', '01 Nov 2026'],
-                  ['Billing account', 'LBTC Operations'],
-                  ['Subscription ID', 'CIV-BLR-2026-001'],
-                ].map(([label, value]) => (
-                  <div key={label as string}>
-                    <p className="text-[11px]" style={{ color: CV_COLORS.muted }}>{label}</p>
-                    <p className="text-[13px] font-medium mt-0.5" style={{ color: CV_COLORS.fg }}>{value}</p>
-                  </div>
-                ))}
+        {sub && (
+          <div className="rounded-[10px] p-5 sm:p-6" style={{ border: `1px solid ${CV_COLORS.border}`, background: CV_COLORS.panel }}>
+            <p className="text-[10px] uppercase tracking-wider font-semibold mb-3" style={{ color: CV_COLORS.muted }}>Current Subscription</p>
+            <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+              <div className="flex-1">
+                <h2 className="text-base font-semibold" style={{ color: CV_COLORS.fg }}>{sub.plan_name}</h2>
+                <p className="text-xs mt-1" style={{ color: CV_COLORS.fg2 }}>{sub.description}</p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2 mt-4">
+                  {([
+                    ['Status', <StatusChip key="s" status={sub.status} />],
+                    ['Billing cycle', sub.billing_cycle.charAt(0).toUpperCase() + sub.billing_cycle.slice(1)],
+                    ['Start date', fmtDate(sub.start_date)],
+                    ['Next renewal', fmtDate(sub.next_renewal)],
+                    ['Billing account', 'LBTC Operations'],
+                    ['Subscription ID', sub.subscription_ext_id],
+                  ] as [string, React.ReactNode][]).map(([label, value]) => (
+                    <div key={label}>
+                      <p className="text-[11px]" style={{ color: CV_COLORS.muted }}>{label}</p>
+                      <p className="text-[13px] font-medium mt-0.5" style={{ color: CV_COLORS.fg }}>{value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <p className="text-[28px] font-semibold tabular-nums" style={{ color: CV_COLORS.fg }}>{INR(monthlyAmt)} <span className="text-sm font-normal" style={{ color: CV_COLORS.fg2 }}>/ month</span></p>
+                <p className="text-[11px] mt-0.5" style={{ color: CV_COLORS.muted }}>+ GST and applicable taxes</p>
+                <button onClick={scrollToPlan} className="text-[11px] mt-2 font-medium" style={{ color: CV_COLORS.cyan }}>View plan details →</button>
               </div>
             </div>
-            <div className="text-right flex-shrink-0">
-              <p className="text-[28px] font-semibold tabular-nums" style={{ color: CV_COLORS.fg }}>{INR(11750)} <span className="text-sm font-normal" style={{ color: CV_COLORS.fg2 }}>/ month</span></p>
-              <p className="text-[11px] mt-0.5" style={{ color: CV_COLORS.muted }}>+ GST and applicable taxes</p>
-              <button onClick={scrollToPlan} className="text-[11px] mt-2 font-medium" style={{ color: CV_COLORS.cyan }}>View plan details →</button>
-            </div>
           </div>
-        </div>
+        )}
 
         {/* Plan & Service Breakdown */}
         <div ref={planRef} className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-5">
           <div className="rounded-[10px] p-5" style={{ border: `1px solid ${CV_COLORS.border}`, background: CV_COLORS.panel }}>
             <h3 className="text-sm font-semibold mb-1" style={{ color: CV_COLORS.fg }}>Your service plan</h3>
-            <p className="text-xs mb-4" style={{ color: CV_COLORS.fg2 }}>Civilytics Monitoring Plan — for one active camera at Bengaluru South.</p>
+            <p className="text-xs mb-4" style={{ color: CV_COLORS.fg2 }}>{sub?.plan_name} — for {usage?.total_cameras ?? 0} camera(s) at Bengaluru South.</p>
             <div className="space-y-0">
               {SERVICES.map(s => (
                 <div key={s} className="flex items-center justify-between h-[44px] border-b" style={{ borderColor: `${CV_COLORS.border}66` }}>
@@ -128,13 +190,13 @@ export function BillingView() {
           <div className="rounded-[10px] p-5" style={{ border: `1px solid ${CV_COLORS.border}`, background: CV_COLORS.panel }}>
             <h3 className="text-sm font-semibold mb-4" style={{ color: CV_COLORS.fg }}>Monthly estimate</h3>
             <div className="space-y-3">
-              <Row label="Shared cloud infrastructure and platform services" value={INR(9500)} />
-              <Row label="Camera-specific video processing and analytics" value={INR(2250)} />
+              <RowItem label="Shared cloud infrastructure and platform services" value={INR(9500)} />
+              <RowItem label="Camera-specific video processing and analytics" value={INR(monthlyAmt - 9500 > 0 ? monthlyAmt - 9500 : 2250)} />
             </div>
             <div className="mt-4 pt-3 border-t" style={{ borderColor: CV_COLORS.border }}>
               <div className="flex justify-between">
                 <span className="text-xs font-semibold" style={{ color: CV_COLORS.fg }}>Total</span>
-                <span className="text-xl font-semibold tabular-nums" style={{ color: CV_COLORS.fg }}>{INR(11750)}/month</span>
+                <span className="text-xl font-semibold tabular-nums" style={{ color: CV_COLORS.fg }}>{INR(monthlyAmt)}/month</span>
               </div>
               <p className="text-[11px] mt-1" style={{ color: CV_COLORS.muted }}>Taxes apply as per invoice.</p>
             </div>
@@ -145,45 +207,50 @@ export function BillingView() {
         </div>
 
         {/* Camera Service Usage */}
-        <div>
-          <h3 className="text-sm font-semibold mb-1" style={{ color: CV_COLORS.fg }}>Camera service usage</h3>
-          <p className="text-xs mb-4" style={{ color: CV_COLORS.fg2 }}>Service usage for the current monthly billing period.</p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-            <MetricCard icon={Camera} accent={CV_COLORS.cyan} label="Active cameras" value="1 of 1" sub="AD-01, Adugodi Main Road" />
-            <MetricCard icon={HardDrive} accent={CV_COLORS.green} label="Evidence storage" value="6.8 GB" sub="30-day retention included" />
-            <MetricCard icon={Activity} accent={CV_COLORS.orange} label="Events processed" value="186" sub="Current billing period" />
-          </div>
-
-          {/* Camera table — desktop */}
-          <div className="hidden sm:block rounded-[10px] overflow-hidden" style={{ border: `1px solid ${CV_COLORS.border}` }}>
-            <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
-              <thead><tr style={{ background: CV_COLORS.panel }}>
-                {['Camera ID', 'Location', 'Processing', 'Events', 'Storage', 'Monthly service', ''].map(h => (
-                  <th key={h} className="text-left px-4 py-3 font-medium text-[11px]" style={{ color: CV_COLORS.muted, borderBottom: `1px solid ${CV_COLORS.border}` }}>{h}</th>
-                ))}
-              </tr></thead>
-              <tbody><tr style={{ background: CV_COLORS.bg }}>
-                <td className="px-4 py-3 font-medium">AD-01</td>
-                <td className="px-4 py-3">Adugodi Main Road</td>
-                <td className="px-4 py-3"><StatusChip status="active" /></td>
-                <td className="px-4 py-3 tabular-nums">186</td>
-                <td className="px-4 py-3 tabular-nums">6.8 GB</td>
-                <td className="px-4 py-3 tabular-nums">{INR(2250)}/mo</td>
-                <td className="px-4 py-3"><button onClick={() => setCurrentView('cameras')} className="text-[11px] font-medium" style={{ color: CV_COLORS.cyan }}>View</button></td>
-              </tr></tbody>
-            </table>
-          </div>
-          {/* Mobile card */}
-          <div className="sm:hidden rounded-[10px] p-4 space-y-2" style={{ border: `1px solid ${CV_COLORS.border}`, background: CV_COLORS.panel }}>
-            <div className="flex justify-between"><span className="font-medium text-xs" style={{ color: CV_COLORS.fg }}>AD-01</span><StatusChip status="active" /></div>
-            <p className="text-[11px]" style={{ color: CV_COLORS.fg2 }}>Adugodi Main Road</p>
-            <div className="flex gap-4 text-[11px]" style={{ color: CV_COLORS.fg2 }}>
-              <span>186 events</span><span>6.8 GB</span><span>{INR(2250)}/mo</span>
+        {usage && (
+          <div>
+            <h3 className="text-sm font-semibold mb-1" style={{ color: CV_COLORS.fg }}>Camera service usage</h3>
+            <p className="text-xs mb-4" style={{ color: CV_COLORS.fg2 }}>Service usage for the current monthly billing period.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+              <MetricCard icon={Camera} accent={CV_COLORS.cyan} label="Active cameras" value={`${usage.active_cameras} of ${usage.total_cameras}`} sub={usage.cameras.map(c => `${c.name}, ${c.location}`).join('; ') || 'No cameras'} />
+              <MetricCard icon={HardDrive} accent={CV_COLORS.green} label="Evidence storage" value={`${usage.storage_gb} GB`} sub="30-day retention included" />
+              <MetricCard icon={Activity} accent={CV_COLORS.orange} label="Events processed" value={String(usage.events_this_period)} sub="Current billing period" />
             </div>
-            <button onClick={() => setCurrentView('cameras')} className="text-[11px] font-medium" style={{ color: CV_COLORS.cyan }}>View camera →</button>
+
+            {/* Camera table — desktop */}
+            {usage.cameras.length > 0 && (
+              <>
+                <div className="hidden sm:block rounded-[10px] overflow-hidden" style={{ border: `1px solid ${CV_COLORS.border}` }}>
+                  <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
+                    <thead><tr style={{ background: CV_COLORS.panel }}>
+                      {['Camera', 'Location', 'Status', ''].map(h => (
+                        <th key={h} className="text-left px-4 py-3 font-medium text-[11px]" style={{ color: CV_COLORS.muted, borderBottom: `1px solid ${CV_COLORS.border}` }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>{usage.cameras.map(cam => (
+                      <tr key={cam.id} style={{ background: CV_COLORS.bg }}>
+                        <td className="px-4 py-3 font-medium">{cam.name}</td>
+                        <td className="px-4 py-3">{cam.location || '—'}</td>
+                        <td className="px-4 py-3"><StatusChip status={cam.status} /></td>
+                        <td className="px-4 py-3"><button onClick={() => setCurrentView('cameras')} className="text-[11px] font-medium" style={{ color: CV_COLORS.cyan }}>View</button></td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+                {/* Mobile cards */}
+                <div className="sm:hidden space-y-2">
+                  {usage.cameras.map(cam => (
+                    <div key={cam.id} className="rounded-[10px] p-3 space-y-1" style={{ border: `1px solid ${CV_COLORS.border}`, background: CV_COLORS.panel }}>
+                      <div className="flex justify-between"><span className="font-medium text-xs" style={{ color: CV_COLORS.fg }}>{cam.name}</span><StatusChip status={cam.status} /></div>
+                      <p className="text-[11px]" style={{ color: CV_COLORS.fg2 }}>{cam.location || '—'}</p>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            <p className="text-[11px] mt-2" style={{ color: CV_COLORS.muted }}>New camera services apply from the activation date.</p>
           </div>
-          <p className="text-[11px] mt-2" style={{ color: CV_COLORS.muted }}>New camera services apply from the activation date.</p>
-        </div>
+        )}
 
         {/* Billing History */}
         <div className="rounded-[10px] p-5" style={{ border: `1px solid ${CV_COLORS.border}`, background: CV_COLORS.panel }}>
@@ -194,44 +261,52 @@ export function BillingView() {
             </button>
           </div>
 
-          {/* Desktop table */}
-          <div className="hidden sm:block overflow-x-auto">
-            <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
-              <thead><tr>
-                {['Invoice', 'Billing period', 'Issued', 'Due', 'Amount', 'Status', ''].map(h => (
-                  <th key={h} className="text-left px-3 py-2.5 font-medium text-[11px] border-b" style={{ color: CV_COLORS.muted, borderColor: CV_COLORS.border }}>{h}</th>
-                ))}
-              </tr></thead>
-              <tbody>{INVOICES.map(inv => (
-                <tr key={inv.id} className="h-[56px]" style={{ borderBottom: `1px solid ${CV_COLORS.border}44` }}>
-                  <td className="px-3 py-2 font-mono text-[11px]">{inv.id}</td>
-                  <td className="px-3 py-2">{inv.period}</td>
-                  <td className="px-3 py-2">{inv.issued}</td>
-                  <td className="px-3 py-2">{inv.due}</td>
-                  <td className="px-3 py-2 tabular-nums font-medium">{INR(inv.amount)}</td>
-                  <td className="px-3 py-2"><StatusChip status={inv.status} /></td>
-                  <td className="px-3 py-2">
-                    <button className="flex items-center gap-1 text-[11px] font-medium" style={{ color: CV_COLORS.cyan }}>
-                      <FileText className="w-3 h-3" /> Download PDF
-                    </button>
-                  </td>
-                </tr>
-              ))}</tbody>
-            </table>
-          </div>
-          {/* Mobile cards */}
-          <div className="sm:hidden space-y-3">
-            {INVOICES.map(inv => (
-              <div key={inv.id} className="rounded-lg p-3 space-y-1" style={{ border: `1px solid ${CV_COLORS.border}44`, background: CV_COLORS.bg }}>
-                <div className="flex justify-between"><span className="font-mono text-[11px]" style={{ color: CV_COLORS.fg }}>{inv.id}</span><StatusChip status={inv.status} /></div>
-                <p className="text-[11px]" style={{ color: CV_COLORS.fg2 }}>{inv.period}</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium tabular-nums" style={{ color: CV_COLORS.fg }}>{INR(inv.amount)}</span>
-                  <button className="flex items-center gap-1 text-[11px] font-medium" style={{ color: CV_COLORS.cyan }}><FileText className="w-3 h-3" /> PDF</button>
-                </div>
+          {invoices.length === 0 ? (
+            <p className="text-xs py-8 text-center" style={{ color: CV_COLORS.muted }}>No invoices are available yet.</p>
+          ) : (
+            <>
+              {/* Desktop table */}
+              <div className="hidden sm:block overflow-x-auto">
+                <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
+                  <thead><tr>
+                    {['Invoice', 'Billing period', 'Issued', 'Due', 'Amount', 'Tax', 'Total', 'Status', ''].map(h => (
+                      <th key={h} className="text-left px-3 py-2.5 font-medium text-[11px] border-b" style={{ color: CV_COLORS.muted, borderColor: CV_COLORS.border }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{invoices.map(inv => (
+                    <tr key={inv.id} className="h-[56px]" style={{ borderBottom: `1px solid ${CV_COLORS.border}44` }}>
+                      <td className="px-3 py-2 font-mono text-[11px]">{inv.invoice_number}</td>
+                      <td className="px-3 py-2">{fmtPeriod(inv.billing_period_start, inv.billing_period_end)}</td>
+                      <td className="px-3 py-2">{fmtDate(inv.issued_date)}</td>
+                      <td className="px-3 py-2">{fmtDate(inv.due_date)}</td>
+                      <td className="px-3 py-2 tabular-nums">{INR(inv.amount_rupees)}</td>
+                      <td className="px-3 py-2 tabular-nums">{INR(inv.tax_rupees)}</td>
+                      <td className="px-3 py-2 tabular-nums font-medium">{INR(inv.total_rupees)}</td>
+                      <td className="px-3 py-2"><StatusChip status={inv.payment_status} /></td>
+                      <td className="px-3 py-2">
+                        <button className="flex items-center gap-1 text-[11px] font-medium" style={{ color: CV_COLORS.cyan }}>
+                          <FileText className="w-3 h-3" /> PDF
+                        </button>
+                      </td>
+                    </tr>
+                  ))}</tbody>
+                </table>
               </div>
-            ))}
-          </div>
+              {/* Mobile cards */}
+              <div className="sm:hidden space-y-3">
+                {invoices.map(inv => (
+                  <div key={inv.id} className="rounded-lg p-3 space-y-1" style={{ border: `1px solid ${CV_COLORS.border}44`, background: CV_COLORS.bg }}>
+                    <div className="flex justify-between"><span className="font-mono text-[11px]" style={{ color: CV_COLORS.fg }}>{inv.invoice_number}</span><StatusChip status={inv.payment_status} /></div>
+                    <p className="text-[11px]" style={{ color: CV_COLORS.fg2 }}>{fmtPeriod(inv.billing_period_start, inv.billing_period_end)}</p>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium tabular-nums" style={{ color: CV_COLORS.fg }}>{INR(inv.total_rupees)}</span>
+                      <button className="flex items-center gap-1 text-[11px] font-medium" style={{ color: CV_COLORS.cyan }}><FileText className="w-3 h-3" /> PDF</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
           <p className="text-[11px] mt-3" style={{ color: CV_COLORS.muted }}>Invoices show applicable taxes and payment instructions.</p>
         </div>
 
@@ -244,31 +319,33 @@ export function BillingView() {
                 <Pencil className="w-3 h-3" /> Edit
               </button>
             </div>
-            <dl className="space-y-2 text-xs">
-              {[
-                ['Organisation', "Let's Be The Change"],
-                ['Billing contact', 'Sandesh C'],
-                ['Email', 'accounts@letsbethechange.in'],
-                ['Phone', '+91 93521 8818'],
-                ['Billing address', 'Bengaluru, Karnataka, India'],
-              ].map(([k, v]) => (
-                <div key={k} className="flex gap-3">
-                  <dt className="w-28 flex-shrink-0" style={{ color: CV_COLORS.muted }}>{k}</dt>
-                  <dd style={{ color: CV_COLORS.fg }}>{v}</dd>
-                </div>
-              ))}
-            </dl>
+            {contact ? (
+              <dl className="space-y-2 text-xs">
+                {([
+                  ['Organisation', contact.org_name],
+                  ['Billing contact', contact.contact_name],
+                  ['Email', contact.email],
+                  ['Phone', contact.phone || '—'],
+                  ['Billing address', contact.address || '—'],
+                ] as [string, string][]).map(([k, v]) => (
+                  <div key={k} className="flex gap-3">
+                    <dt className="w-28 flex-shrink-0" style={{ color: CV_COLORS.muted }}>{k}</dt>
+                    <dd style={{ color: CV_COLORS.fg }}>{v}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : <p className="text-xs" style={{ color: CV_COLORS.muted }}>No billing contact configured.</p>}
           </div>
 
           <div className="rounded-[10px] p-5" style={{ border: `1px solid ${CV_COLORS.border}`, background: CV_COLORS.panel }}>
             <h3 className="text-sm font-semibold mb-4" style={{ color: CV_COLORS.fg }}>Payment information</h3>
             <dl className="space-y-2 text-xs">
-              {[
+              {([
                 ['Payment method', 'Invoice payment'],
                 ['Payment terms', 'Net 15 days'],
                 ['Currency', 'INR'],
                 ['Tax handling', 'As shown on invoice'],
-              ].map(([k, v]) => (
+              ] as [string, string][]).map(([k, v]) => (
                 <div key={k} className="flex gap-3">
                   <dt className="w-28 flex-shrink-0" style={{ color: CV_COLORS.muted }}>{k}</dt>
                   <dd style={{ color: CV_COLORS.fg }}>{v}</dd>
@@ -301,14 +378,14 @@ export function BillingView() {
         </dl>
       </Modal>}
 
-      {modal === 'editContact' && <EditContactModal onClose={() => setModal(null)} onSave={() => { setModal(null); setToast('Billing contact updated'); }} />}
+      {modal === 'editContact' && contact && <EditContactModal contact={contact} onClose={() => setModal(null)} onSave={() => { setModal(null); setToast('Billing contact updated'); fetchAll(); }} />}
       {modal === 'requestCam' && <RequestCameraModal onClose={() => setModal(null)} onSubmit={() => { setModal(null); setToast('Camera request submitted'); }} />}
       {modal === 'serviceChange' && <ServiceChangeModal onClose={() => setModal(null)} onSubmit={() => { setModal(null); setToast('Service change request submitted'); }} />}
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function RowItem({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between text-xs">
       <span style={{ color: CV_COLORS.fg2 }}>{label}</span>
@@ -327,7 +404,7 @@ function MetricCard({ icon: Icon, accent, label, value, sub }: { icon: React.Ele
         </div>
         <Icon className="w-5 h-5" style={{ color: accent }} />
       </div>
-      <p className="text-[11px]" style={{ color: CV_COLORS.fg2 }}>{sub}</p>
+      <p className="text-[11px] truncate" style={{ color: CV_COLORS.fg2 }}>{sub}</p>
     </div>
   );
 }
@@ -340,18 +417,15 @@ function ActionCard({ title, desc, btn, onClick, danger }: { title: string; desc
         <p className="text-[11px]" style={{ color: CV_COLORS.fg2 }}>{desc}</p>
       </div>
       <button onClick={onClick} className="mt-3 px-3 py-1.5 rounded-md text-xs font-medium w-fit"
-        style={danger
-          ? { border: `1px solid #ef444466`, color: '#ef4444' }
-          : { background: CV_COLORS.cyan, color: CV_COLORS.bg }
-        }>{btn}</button>
+        style={danger ? { border: `1px solid #ef444466`, color: '#ef4444' } : { background: CV_COLORS.cyan, color: CV_COLORS.bg }}>{btn}</button>
     </div>
   );
 }
 
 function StatusChip({ status }: { status: string }) {
   const s = status.toLowerCase();
-  const bg = s === 'active' || s === 'paid' ? `${CV_COLORS.green}22` : s === 'due' ? `${CV_COLORS.orange}22` : '#ef444422';
-  const fg = s === 'active' || s === 'paid' ? CV_COLORS.green : s === 'due' ? CV_COLORS.orange : '#ef4444';
+  const bg = s === 'active' || s === 'paid' || s === 'online' ? `${CV_COLORS.green}22` : s === 'due' || s === 'warning' ? `${CV_COLORS.orange}22` : s === 'offline' ? `${CV_COLORS.muted}22` : '#ef444422';
+  const fg = s === 'active' || s === 'paid' || s === 'online' ? CV_COLORS.green : s === 'due' || s === 'warning' ? CV_COLORS.orange : s === 'offline' ? CV_COLORS.muted : '#ef4444';
   return <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase" style={{ background: bg, color: fg }}>{status}</span>;
 }
 
@@ -377,28 +451,39 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function ModalInput({ label, value, onChange, type = 'text', required }: { label: string; value: string; onChange: (v: string) => void; type?: string; required?: boolean }) {
+function ModalInput({ label, value, onChange, type = 'text', required, disabled }: { label: string; value: string; onChange: (v: string) => void; type?: string; required?: boolean; disabled?: boolean }) {
   return (
     <div className="space-y-1">
       <label className="text-[11px] font-medium" style={{ color: CV_COLORS.fg2 }}>{label}{required && ' *'}</label>
-      <input type={type} value={value} onChange={e => onChange(e.target.value)}
-        className="w-full px-3 py-2 rounded-md text-xs outline-none focus:ring-1"
+      <input type={type} value={value} onChange={e => onChange(e.target.value)} disabled={disabled}
+        className="w-full px-3 py-2 rounded-md text-xs outline-none focus:ring-1 disabled:opacity-50"
         style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg, '--tw-ring-color': CV_COLORS.cyan } as any} />
     </div>
   );
 }
 
-function EditContactModal({ onClose, onSave }: { onClose: () => void; onSave: () => void }) {
-  const [name, setName] = useState('Sandesh C');
-  const [email, setEmail] = useState('accounts@letsbethechange.in');
-  const [phone, setPhone] = useState('+91 93521 8818');
-  const [address, setAddress] = useState('Bengaluru, Karnataka, India');
+function EditContactModal({ contact, onClose, onSave }: { contact: ContactData; onClose: () => void; onSave: () => void }) {
+  const [name, setName] = useState(contact.contact_name);
+  const [email, setEmail] = useState(contact.email);
+  const [phone, setPhone] = useState(contact.phone || '');
+  const [address, setAddress] = useState(contact.address || '');
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  const save = () => {
+  const save = async () => {
     if (!email.includes('@')) { setError('Valid email required'); return; }
     if (phone.replace(/\D/g, '').length < 10) { setError('Valid phone required'); return; }
-    onSave();
+    setSaving(true);
+    try {
+      const resp = await fetch(`${API_BASE}/api/billing/contact`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_name: name, email, phone, address }),
+      });
+      if (!resp.ok) throw new Error('Failed to save');
+      onSave();
+    } catch { setError('Failed to save. Please try again.'); }
+    setSaving(false);
   };
 
   return (
@@ -411,7 +496,7 @@ function EditContactModal({ onClose, onSave }: { onClose: () => void; onSave: ()
         {error && <p className="text-[11px]" style={{ color: '#ef4444' }}>{error}</p>}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="px-3 py-1.5 rounded-md text-xs" style={{ border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg2 }}>Cancel</button>
-          <button onClick={save} className="px-4 py-1.5 rounded-md text-xs font-medium" style={{ background: CV_COLORS.cyan, color: CV_COLORS.bg }}>Save</button>
+          <button onClick={save} disabled={saving} className="px-4 py-1.5 rounded-md text-xs font-medium disabled:opacity-50" style={{ background: CV_COLORS.cyan, color: CV_COLORS.bg }}>{saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </Modal>
@@ -423,16 +508,27 @@ function RequestCameraModal({ onClose, onSubmit }: { onClose: () => void; onSubm
   const [date, setDate] = useState('');
   const [notes, setNotes] = useState('');
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const submit = () => {
+  const submit = async () => {
     if (!location.trim() || !notes.trim()) { setError('Location and notes are required'); return; }
-    onSubmit();
+    setSubmitting(true);
+    try {
+      const resp = await fetch(`${API_BASE}/api/billing/requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_type: 'add_camera', workspace: 'Bengaluru South', location, expected_date: date || undefined, notes }),
+      });
+      if (!resp.ok) throw new Error();
+      onSubmit();
+    } catch { setError('Failed to submit. Please try again.'); }
+    setSubmitting(false);
   };
 
   return (
     <Modal title="Request a camera" onClose={onClose}>
       <div className="space-y-3">
-        <ModalInput label="Workspace" value="Bengaluru South" onChange={() => {}} />
+        <ModalInput label="Workspace" value="Bengaluru South" onChange={() => {}} disabled />
         <ModalInput label="Proposed location" value={location} onChange={v => { setLocation(v); setError(''); }} required />
         <ModalInput label="Expected activation date" value={date} onChange={setDate} type="date" />
         <div className="space-y-1">
@@ -444,7 +540,7 @@ function RequestCameraModal({ onClose, onSubmit }: { onClose: () => void; onSubm
         {error && <p className="text-[11px]" style={{ color: '#ef4444' }}>{error}</p>}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="px-3 py-1.5 rounded-md text-xs" style={{ border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg2 }}>Cancel</button>
-          <button onClick={submit} className="px-4 py-1.5 rounded-md text-xs font-medium" style={{ background: CV_COLORS.cyan, color: CV_COLORS.bg }}>Submit request</button>
+          <button onClick={submit} disabled={submitting} className="px-4 py-1.5 rounded-md text-xs font-medium disabled:opacity-50" style={{ background: CV_COLORS.cyan, color: CV_COLORS.bg }}>{submitting ? 'Submitting…' : 'Submit request'}</button>
         </div>
       </div>
     </Modal>
@@ -456,6 +552,21 @@ function ServiceChangeModal({ onClose, onSubmit }: { onClose: () => void; onSubm
   const [retention, setRetention] = useState('');
   const [support, setSupport] = useState('');
   const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      const resp = await fetch(`${API_BASE}/api/billing/requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_type: 'change_plan', workspace: 'Bengaluru South', notes: `Cameras: ${cameraCount}, Retention: ${retention}, Support: ${support}. ${notes}`.trim() }),
+      });
+      if (!resp.ok) throw new Error();
+      onSubmit();
+    } catch { /* toast handles */ }
+    setSubmitting(false);
+  };
 
   return (
     <Modal title="Request service change" onClose={onClose}>
@@ -471,7 +582,7 @@ function ServiceChangeModal({ onClose, onSubmit }: { onClose: () => void; onSubm
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="px-3 py-1.5 rounded-md text-xs" style={{ border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg2 }}>Cancel</button>
-          <button onClick={onSubmit} className="px-4 py-1.5 rounded-md text-xs font-medium" style={{ background: CV_COLORS.cyan, color: CV_COLORS.bg }}>Submit request</button>
+          <button onClick={submit} disabled={submitting} className="px-4 py-1.5 rounded-md text-xs font-medium disabled:opacity-50" style={{ background: CV_COLORS.cyan, color: CV_COLORS.bg }}>{submitting ? 'Submitting…' : 'Submit request'}</button>
         </div>
       </div>
     </Modal>
