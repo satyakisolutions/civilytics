@@ -1,285 +1,468 @@
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Camera as CameraIcon,
   Plus,
   Search,
+  AlertTriangle,
+  Map,
+  ChevronDown,
   MoreVertical,
-  MapPin,
-  Wifi,
-  WifiOff,
-  Settings,
-  Trash2,
-  Edit,
   Eye,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
-import { Camera, CameraStatus } from '@/types/monitoring';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { useState } from 'react';
-import { useCameras } from '@/hooks/useCameras';
+import { CV_COLORS } from '@/lib/cv-colors';
 import { useMonitoring } from '@/context/MonitoringContext';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+import { useCameras } from '@/hooks/useCameras';
+import { Camera, CameraStatus } from '@/types/monitoring';
+import { API_BASE } from '@/lib/api-base';
 import { AddCameraDialog } from '@/components/camera/AddCameraDialog';
-import { EditCameraDialog } from '@/components/camera/EditCameraDialog';
-import { CameraSettingsDialog } from '@/components/camera/CameraSettingsDialog';
+
+type HealthLabel = 'Online' | 'Warning' | 'Offline';
+
+function statusToHealth(s: CameraStatus): HealthLabel {
+  if (s === 'online') return 'Online';
+  if (s === 'warning' || s === 'alert') return 'Warning';
+  return 'Offline';
+}
+
+function formatLastEvent(d?: Date): string {
+  if (!d) return '—';
+  return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+interface CameraEventCounts {
+  [cameraId: string]: number;
+}
 
 export function CameraManagementView() {
-  const [searchQuery, setSearchQuery] = useState('');
+  const [search, setSearch] = useState('');
+  const [zone, setZone] = useState('All zones');
+  const [health, setHealth] = useState('All health states');
   const [addOpen, setAddOpen] = useState(false);
-  const [editCamera, setEditCamera] = useState<Camera | null>(null);
-  const [settingsCamera, setSettingsCamera] = useState<Camera | null>(null);
+  const [editCam, setEditCam] = useState<Camera | null>(null);
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const [eventCounts, setEventCounts] = useState<CameraEventCounts>({});
   const { cameras, isLoading, addCamera, updateCamera, deleteCamera } = useCameras();
-  const { setSelectedCamera, setGridLayout, setCurrentView } = useMonitoring();
+  const { setCurrentView, setSelectedCamera, setGridLayout } = useMonitoring();
 
-  const handleViewFeed = (camera: Camera) => {
-    setSelectedCamera(camera.id);
+  useEffect(() => {
+    fetch(`${API_BASE}/api/analytics/by-camera`)
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { camera_id: string; event_count: number }[]) => {
+        const map: CameraEventCounts = {};
+        for (const d of data) map[d.camera_id] = d.event_count;
+        setEventCounts(map);
+      })
+      .catch(() => {});
+  }, []);
+
+  const zones = useMemo(() => {
+    const set = new Set(cameras.map(c => c.zone));
+    return ['All zones', ...Array.from(set).sort()];
+  }, [cameras]);
+
+  const filtered = useMemo(() => {
+    let list = cameras;
+    if (zone !== 'All zones') list = list.filter(c => c.zone === zone);
+    if (health !== 'All health states') list = list.filter(c => statusToHealth(c.status) === health);
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(c =>
+        c.id.toLowerCase().includes(q) ||
+        c.name.toLowerCase().includes(q) ||
+        c.zone.toLowerCase().includes(q) ||
+        c.location.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [cameras, search, zone, health]);
+
+  const online = cameras.filter(c => c.status === 'online').length;
+  const warning = cameras.filter(c => c.status === 'warning' || c.status === 'alert').length;
+  const offline = cameras.filter(c => c.status === 'offline').length;
+  const zoneCount = new Set(cameras.map(c => c.zone)).size;
+
+  const offlineNames = cameras.filter(c => c.status === 'offline').map(c => c.name.split(' ')[0]).slice(0, 3).join(', ');
+  const warningNames = cameras.filter(c => c.status === 'warning' || c.status === 'alert').map(c => c.name).slice(0, 2).join(', ');
+
+  const handleViewCamera = (cam: Camera) => {
+    setSelectedCamera(cam.id);
     setGridLayout('1x1');
     setCurrentView('monitoring');
   };
 
-  const filteredCameras = cameras.filter(camera =>
-    camera.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    camera.zone.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const statusCounts = {
-    online: cameras.filter(c => c.status === 'online').length,
-    offline: cameras.filter(c => c.status === 'offline').length,
-    warning: cameras.filter(c => c.status === 'warning').length,
-    alert: cameras.filter(c => c.status === 'alert').length,
+  const handleDelete = async (cam: Camera) => {
+    if (!confirm(`Delete camera "${cam.name}"? This cannot be undone.`)) return;
+    await deleteCamera(cam.id);
+    setMenuOpen(null);
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full overflow-hidden bg-cv-bg">
       <AddCameraDialog open={addOpen} onOpenChange={setAddOpen} onAdd={addCamera} />
-      <EditCameraDialog
-        camera={editCamera}
-        onOpenChange={(open) => !open && setEditCamera(null)}
-        onSave={updateCamera}
-      />
-      <CameraSettingsDialog
-        camera={settingsCamera}
-        onOpenChange={(open) => !open && setSettingsCamera(null)}
-      />
+      {editCam && (
+        <EditCameraDialog
+          camera={editCam}
+          onClose={() => setEditCam(null)}
+          onSave={async (id, data) => { await updateCamera(id, data); setEditCam(null); }}
+        />
+      )}
+
       {/* Header */}
-      <div className="p-4 border-b border-border">
-        <div className="flex items-center justify-between mb-4">
+      <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-3">
+        <div className="text-[11px] text-cv-muted mb-1">Camera Management</div>
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-lg font-semibold">Camera Management</h1>
-            <p className="text-sm text-muted-foreground">Manage and configure your monitoring cameras</p>
+            <h1 className="text-lg font-semibold text-cv-fg">Camera Management</h1>
+            <p className="text-[13px] text-cv-fg2 mt-0.5">Monitor camera availability, stream quality and event coverage</p>
           </div>
-          <Button size="sm" className="gap-2" onClick={() => setAddOpen(true)}>
+          <button
+            onClick={() => setAddOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium bg-cv-cyan text-[#07111F] hover:brightness-110 transition-all flex-shrink-0"
+          >
             <Plus className="w-4 h-4" />
-            Add Camera
-          </Button>
-        </div>
-
-        {/* Status Overview */}
-        <div className="grid grid-cols-4 gap-3 mb-4">
-          <StatusCard label="Online" count={statusCounts.online} status="online" />
-          <StatusCard label="Offline" count={statusCounts.offline} status="offline" />
-          <StatusCard label="Warning" count={statusCounts.warning} status="warning" />
-          <StatusCard label="Alert" count={statusCounts.alert} status="alert" />
-        </div>
-
-        {/* Search */}
-        <div className="relative max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            placeholder="Search cameras..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 h-9"
-          />
+            Add camera
+          </button>
         </div>
       </div>
 
-      {/* Camera Grid */}
-      <ScrollArea className="flex-1">
-        {isLoading ? (
-          <div className="flex items-center justify-center h-40 text-sm text-muted-foreground">
-            Loading cameras…
+      {/* KPI Row */}
+      <div className="px-4 sm:px-6 pb-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <KpiCard icon={CameraIcon} accent={CV_COLORS.green}  label="Cameras online" value={`${online} / ${cameras.length}`} note={warning > 0 ? `Includes ${warning} degraded stream${warning > 1 ? 's' : ''}` : 'All streams healthy'} />
+          <KpiCard icon={AlertTriangle} accent={CV_COLORS.orange} label="Cameras offline" value={String(offline)} note={offlineNames || 'None'} />
+          <KpiCard icon={AlertTriangle} accent={CV_COLORS.orange} label="Stream warnings" value={String(warning)} note={warningNames || 'None'} />
+          <KpiCard icon={Map} accent={CV_COLORS.cyan} label="Zones covered" value={String(zoneCount)} note={`${cameras.length} cameras total`} />
+        </div>
+      </div>
+
+      {/* Filter Toolbar */}
+      <div className="px-4 sm:px-6 pb-3">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 h-auto sm:h-[42px]">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cv-muted" />
+            <input
+              type="text"
+              placeholder="Search cameras or locations"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full h-[42px] pl-9 pr-3 rounded-md text-sm bg-cv-panel border border-cv-border text-cv-fg placeholder:text-cv-muted focus:outline-none focus:border-cv-cyan"
+            />
           </div>
-        ) : filteredCameras.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-64 gap-3 text-muted-foreground">
-            <CameraIcon className="w-12 h-12 opacity-30" />
-            <div className="text-center">
-              <p className="text-lg">
-                {cameras.length === 0 ? 'No cameras configured' : 'No cameras match your search'}
-              </p>
-              {cameras.length === 0 && (
-                <p className="text-sm mt-1">Click "Add Camera" to register your first camera</p>
+          <FilterSelect value={zone} options={zones} onChange={setZone} />
+          <FilterSelect value={health} options={['All health states', 'Online', 'Warning', 'Offline']} onChange={setHealth} />
+          <span className="text-xs text-cv-muted whitespace-nowrap self-center">{filtered.length} cameras</span>
+        </div>
+      </div>
+
+      {/* Camera Table / Card List */}
+      <div className="flex-1 overflow-auto px-4 sm:px-6 pb-6">
+        <div className="rounded-lg border border-cv-border bg-cv-panel">
+          {isLoading ? (
+            <div className="flex items-center justify-center h-40 text-sm text-cv-muted">Loading cameras…</div>
+          ) : cameras.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-40 gap-2 text-cv-muted">
+              <CameraIcon className="w-10 h-10 opacity-30" />
+              <p className="text-sm">No cameras configured</p>
+              <button onClick={() => setAddOpen(true)} className="text-cv-cyan text-sm hover:underline">Add your first camera</button>
+            </div>
+          ) : (
+            <>
+              {/* Desktop Table */}
+              <div className="hidden sm:block overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-cv-border text-[11px] uppercase text-cv-muted">
+                      <th className="text-left py-3 px-4 font-medium sticky left-0 bg-cv-panel z-10">Camera</th>
+                      <th className="text-left py-3 px-4 font-medium">Zone</th>
+                      <th className="text-left py-3 px-4 font-medium">Health</th>
+                      <th className="text-right py-3 px-4 font-medium">Events</th>
+                      <th className="text-right py-3 px-4 font-medium">Last event</th>
+                      <th className="text-center py-3 px-4 font-medium">Stream</th>
+                      <th className="text-right py-3 px-4 font-medium">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map(cam => (
+                      <tr key={cam.id} className="border-b border-cv-border last:border-b-0 hover:bg-white/[0.02] transition-colors" style={{ minHeight: 52 }}>
+                        <td className="py-3 px-4 sticky left-0 bg-cv-panel z-10">
+                          <div className="flex items-center gap-2.5">
+                            <CameraIcon className="w-4 h-4 text-cv-fg2 flex-shrink-0" />
+                            <div>
+                              <div className="font-medium text-cv-fg">{cam.name}</div>
+                              <div className="text-[11px] text-cv-muted">{cam.location}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-cv-fg2">{cam.zone}</td>
+                        <td className="py-3 px-4">
+                          <HealthChip health={statusToHealth(cam.status)} />
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums text-cv-fg">{eventCounts[cam.id] ?? 0}</td>
+                        <td className="py-3 px-4 text-right tabular-nums text-cv-fg2">{formatLastEvent(cam.lastEvent)}</td>
+                        <td className="py-3 px-4 text-center">
+                          <StreamDot health={statusToHealth(cam.status)} />
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <ActionMenu cam={cam} open={menuOpen === cam.id} onToggle={() => setMenuOpen(menuOpen === cam.id ? null : cam.id)} onView={() => { handleViewCamera(cam); setMenuOpen(null); }} onEdit={() => { setEditCam(cam); setMenuOpen(null); }} onDelete={() => handleDelete(cam)} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile Card List */}
+              <div className="sm:hidden divide-y divide-cv-border">
+                {filtered.map(cam => (
+                  <div key={cam.id} className="p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CameraIcon className="w-4 h-4 text-cv-fg2" />
+                        <span className="font-medium text-cv-fg">{cam.name}</span>
+                        <HealthChip health={statusToHealth(cam.status)} />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => handleViewCamera(cam)} className="text-cv-cyan text-xs hover:underline">View</button>
+                        <button onClick={() => setEditCam(cam)} className="text-cv-fg2 text-xs hover:underline">Edit</button>
+                        <button onClick={() => handleDelete(cam)} className="text-[#FF6B6B] text-xs hover:underline">Delete</button>
+                      </div>
+                    </div>
+                    <div className="text-[12px] text-cv-muted">{cam.location}</div>
+                    <div className="flex gap-4 text-[11px] text-cv-fg2">
+                      <span>Events: <span className="text-cv-fg tabular-nums">{eventCounts[cam.id] ?? 0}</span></span>
+                      <span>Last: <span className="text-cv-fg tabular-nums">{formatLastEvent(cam.lastEvent)}</span></span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Footer */}
+              <div className="px-4 py-3 border-t border-cv-border flex items-center justify-between text-[11px] text-cv-muted">
+                <span>Showing {filtered.length} of {cameras.length} cameras</span>
+                <span>Counts retained for offline cameras</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KpiCard({ icon: Icon, accent, label, value, note }: { icon: React.ElementType; accent: string; label: string; value: string; note: string }) {
+  return (
+    <div className="rounded-lg p-[18px_20px] h-[125px] flex flex-col justify-between relative bg-cv-panel border border-cv-border">
+      <div>
+        <p className="text-xs mb-1 text-cv-fg2">{label}</p>
+        <p className="text-[28px] font-bold tabular-nums text-cv-fg">{value}</p>
+      </div>
+      <p className="text-[11px] text-cv-muted">{note}</p>
+      <Icon className="absolute top-[18px] right-5 w-5 h-5" style={{ color: accent }} />
+    </div>
+  );
+}
+
+function HealthChip({ health }: { health: HealthLabel }) {
+  const styles: Record<HealthLabel, string> = {
+    Online:  'bg-[#19E58C]/15 text-[#19E58C]',
+    Warning: 'bg-[#FF9A2E]/15 text-[#FF9A2E]',
+    Offline: 'bg-[#64768E]/15 text-[#64768E]',
+  };
+  return (
+    <span className={cn('inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium', styles[health])}>
+      {health}
+    </span>
+  );
+}
+
+function StreamDot({ health }: { health: HealthLabel }) {
+  if (health === 'Offline') return <span className="inline-block w-2 h-2 rounded-full bg-cv-muted" />;
+  if (health === 'Warning') return <span className="inline-block w-2 h-2 rounded-full bg-[#FF9A2E] animate-pulse" />;
+  return <span className="inline-block w-2 h-2 rounded-full bg-[#19E58C]" />;
+}
+
+function EditCameraDialog({ camera, onClose, onSave }: { camera: Camera; onClose: () => void; onSave: (id: string, data: Record<string, unknown>) => Promise<void> }) {
+  const [name, setName] = useState(camera.name);
+  const [zoneName, setZoneName] = useState(camera.zone);
+  const [location, setLocation] = useState(camera.location);
+  const [streamUrl, setStreamUrl] = useState(camera.streamUrl ?? '');
+  const [gpsLat, setGpsLat] = useState(camera.gps?.lat != null ? String(camera.gps.lat) : '');
+  const [gpsLng, setGpsLng] = useState(camera.gps?.lng != null ? String(camera.gps.lng) : '');
+  const [saving, setSaving] = useState(false);
+  const [mapQuery, setMapQuery] = useState('');
+  const [mapResults, setMapResults] = useState<{ display_name: string; lat: string; lon: string }[]>([]);
+  const [mapSearching, setMapSearching] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<any>(null);
+  const markerRef = useRef<any>(null);
+
+  const placeMarker = useCallback((lat: number, lng: number) => {
+    const L = (window as any).L;
+    const map = mapInstanceRef.current;
+    if (!L || !map) return;
+    if (markerRef.current) markerRef.current.setLatLng([lat, lng]);
+    else markerRef.current = L.marker([lat, lng]).addTo(map);
+    map.setView([lat, lng], 16);
+  }, []);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const tryInit = () => {
+      const L = (window as any).L;
+      if (!L || mapInstanceRef.current) return;
+      const lat = gpsLat ? parseFloat(gpsLat) : 12.9716;
+      const lng = gpsLng ? parseFloat(gpsLng) : 77.5946;
+      const map = L.map(mapRef.current!).setView([lat, lng], 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM', maxZoom: 19 }).addTo(map);
+      if (gpsLat && gpsLng) markerRef.current = L.marker([lat, lng]).addTo(map);
+      map.on('click', (e: any) => {
+        const rLat = parseFloat(e.latlng.lat.toFixed(6));
+        const rLng = parseFloat(e.latlng.lng.toFixed(6));
+        setGpsLat(String(rLat));
+        setGpsLng(String(rLng));
+        if (markerRef.current) markerRef.current.setLatLng([rLat, rLng]);
+        else markerRef.current = L.marker([rLat, rLng]).addTo(map);
+      });
+      mapInstanceRef.current = map;
+    };
+    if ((window as any).L) tryInit();
+    else {
+      const iv = setInterval(() => { if ((window as any).L) { clearInterval(iv); tryInit(); } }, 200);
+      return () => clearInterval(iv);
+    }
+    return () => { if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; markerRef.current = null; } };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const searchAddress = (q: string) => {
+    if (q.length < 3) { setMapResults([]); return; }
+    setMapSearching(true);
+    fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}&email=neeraj.sj@satyaki.co.in`)
+      .then(r => r.json()).then(setMapResults).catch(() => setMapResults([])).finally(() => setMapSearching(false));
+  };
+
+  const handleQueryChange = (v: string) => {
+    setMapQuery(v);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => searchAddress(v), 400);
+  };
+
+  const pickResult = (r: { display_name: string; lat: string; lon: string }) => {
+    const rLat = parseFloat(parseFloat(r.lat).toFixed(6));
+    const rLng = parseFloat(parseFloat(r.lon).toFixed(6));
+    setGpsLat(String(rLat)); setGpsLng(String(rLng));
+    setLocation(r.display_name);
+    setMapQuery(r.display_name); setMapResults([]);
+    placeMarker(rLat, rLng);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const data: Record<string, unknown> = { name: name.trim(), zone: zoneName.trim(), location: location.trim(), stream_url: streamUrl.trim() || undefined };
+      const lat = parseFloat(gpsLat); const lng = parseFloat(gpsLng);
+      if (!Number.isNaN(lat)) data.gps_lat = lat;
+      if (!Number.isNaN(lng)) data.gps_lng = lng;
+      await onSave(camera.id, data);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="bg-cv-panel border border-cv-border rounded-lg p-6 w-full max-w-md space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <h2 className="text-base font-semibold text-cv-fg">Edit Camera</h2>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-cv-fg2 block mb-1">Name</label>
+            <input value={name} onChange={e => setName(e.target.value)} className="w-full h-9 px-3 rounded-md text-sm bg-cv-bg border border-cv-border text-cv-fg focus:outline-none focus:border-cv-cyan" />
+          </div>
+          <div>
+            <label className="text-xs text-cv-fg2 block mb-1">Zone</label>
+            <input value={zoneName} onChange={e => setZoneName(e.target.value)} className="w-full h-9 px-3 rounded-md text-sm bg-cv-bg border border-cv-border text-cv-fg focus:outline-none focus:border-cv-cyan" />
+          </div>
+          <div>
+            <label className="text-xs text-cv-fg2 block mb-1">RTSP Stream URL</label>
+            <input value={streamUrl} onChange={e => setStreamUrl(e.target.value)} placeholder="rtsp://user:pass@192.168.1.10:554/stream" className="w-full h-9 px-3 rounded-md text-sm bg-cv-bg border border-cv-border text-cv-fg focus:outline-none focus:border-cv-cyan" />
+          </div>
+          <div>
+            <label className="text-xs text-cv-fg2 block mb-1">Location <span className="text-cv-muted">(search or click map)</span></label>
+            <div className="relative">
+              <input placeholder="Search address…" value={mapQuery || location} onChange={e => { handleQueryChange(e.target.value); setLocation(e.target.value); }} className="w-full h-9 px-3 rounded-md text-sm bg-cv-bg border border-cv-border text-cv-fg focus:outline-none focus:border-cv-cyan" />
+              {(mapResults.length > 0 || mapSearching) && (
+                <div className="absolute z-[9999] top-full left-0 right-0 mt-1 bg-cv-panel border border-cv-border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                  {mapSearching && <div className="px-3 py-2 text-xs text-cv-muted">Searching…</div>}
+                  {mapResults.map((r, i) => (
+                    <button key={i} type="button" onClick={() => pickResult(r)} className="w-full text-left px-3 py-2 text-xs text-cv-fg hover:bg-white/5 truncate">{r.display_name}</button>
+                  ))}
+                </div>
               )}
             </div>
-            {cameras.length === 0 && (
-              <Button size="sm" className="gap-2 mt-2" onClick={() => setAddOpen(true)}>
-                <Plus className="w-4 h-4" />
-                Add Camera
-              </Button>
-            )}
+            <div ref={mapRef} className="mt-2" style={{ width: '100%', height: 180, borderRadius: 6, border: `1px solid ${CV_COLORS.border}`, cursor: 'crosshair' }} />
+            {gpsLat && gpsLng && <p className="text-[11px] text-cv-muted mt-1">{gpsLat}, {gpsLng}</p>}
           </div>
-        ) : (
-          <div className="p-4 grid grid-cols-3 gap-4">
-            {filteredCameras.map((camera) => (
-              <CameraCard
-                key={camera.id}
-                camera={camera}
-                onDelete={deleteCamera}
-                onEdit={setEditCamera}
-                onSettings={setSettingsCamera}
-                onViewFeed={handleViewFeed}
-              />
-            ))}
-          </div>
-        )}
-      </ScrollArea>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-3 py-1.5 rounded-md text-sm text-cv-fg2 border border-cv-border hover:bg-white/5">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 rounded-md text-sm font-medium bg-cv-cyan text-[#07111F] hover:brightness-110 disabled:opacity-50">{saving ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
     </div>
   );
 }
 
-function StatusCard({ label, count, status }: { label: string; count: number; status: CameraStatus }) {
-  const statusColors = {
-    online: 'text-success border-success/30 bg-success/10',
-    offline: 'text-muted-foreground border-muted bg-muted/50',
-    warning: 'text-warning border-warning/30 bg-warning/10',
-    alert: 'text-destructive border-destructive/30 bg-destructive/10',
-  };
+function ActionMenu({ cam, open, onToggle, onView, onEdit, onDelete }: { cam: Camera; open: boolean; onToggle: () => void; onView: () => void; onEdit: () => void; onDelete: () => void }) {
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+
+  useEffect(() => {
+    if (!open || !btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    const dropH = 100;
+    const flipUp = rect.bottom + dropH > window.innerHeight;
+    setPos({
+      top: flipUp ? rect.top - dropH : rect.bottom + 4,
+      left: rect.right - 144,
+    });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (btnRef.current && !btnRef.current.contains(e.target as Node)) onToggle(); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open, onToggle]);
 
   return (
-    <div className={cn(
-      'flex items-center justify-between p-3 rounded-lg border',
-      statusColors[status]
-    )}>
-      <span className="text-sm font-medium">{label}</span>
-      <span className="text-2xl font-bold font-mono">{count}</span>
+    <div className="relative inline-block">
+      <button ref={btnRef} onClick={onToggle} className="p-1 rounded hover:bg-white/5 text-cv-fg2">
+        <MoreVertical className="w-4 h-4" />
+      </button>
+      {open && (
+        <div className="fixed z-[9999] w-36 rounded-md border border-cv-border bg-cv-panel shadow-lg py-1" style={{ top: pos.top, left: pos.left }}>
+          <button onClick={onView} className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-cv-fg hover:bg-white/5"><Eye className="w-3.5 h-3.5" />View</button>
+          <button onClick={onEdit} className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-cv-fg hover:bg-white/5"><Pencil className="w-3.5 h-3.5" />Edit</button>
+          <button onClick={onDelete} className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[#FF6B6B] hover:bg-white/5"><Trash2 className="w-3.5 h-3.5" />Delete</button>
+        </div>
+      )}
     </div>
   );
 }
 
-function CameraCard({ camera, onDelete, onEdit, onSettings, onViewFeed }: {
-  camera: Camera;
-  onDelete: (id: string) => Promise<void>;
-  onEdit: (camera: Camera) => void;
-  onSettings: (camera: Camera) => void;
-  onViewFeed: (camera: Camera) => void;
-}) {
-  const statusConfig: Record<CameraStatus, { color: string; icon: typeof Wifi; label: string }> = {
-    online: { color: 'text-success', icon: Wifi, label: 'Online' },
-    offline: { color: 'text-muted-foreground', icon: WifiOff, label: 'Offline' },
-    warning: { color: 'text-warning', icon: Wifi, label: 'Warning' },
-    alert: { color: 'text-destructive', icon: Wifi, label: 'Alert' },
-  };
-
-  const status = statusConfig[camera.status];
-  const StatusIcon = status.icon;
-  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
-
+function FilterSelect({ value, options, onChange }: { value: string; options: string[]; onChange: (v: string) => void }) {
   return (
-    <Card className="group hover:border-primary/50 transition-colors">
-      <CardHeader className="pb-2">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-2">
-            <div className={cn(
-              'w-8 h-8 rounded-lg flex items-center justify-center',
-              camera.status === 'online' && 'bg-success/20',
-              camera.status === 'offline' && 'bg-muted',
-              camera.status === 'warning' && 'bg-warning/20',
-              camera.status === 'alert' && 'bg-destructive/20'
-            )}>
-              <CameraIcon className={cn('w-4 h-4', status.color)} />
-            </div>
-            <div>
-              <CardTitle className="text-sm">{camera.name}</CardTitle>
-              <Badge variant="secondary" className="text-[10px] mt-1">
-                {camera.id.toUpperCase()}
-              </Badge>
-            </div>
-          </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="h-7 w-7 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity"
-              >
-                <MoreVertical className="w-4 h-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => onViewFeed(camera)}>
-                <Eye className="w-4 h-4 mr-2" />
-                View Feed
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onEdit(camera)}>
-                <Edit className="w-4 h-4 mr-2" />
-                Edit Camera
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onSettings(camera)}>
-                <Settings className="w-4 h-4 mr-2" />
-                Settings
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive"
-                onSelect={(e) => { e.preventDefault(); setConfirmDeleteOpen(true); }}
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Remove
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Remove "{camera.name}"?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This permanently deletes the camera and stops its pipeline source. This can't be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={() => onDelete(camera.id)}>Remove</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <MapPin className="w-3.5 h-3.5" />
-            <span>{camera.zone} • {camera.location}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <div className={cn('flex items-center gap-1.5 text-xs', status.color)}>
-              <StatusIcon className="w-3.5 h-3.5" />
-              <span>{status.label}</span>
-            </div>
-            {camera.isPinned && (
-              <Badge variant="outline" className="text-[10px]">Pinned</Badge>
-            )}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+    <div className="relative">
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="h-[42px] px-3 pr-8 rounded-md text-sm bg-cv-panel border border-cv-border text-cv-fg appearance-none cursor-pointer focus:outline-none focus:border-cv-cyan"
+      >
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+      <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-cv-muted pointer-events-none" />
+    </div>
   );
 }

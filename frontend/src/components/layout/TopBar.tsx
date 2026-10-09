@@ -28,14 +28,14 @@ export function TopBar() {
   const currentLayout = layoutOptions.find(l => l.value === gridLayout);
 
   return (
-    <div className="h-12 bg-card border-b border-border flex items-center justify-between px-4">
+    <div className="hidden md:flex h-12 bg-card border-b border-border items-center justify-between px-4">
       {/* Left: Page title */}
       <div className="flex items-center gap-4">
         <h1 className="text-sm font-semibold text-foreground">Live Monitoring</h1>
         <span className="live-indicator">LIVE</span>
       </div>
 
-      {/* Center: Layout controls */}
+      {/* Center: Layout controls — hidden on mobile */}
       <div className="flex items-center gap-2">
         <span className="text-xs text-muted-foreground mr-2">Layout:</span>
         <div className="flex gap-1 bg-muted rounded-lg p-1">

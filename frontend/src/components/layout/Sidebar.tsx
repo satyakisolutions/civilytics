@@ -12,10 +12,7 @@ import {
   Volume2,
   VolumeX,
   Shield,
-  Wifi,
-  WifiOff,
   AlertTriangle,
-  Activity,
   Map,
   PlayCircle,
   XCircle,
@@ -26,7 +23,6 @@ import { cn } from '@/lib/utils';
 import { API_BASE } from '@/lib/api-base';
 import { useMonitoring } from '@/context/MonitoringContext';
 import { useAuth, topRole } from '@/context/AuthContext';
-import { mockSystemStatus } from '@/data/mockData';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -61,7 +57,6 @@ export function Sidebar({ className, onNavigate }: SidebarProps) {
   const role = user ? topRole(user.roles) : null;
 
   const activeAlerts = alerts.filter(a => a.status === 'active').length;
-  const systemStatus = mockSystemStatus;
 
   return (
     <aside className={cn(
@@ -76,9 +71,7 @@ export function Sidebar({ className, onNavigate }: SidebarProps) {
               <path d="M32 2 L58 17 L58 47 L32 62 L6 47 L6 17 Z" fill="#FCA719" stroke="#1A1A2E" strokeWidth="3"/>
               <text x="32" y="44" fontFamily="Poppins, Helvetica, Arial, sans-serif" fontSize="32" fontWeight="900" textAnchor="middle" fill="#1A1A2E">C</text>
             </svg>
-            {systemStatus.systemHealth === 'healthy' && (
-              <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-success rounded-full border-2 border-sidebar status-dot-online" />
-            )}
+            <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-success rounded-full border-2 border-sidebar status-dot-online" />
           </div>
           <div className="flex flex-col">
             <span className="font-semibold text-sidebar-foreground text-sm" style={{ fontFamily: "'Poppins', sans-serif" }}>Civilytics</span>
@@ -87,43 +80,9 @@ export function Sidebar({ className, onNavigate }: SidebarProps) {
         </div>
       </div>
 
-      {/* System Status Summary */}
+      {/* Live service health panel */}
       <div className="p-3 border-b border-sidebar-border">
-        <div className="bg-sidebar-accent rounded-lg p-3 space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Cameras</span>
-            <div className="flex items-center gap-1.5">
-              {systemStatus.camerasOnline === systemStatus.camerasTotal ? (
-                <Wifi className="w-3.5 h-3.5 text-success" />
-              ) : (
-                <WifiOff className="w-3.5 h-3.5 text-warning" />
-              )}
-              <span className="font-mono text-sidebar-foreground">
-                {systemStatus.camerasOnline}/{systemStatus.camerasTotal}
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Active Alerts</span>
-            <Badge 
-              variant={activeAlerts > 0 ? 'destructive' : 'secondary'}
-              className="h-5 px-1.5 text-[10px] font-mono"
-            >
-              {activeAlerts}
-            </Badge>
-          </div>
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">System</span>
-            <div className="flex items-center gap-1.5">
-              <Activity className="w-3.5 h-3.5 text-success" />
-              <span className="text-success text-[10px] uppercase font-medium">Healthy</span>
-            </div>
-          </div>
-          {/* Live service health panel */}
-          <div className="mt-2">
-            <HealthPanel />
-          </div>
-        </div>
+        <HealthPanel />
       </div>
 
       {/* Navigation */}
