@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_viewer
-from app.analytics.aggregator import get_summary, get_hourly_stats, get_daily_trend, get_by_zone, get_by_camera
+from app.analytics.aggregator import get_summary, get_hourly_stats, get_daily_trend, get_by_zone, get_by_camera, get_heatmap, get_daily_by_category
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -22,6 +22,14 @@ async def analytics_daily(days: int = Query(default=7, le=90), db: AsyncSession 
 @router.get("/by-zone")
 async def analytics_by_zone(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
     return await get_by_zone(db)
+
+@router.get("/daily-by-category")
+async def analytics_daily_by_category(days: int = Query(default=7, le=90), db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
+    return await get_daily_by_category(db, days)
+
+@router.get("/heatmap")
+async def analytics_heatmap(days: int = Query(default=7, le=90), db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
+    return await get_heatmap(db, days)
 
 @router.get("/by-camera")
 async def analytics_by_camera(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):

@@ -1,5 +1,7 @@
-import { 
-  Camera, 
+import { useState, useEffect } from 'react';
+import { HealthPanel } from './HealthPanel';
+import {
+  Camera,
   Grid3X3, 
   Grid2X2,
   LayoutGrid,
@@ -17,10 +19,13 @@ import {
   Map,
   PlayCircle,
   XCircle,
+  LogOut,
+  UserCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { API_BASE } from '@/lib/api-base';
 import { useMonitoring } from '@/context/MonitoringContext';
+import { useAuth, topRole } from '@/context/AuthContext';
 import { mockSystemStatus } from '@/data/mockData';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -28,6 +33,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 
 interface SidebarProps {
   className?: string;
+  onNavigate?: () => void;
 }
 
 const navigationItems = [
@@ -40,7 +46,7 @@ const navigationItems = [
   { id: 'settings', label: 'Settings', icon: Settings },
 ] as const;
 
-export function Sidebar({ className }: SidebarProps) {
+export function Sidebar({ className, onNavigate }: SidebarProps) {
   const { 
     currentView, 
     setCurrentView, 
@@ -51,6 +57,8 @@ export function Sidebar({ className }: SidebarProps) {
     isAlertPanelOpen,
     setIsAlertPanelOpen,
   } = useMonitoring();
+  const { user, logout } = useAuth();
+  const role = user ? topRole(user.roles) : null;
 
   const activeAlerts = alerts.filter(a => a.status === 'active').length;
   const systemStatus = mockSystemStatus;
@@ -127,15 +135,16 @@ export function Sidebar({ className }: SidebarProps) {
           return (
             <button
               key={item.id}
-              onClick={() => setCurrentView(item.id)}
+              onClick={() => { setCurrentView(item.id); onNavigate?.(); }}
               className={cn(
-                'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200',
-                isActive 
-                  ? 'bg-primary/10 text-primary border border-primary/30' 
+                'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-[13px] transition-all duration-200 relative',
+                isActive
+                  ? 'text-cv-cyan bg-cv-nav-active'
                   : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
               )}
             >
-              <Icon className={cn('w-4 h-4', isActive && 'text-primary')} />
+              {isActive && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-sm bg-cv-cyan" />}
+              <Icon className="w-[18px] h-[18px]" />
               <span className="font-medium">{item.label}</span>
             </button>
           );
@@ -230,6 +239,39 @@ export function Sidebar({ className }: SidebarProps) {
         <TimeDisplay />
       </div>
 
+      {/* Signed-in identity + sign out (CI-51). Lives in the sidebar so it is
+          on every page; a shared office PC must be able to end the session. */}
+      {user && (
+        <div className="p-3 border-t border-sidebar-border flex items-center gap-2">
+          <UserCircle className="w-8 h-8 text-muted-foreground flex-shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium truncate">{user.name || user.username}</div>
+            {user.email && (
+              <div className="text-[10px] text-muted-foreground truncate">{user.email}</div>
+            )}
+            {role && (
+              <Badge variant="secondary" className="mt-0.5 h-4 px-1.5 text-[9px] uppercase">
+                {role}
+              </Badge>
+            )}
+          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 flex-shrink-0"
+                onClick={() => logout()}
+                aria-label="Sign out"
+              >
+                <LogOut className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Sign out</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+
       {/* Powered By Footer */}
       <div className="px-4 pb-3 border-t border-sidebar-border pt-2">
         <a
@@ -250,10 +292,10 @@ export function Sidebar({ className }: SidebarProps) {
 function TimeDisplay() {
   const [time, setTime] = useState(new Date());
 
-  useState(() => {
+  useEffect(() => {
     const interval = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(interval);
-  });
+  }, []);
 
   return (
     <div className="text-center">
@@ -272,5 +314,3 @@ function TimeDisplay() {
   );
 }
 
-import { useState } from 'react';
-import { HealthPanel } from './HealthPanel';

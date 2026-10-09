@@ -67,7 +67,7 @@ services:
     ports:
       - "10092:9092"
     tmpfs:
-      - /var/lib/kafka/data
+      - /var/lib/kafka/data:mode=1777
     healthcheck:
       test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
       interval: 10s
