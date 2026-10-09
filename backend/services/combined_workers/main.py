@@ -31,6 +31,7 @@ from services.reports.main import main as reports_main
 from services.lpr.main import main as lpr_main
 from services.healer.main import _main as healer_main
 from services.analytics.main import main as analytics_main
+from services.alert_delivery.main import main as alert_delivery_main
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ WORKERS = {
     "lpr": lpr_main,
     "healer": healer_main,
     "analytics": analytics_main,
+    "alert_delivery": alert_delivery_main,
 }
 
 
