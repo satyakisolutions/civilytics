@@ -2,12 +2,12 @@ import { useState, useEffect } from 'react';
 import { HealthPanel } from './HealthPanel';
 import {
   Camera,
-  Grid3X3, 
+  Grid3X3,
   Grid2X2,
   LayoutGrid,
-  BarChart3, 
-  History, 
-  Settings, 
+  BarChart3,
+  History,
+  Settings,
   Bell,
   Volume2,
   VolumeX,
@@ -18,6 +18,7 @@ import {
   XCircle,
   LogOut,
   UserCircle,
+  CreditCard,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { API_BASE } from '@/lib/api-base';
@@ -39,6 +40,7 @@ const navigationItems = [
   { id: 'history', label: 'Event History', icon: History },
   { id: 'timeline', label: 'Timeline Playback', icon: PlayCircle },
   { id: 'cameras', label: 'Camera Management', icon: Camera },
+  { id: 'billing', label: 'Subscription & Billing', icon: CreditCard },
   { id: 'settings', label: 'Settings', icon: Settings },
 ] as const;
 

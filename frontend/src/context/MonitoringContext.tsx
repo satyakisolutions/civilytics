@@ -16,8 +16,8 @@ interface MonitoringContextType {
   setIsAlertPanelOpen: (open: boolean) => void;
   isSoundEnabled: boolean;
   setIsSoundEnabled: (enabled: boolean) => void;
-  currentView: 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline';
-  setCurrentView: (view: 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline') => void;
+  currentView: 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline' | 'billing';
+  setCurrentView: (view: 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline' | 'billing') => void;
 }
 
 const MonitoringContext = createContext<MonitoringContextType | undefined>(undefined);
@@ -177,7 +177,7 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('touchstart', unlock);
     };
   }, []);
-  const [currentView, setCurrentView] = useState<'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline'>('monitoring');
+  const [currentView, setCurrentView] = useState<'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline' | 'billing'>('monitoring');
 
   const acknowledgeAlert = async (id: string) => {
     // Update locally first (instant UI feedback)

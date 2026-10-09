@@ -7,6 +7,7 @@ import { CameraManagementView } from '@/components/views/CameraManagementView';
 import { SettingsView } from '@/components/views/SettingsView';
 import { MapView } from '@/components/views/MapView';
 import { TimelineView } from '@/components/views/TimelineView';
+import { BillingView } from '@/components/views/BillingView';
 
 function DashboardContent() {
   const { currentView } = useMonitoring();
@@ -19,6 +20,7 @@ function DashboardContent() {
       {currentView === 'history' && <HistoryView />}
       {currentView === 'timeline' && <TimelineView />}
       {currentView === 'cameras' && <CameraManagementView />}
+      {currentView === 'billing' && <BillingView />}
       {currentView === 'settings' && <SettingsView />}
     </MainLayout>
   );
