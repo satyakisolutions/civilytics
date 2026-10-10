@@ -13,6 +13,8 @@ from workers.tasks.cluster_sightings import handle_cluster_sightings
 from workers.tasks.update_analytics import handle_update_analytics
 from workers.tasks.publish_event import handle_publish_event
 from workers.tasks.notify_failure import handle_notify_failure
+from workers.tasks.dispatch_telegram import handle_dispatch_telegram
+from workers.tasks.dispatch_email import handle_dispatch_email
 from workers.intake.kafka_consumer import KafkaIntakeService
 
 structlog.configure(
@@ -34,6 +36,8 @@ TASK_HANDLERS = [
     ("update_analytics", handle_update_analytics),
     ("publish_event_record", handle_publish_event),
     ("notify_workflow_failure", handle_notify_failure),
+    ("dispatch_telegram", handle_dispatch_telegram),
+    ("dispatch_email", handle_dispatch_email),
 ]
 
 
