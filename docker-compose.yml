@@ -106,6 +106,7 @@ services:
       WW_MEDIAMTX_API_URL: http://mediamtx:9997
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
       WW_KEYCLOAK_URL: http://keycloak:8080
+      CLIP_REID_CHECKPOINT: /app/models/reid/clip_reid.pth
     depends_on:
       postgres:
         condition: service_healthy
@@ -116,6 +117,7 @@ services:
     volumes:
       - tts_data:/tmp/wastewatch/tts
       - evidence_data:/app/evidence
+      - ./backend/models:/app/models:ro
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
     restart: unless-stopped
 
@@ -191,6 +193,7 @@ services:
     volumes:
       - evidence_data:/tmp/wastewatch/evidence
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./backend/models:/app/models:ro
     ports:
       - "9100:9100"  # healer's MCP server
     command: ["python3", "-m", "services.combined_workers.main"]

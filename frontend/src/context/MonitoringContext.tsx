@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { GridLayout, Alert, ViolationEvent } from '@/types/monitoring';
-import { mockViolationEvents } from '@/data/mockData';
+import { GridLayout, Alert } from '@/types/monitoring';
 import { API_BASE } from '@/lib/api-base';
 
 type ViewId = 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline' | 'billing';
@@ -23,7 +22,6 @@ interface MonitoringContextType {
   selectedCamera: string | null;
   setSelectedCamera: (id: string | null) => void;
   alerts: Alert[];
-  events: ViolationEvent[];
   acknowledgeAlert: (id: string) => void;
   clearAlerts: () => void;
   isAlertPanelOpen: boolean;
@@ -40,7 +38,6 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
   const [gridLayout, setGridLayout] = useState<GridLayout>('3x3');
   const [selectedCamera, setSelectedCamera] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [events] = useState<ViolationEvent[]>(mockViolationEvents);
   const [isAlertPanelOpen, setIsAlertPanelOpen] = useState(false);
   const clearedAtRef = useRef<Date | null>(null);
   const knownAlertIds = useRef<Set<string>>(new Set());
@@ -244,7 +241,6 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
         selectedCamera,
         setSelectedCamera,
         alerts,
-        events,
         acknowledgeAlert,
         clearAlerts,
         isAlertPanelOpen,

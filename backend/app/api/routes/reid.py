@@ -17,7 +17,7 @@ router = APIRouter(prefix="/reid", tags=["reid"])
 _QDRANT_URL = "http://qdrant:6333"
 _CLIP_MODEL_NAME = "ViT-B/16"
 _EMBEDDING_DIM = 512
-_CLIP_REID_CHECKPOINT = os.getenv("CLIP_REID_CHECKPOINT", "/app/models/clip_reid.pth")
+_CLIP_REID_CHECKPOINT = os.getenv("CLIP_REID_CHECKPOINT", "/app/models/reid/clip_reid.pth")
 
 _clip_model = None
 _clip_preprocess = None

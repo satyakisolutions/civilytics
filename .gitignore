@@ -35,6 +35,8 @@ Thumbs.db
 # PyTorch weight caches
 *.pth
 rf-detr-base.pth
+# LFS-tracked model weights (un-ignore)
+!backend/models/**/*.pth
 
 # Coverage
 .coverage
