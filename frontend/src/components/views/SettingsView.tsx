@@ -176,59 +176,94 @@ function GeneralSection({ onSave }: { onSave: () => void }) {
 }
 
 /* ── 2. Users & Roles ── */
-const DEMO_USERS = [
-  { name: 'Sandesh C', email: 'sandesh@letsbethechange.in', role: 'Organisation admin', lastActive: '09 Oct 2026, 10:14 IST', status: 'Active' },
-  { name: 'Neeraj Kumar SJ', email: 'neeraj@satyaki.co.in', role: 'Platform admin', lastActive: '09 Oct 2026, 10:02 IST', status: 'Active' },
-  { name: 'Operations Review Desk', email: 'operations@letsbethechange.in', role: 'Reviewer', lastActive: '08 Oct 2026, 17:18 IST', status: 'Active' },
-  { name: 'Field Supervisor', email: 'field.supervisor@letsbethechange.in', role: 'Viewer', lastActive: '06 Oct 2026, 09:24 IST', status: 'Invitation pending' },
-];
+type UserRow = { name: string; email: string; role: string; last_active: string; status: string };
 
 function UsersSection({ onToast }: { onToast: (m: string) => void }) {
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showInvite, setShowInvite] = useState(false);
+  const [invName, setInvName] = useState('');
+  const [invEmail, setInvEmail] = useState('');
+  const [invRole, setInvRole] = useState('Viewer');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/config/workspace_users`).then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.value && Array.isArray(data.value)) setUsers(data.value); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const saveUsers = async (updated: UserRow[]) => {
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/api/config/workspace_users`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: updated }),
+      });
+      setUsers(updated);
+    } finally { setSaving(false); }
+  };
+
+  const handleInvite = async () => {
+    if (!invName.trim() || !invEmail.trim()) return;
+    const newUser: UserRow = { name: invName.trim(), email: invEmail.trim(), role: invRole, last_active: 'Never', status: 'Invitation pending' };
+    await saveUsers([...users, newUser]);
+    setShowInvite(false);
+    setInvName(''); setInvEmail(''); setInvRole('Viewer');
+    onToast('Invitation sent');
+  };
+
   return <>
     <SectionTitle title="Users & roles" subtitle="Control who can review events and change configuration." />
     <Panel>
       <div className="flex justify-between items-center mb-4">
-        <span className="text-xs font-medium" style={{ color: CV_COLORS.fg2 }}>{DEMO_USERS.length} users</span>
+        <span className="text-xs font-medium" style={{ color: CV_COLORS.fg2 }}>{loading ? '…' : `${users.length} users`}</span>
         <Btn primary onClick={() => setShowInvite(true)}><Plus className="w-3 h-3 inline mr-1" />Invite user</Btn>
       </div>
-      {/* Desktop table */}
-      <div className="hidden sm:block overflow-x-auto">
-        <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
-          <thead><tr style={{ color: CV_COLORS.muted }} className="border-b" >
-            {['Name', 'Email', 'Role', 'Last active', 'Status'].map(h => <th key={h} className="text-left py-2 pr-3 font-medium" style={{ borderColor: CV_COLORS.border }}>{h}</th>)}
-          </tr></thead>
-          <tbody>
-            {DEMO_USERS.map(u => (
-              <tr key={u.email} className="border-b" style={{ borderColor: CV_COLORS.border }}>
-                <td className="py-2.5 pr-3 font-medium">{u.name}</td>
-                <td className="pr-3" style={{ color: CV_COLORS.fg2 }}>{u.email}</td>
-                <td className="pr-3"><Chip label={u.role} color={CV_COLORS.fg2} /></td>
-                <td className="pr-3" style={{ color: CV_COLORS.muted }}>{u.lastActive}</td>
-                <td><Chip label={u.status} color={u.status === 'Active' ? CV_COLORS.green : CV_COLORS.orange} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {/* Mobile cards */}
-      <div className="sm:hidden space-y-2">
-        {DEMO_USERS.map(u => (
-          <div key={u.email} className="rounded-lg p-3" style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}` }}>
-            <div className="flex justify-between"><span className="text-xs font-medium" style={{ color: CV_COLORS.fg }}>{u.name}</span><Chip label={u.status} color={u.status === 'Active' ? CV_COLORS.green : CV_COLORS.orange} /></div>
-            <p className="text-[11px] mt-1" style={{ color: CV_COLORS.fg2 }}>{u.email}</p>
-            <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>{u.role} · {u.lastActive}</p>
-          </div>
-        ))}
-      </div>
+      {loading ? (
+        <p className="text-xs py-4 text-center" style={{ color: CV_COLORS.muted }}>Loading…</p>
+      ) : users.length === 0 ? (
+        <p className="text-xs py-4 text-center" style={{ color: CV_COLORS.muted }}>No users configured. Invite your first team member.</p>
+      ) : <>
+        {/* Desktop table */}
+        <div className="hidden sm:block overflow-x-auto">
+          <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
+            <thead><tr style={{ color: CV_COLORS.muted }} className="border-b" >
+              {['Name', 'Email', 'Role', 'Last active', 'Status'].map(h => <th key={h} className="text-left py-2 pr-3 font-medium" style={{ borderColor: CV_COLORS.border }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {users.map(u => (
+                <tr key={u.email} className="border-b" style={{ borderColor: CV_COLORS.border }}>
+                  <td className="py-2.5 pr-3 font-medium">{u.name}</td>
+                  <td className="pr-3" style={{ color: CV_COLORS.fg2 }}>{u.email}</td>
+                  <td className="pr-3"><Chip label={u.role} color={CV_COLORS.fg2} /></td>
+                  <td className="pr-3" style={{ color: CV_COLORS.muted }}>{u.last_active}</td>
+                  <td><Chip label={u.status} color={u.status === 'Active' ? CV_COLORS.green : CV_COLORS.orange} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {/* Mobile cards */}
+        <div className="sm:hidden space-y-2">
+          {users.map(u => (
+            <div key={u.email} className="rounded-lg p-3" style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}` }}>
+              <div className="flex justify-between"><span className="text-xs font-medium" style={{ color: CV_COLORS.fg }}>{u.name}</span><Chip label={u.status} color={u.status === 'Active' ? CV_COLORS.green : CV_COLORS.orange} /></div>
+              <p className="text-[11px] mt-1" style={{ color: CV_COLORS.fg2 }}>{u.email}</p>
+              <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>{u.role} · {u.last_active}</p>
+            </div>
+          ))}
+        </div>
+      </>}
     </Panel>
     {showInvite && <Modal title="Invite user" onClose={() => setShowInvite(false)}>
-      <Field label="Name"><Inp value="" onChange={() => {}} /></Field>
-      <Field label="Email"><Inp value="" onChange={() => {}} /></Field>
-      <Field label="Role"><Sel value="Viewer" options={['Organisation admin', 'Reviewer', 'Viewer']} onChange={() => {}} /></Field>
+      <Field label="Name"><Inp value={invName} onChange={setInvName} /></Field>
+      <Field label="Email"><Inp value={invEmail} onChange={setInvEmail} /></Field>
+      <Field label="Role"><Sel value={invRole} options={['Organisation admin', 'Reviewer', 'Viewer']} onChange={setInvRole} /></Field>
       <div className="flex justify-end gap-2 mt-4">
         <Btn onClick={() => setShowInvite(false)}>Cancel</Btn>
-        <Btn primary onClick={() => { setShowInvite(false); onToast('Invitation sent'); }}>Send invitation</Btn>
+        <Btn primary disabled={saving || !invName.trim() || !invEmail.trim()} onClick={handleInvite}>{saving ? 'Saving…' : 'Send invitation'}</Btn>
       </div>
     </Modal>}
   </>;
@@ -664,35 +699,43 @@ function NotificationsSection({ onSave }: { onSave: () => void }) {
 
 /* ── 6. Workflow Operations ── */
 const PIPELINE_STAGES = [
-  { name: 'Event validation', task: 'validate_dumping_event', dur: '180 ms' },
-  { name: 'Evidence extraction', task: 'extract_evidence', dur: '4.2 s' },
-  { name: 'LPR analysis', task: 'run_lpr_analysis', dur: '1.8 s' },
-  { name: 'Person & vehicle clustering', task: 'cluster_subject_sightings', dur: '2.6 s' },
-  { name: 'Analytics update', task: 'update_analytics', dur: '310 ms' },
-  { name: 'Event publication', task: 'publish_event_record', dur: '220 ms' },
+  { name: 'Event validation', task: 'validate_dumping_event' },
+  { name: 'Evidence extraction', task: 'extract_evidence' },
+  { name: 'LPR analysis', task: 'run_lpr_analysis' },
+  { name: 'Person & vehicle clustering', task: 'cluster_subject_sightings' },
+  { name: 'Analytics update', task: 'update_analytics' },
+  { name: 'Event publication', task: 'publish_event_record' },
 ];
 
-const WORKERS = [
-  { task: 'validate_dumping_event', service: 'Event Intake Worker', queue: 'Active', polling: 2, last: '10:18:24 IST', fail: '0.0%' },
-  { task: 'extract_evidence', service: 'Evidence Worker', queue: 'Active', polling: 2, last: '10:18:20 IST', fail: '0.4%' },
-  { task: 'run_lpr_analysis', service: 'LPR Worker', queue: 'Active', polling: 1, last: '10:18:18 IST', fail: '0.2%' },
-  { task: 'cluster_subject_sightings', service: 'Clustering Worker', queue: 'Active', polling: 1, last: '10:18:15 IST', fail: '0.1%' },
-  { task: 'update_analytics', service: 'Analytics Worker', queue: 'Active', polling: 1, last: '10:18:21 IST', fail: '0.0%' },
-  { task: 'publish_event_record', service: 'Event Publication Worker', queue: 'Active', polling: 1, last: '10:18:23 IST', fail: '0.0%' },
-];
+type HealthSummary = { conductor: { status: string }; kafka: { status: string }; active_workers: number; running_workflows: number; failed_workflows_24h: number; open_alerts: number };
+type WorkerHB = { task_type: string; worker_id: string; last_heartbeat_at: string; status?: string };
 
 function WorkflowsSection() {
-  const [drawer, setDrawer] = useState<typeof WORKERS[0] | null>(null);
+  const [health, setHealth] = useState<HealthSummary | null>(null);
+  const [workers, setWorkers] = useState<WorkerHB[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [drawer, setDrawer] = useState<WorkerHB | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      fetch(`${API_BASE}/api/operations/health-summary`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API_BASE}/api/operations/worker-heartbeats`).then(r => r.ok ? r.json() : []).catch(() => []),
+    ]).then(([h, w]) => { setHealth(h); setWorkers(w); setLoading(false); });
+  }, []);
+
+  const conductorUp = health?.conductor?.status === 'healthy';
+  const kafkaUp = health?.kafka?.status === 'healthy';
+
   return <>
     <SectionTitle title="Workflow operations" subtitle="Monitor the Civilytics event-processing workflow orchestrated through Conductor OSS." />
     <p className="text-xs mb-4" style={{ color: CV_COLORS.fg2 }}>Kafka event input starts a controlled workflow for detection, evidence, matching, and analytics.</p>
 
     {/* Health metrics */}
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4 mb-5">
-      <MetricCard label="Workflow service" value="Healthy" sub="Conductor OSS is reachable" color={CV_COLORS.green} />
-      <MetricCard label="Kafka intake" value="Connected" sub="civilytics.dumping.events" color={CV_COLORS.green} />
-      <MetricCard label="Active workers" value="5 / 5" sub="All required task types polling" color={CV_COLORS.green} />
-      <MetricCard label="Failed tasks, 24h" value="2" sub="Both retries completed" color={CV_COLORS.orange} />
+      <MetricCard label="Workflow service" value={loading ? '…' : conductorUp ? 'Healthy' : 'Down'} sub="Conductor OSS" color={loading ? CV_COLORS.muted : conductorUp ? CV_COLORS.green : CV_COLORS.orange} />
+      <MetricCard label="Kafka intake" value={loading ? '…' : kafkaUp ? 'Connected' : 'Down'} sub="civilytics.dumping.events" color={loading ? CV_COLORS.muted : kafkaUp ? CV_COLORS.green : CV_COLORS.orange} />
+      <MetricCard label="Active workers" value={loading ? '…' : String(health?.active_workers ?? 0)} sub={`${workers.length} heartbeats`} color={loading ? CV_COLORS.muted : (health?.active_workers ?? 0) > 0 ? CV_COLORS.green : CV_COLORS.orange} />
+      <MetricCard label="Failed tasks, 24h" value={loading ? '…' : String(health?.failed_workflows_24h ?? 0)} sub="" color={loading ? CV_COLORS.muted : (health?.failed_workflows_24h ?? 0) > 0 ? CV_COLORS.orange : CV_COLORS.green} />
     </div>
 
     {/* Workflow definition */}
@@ -701,7 +744,6 @@ function WorkflowsSection() {
         <div>
           <h3 className="text-xs font-semibold" style={{ color: CV_COLORS.fg }}>dumping-event-processing-v1</h3>
           <p className="text-[11px] mt-0.5" style={{ color: CV_COLORS.fg2 }}>Process a validated dumping event into evidence, matching, analytics, and review records.</p>
-          <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>Published, version 1.4 · Last updated: 09 Oct 2026, 09:28 IST</p>
         </div>
         <Chip label="Published" color={CV_COLORS.green} />
       </div>
@@ -718,7 +760,6 @@ function WorkflowsSection() {
               <div className="w-2 h-2 rounded-full mx-auto mb-1" style={{ background: CV_COLORS.green }} />
               <p className="text-[10px] font-medium" style={{ color: CV_COLORS.fg }}>{s.name}</p>
               <p className="text-[9px] font-mono" style={{ color: CV_COLORS.muted }}>{s.task}</p>
-              <p className="text-[9px] mt-0.5" style={{ color: CV_COLORS.fg2 }}>{s.dur}</p>
             </div>
             {i < PIPELINE_STAGES.length - 1 && <ArrowRight className="w-3 h-3 flex-shrink-0 hidden sm:block" style={{ color: CV_COLORS.muted }} />}
           </div>
@@ -730,42 +771,40 @@ function WorkflowsSection() {
     {/* Worker registry */}
     <Panel>
       <h3 className="text-xs font-semibold mb-3" style={{ color: CV_COLORS.fg }}>Worker registry</h3>
+      {loading ? <p className="text-xs" style={{ color: CV_COLORS.muted }}>Loading…</p> : workers.length === 0 ? <p className="text-xs" style={{ color: CV_COLORS.muted }}>No worker heartbeats received.</p> : (
       <div className="overflow-x-auto">
         <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
           <thead><tr style={{ color: CV_COLORS.muted }} className="border-b">
-            {['Worker task type', 'Worker service', 'Queue', 'Polling', 'Last completion', 'Fail 24h', ''].map(h => <th key={h} className="text-left py-2 pr-3 font-medium" style={{ borderColor: CV_COLORS.border }}>{h}</th>)}
+            {['Task type', 'Worker ID', 'Status', 'Last heartbeat', ''].map(h => <th key={h} className="text-left py-2 pr-3 font-medium" style={{ borderColor: CV_COLORS.border }}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {WORKERS.map(w => (
-              <tr key={w.task} className="border-b" style={{ borderColor: CV_COLORS.border }}>
-                <td className="py-2 pr-3 font-mono text-[11px]">{w.task}</td>
-                <td className="pr-3">{w.service}</td>
-                <td className="pr-3"><Chip label={w.queue} color={CV_COLORS.green} /></td>
-                <td className="pr-3">{w.polling}</td>
-                <td className="pr-3" style={{ color: CV_COLORS.muted }}>{w.last}</td>
-                <td className="pr-3" style={{ color: parseFloat(w.fail) > 0 ? CV_COLORS.orange : CV_COLORS.green }}>{w.fail}</td>
+            {workers.map(w => {
+              const age = Date.now() - new Date(w.last_heartbeat_at).getTime();
+              const alive = age < 5 * 60 * 1000;
+              return (
+              <tr key={`${w.task_type}-${w.worker_id}`} className="border-b" style={{ borderColor: CV_COLORS.border }}>
+                <td className="py-2 pr-3 font-mono text-[11px]">{w.task_type}</td>
+                <td className="pr-3 text-[11px]">{w.worker_id}</td>
+                <td className="pr-3"><Chip label={alive ? 'Active' : 'Stale'} color={alive ? CV_COLORS.green : CV_COLORS.orange} /></td>
+                <td className="pr-3" style={{ color: CV_COLORS.muted }}>{new Date(w.last_heartbeat_at).toLocaleString()}</td>
                 <td><button onClick={() => setDrawer(w)} className="text-[11px] font-medium" style={{ color: CV_COLORS.cyan }}>View</button></td>
-              </tr>
-            ))}
+              </tr>);
+            })}
           </tbody>
         </table>
-      </div>
+      </div>)}
     </Panel>
 
     {/* Kafka intake */}
     <Panel>
       <h3 className="text-xs font-semibold mb-3" style={{ color: CV_COLORS.fg }}>Kafka event intake</h3>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-        <div><span style={{ color: CV_COLORS.muted }}>Status</span><br /><Chip label="Connected" color={CV_COLORS.green} /></div>
+        <div><span style={{ color: CV_COLORS.muted }}>Status</span><br /><Chip label={loading ? '…' : kafkaUp ? 'Connected' : 'Down'} color={kafkaUp ? CV_COLORS.green : CV_COLORS.orange} /></div>
         <div><span style={{ color: CV_COLORS.muted }}>Topic</span><br /><span style={{ color: CV_COLORS.fg }} className="font-mono text-[11px]">civilytics.dumping.events</span></div>
         <div><span style={{ color: CV_COLORS.muted }}>Consumer group</span><br /><span style={{ color: CV_COLORS.fg }}>civilytics-workflow-intake</span></div>
-        <div><span style={{ color: CV_COLORS.muted }}>Latest message</span><br /><span style={{ color: CV_COLORS.fg }}>10:18:24 IST</span></div>
-        <div><span style={{ color: CV_COLORS.muted }}>Processing lag</span><br /><span style={{ color: CV_COLORS.green }}>0 messages</span></div>
-        <div><span style={{ color: CV_COLORS.muted }}>Dead-letter queue</span><br /><span style={{ color: CV_COLORS.green }}>0 messages</span></div>
       </div>
     </Panel>
 
-    {/* Worker detail drawer */}
     {drawer && <WorkerDrawer worker={drawer} onClose={() => setDrawer(null)} />}
   </>;
 }
@@ -774,21 +813,23 @@ function MetricCard({ label, value, sub, color }: { label: string; value: string
   return <div className="rounded-[10px] p-3" style={{ background: CV_COLORS.panel, border: `1px solid ${CV_COLORS.border}` }}>
     <p className="text-[10px] sm:text-xs" style={{ color: CV_COLORS.fg2 }}>{label}</p>
     <p className="text-sm sm:text-base font-bold mt-0.5" style={{ color }}>{value}</p>
-    <p className="text-[10px] mt-0.5" style={{ color: CV_COLORS.muted }}>{sub}</p>
+    {sub && <p className="text-[10px] mt-0.5" style={{ color: CV_COLORS.muted }}>{sub}</p>}
   </div>;
 }
 
-function WorkerDrawer({ worker, onClose }: { worker: typeof WORKERS[0]; onClose: () => void }) {
+function WorkerDrawer({ worker, onClose }: { worker: WorkerHB; onClose: () => void }) {
+  const age = Date.now() - new Date(worker.last_heartbeat_at).getTime();
+  const alive = age < 5 * 60 * 1000;
   return <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
     <div className="absolute inset-0 bg-black/40" />
     <div className="relative w-full max-w-[480px] h-full overflow-y-auto" style={{ background: CV_COLORS.panel }} onClick={e => e.stopPropagation()}>
       <div className="p-5 border-b flex justify-between items-center" style={{ borderColor: CV_COLORS.border }}>
         <div>
-          <h3 className="text-sm font-semibold" style={{ color: CV_COLORS.fg }}>{worker.service}</h3>
-          <p className="text-[11px] font-mono" style={{ color: CV_COLORS.fg2 }}>{worker.task}</p>
+          <h3 className="text-sm font-semibold" style={{ color: CV_COLORS.fg }}>{worker.worker_id}</h3>
+          <p className="text-[11px] font-mono" style={{ color: CV_COLORS.fg2 }}>{worker.task_type}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Chip label={worker.queue} color={CV_COLORS.green} />
+          <Chip label={alive ? 'Active' : 'Stale'} color={alive ? CV_COLORS.green : CV_COLORS.orange} />
           <button onClick={onClose}><X className="w-4 h-4" style={{ color: CV_COLORS.muted }} /></button>
         </div>
       </div>
@@ -796,25 +837,10 @@ function WorkerDrawer({ worker, onClose }: { worker: typeof WORKERS[0]; onClose:
         <div className="grid grid-cols-2 gap-3">
           <div><span style={{ color: CV_COLORS.muted }}>Orchestrator</span><br />Conductor OSS</div>
           <div><span style={{ color: CV_COLORS.muted }}>Input source</span><br />Workflow task input</div>
-          <div><span style={{ color: CV_COLORS.muted }}>Polling workers</span><br />{worker.polling}</div>
-          <div><span style={{ color: CV_COLORS.muted }}>Poll interval</span><br />500 ms</div>
-          <div><span style={{ color: CV_COLORS.muted }}>Retry policy</span><br />3 attempts</div>
-          <div><span style={{ color: CV_COLORS.muted }}>Retry delay</span><br />Exponential backoff</div>
-          <div><span style={{ color: CV_COLORS.muted }}>Last heartbeat</span><br />{worker.last}</div>
-          <div><span style={{ color: CV_COLORS.muted }}>Failure rate 24h</span><br />{worker.fail}</div>
-        </div>
-        <div className="border-t pt-3" style={{ borderColor: CV_COLORS.border }}>
-          <h4 className="text-xs font-semibold mb-2" style={{ color: CV_COLORS.fg }}>Operational health</h4>
-          <div className="grid grid-cols-2 gap-3">
-            <div><span style={{ color: CV_COLORS.muted }}>Tasks completed, 24h</span><br />186</div>
-            <div><span style={{ color: CV_COLORS.muted }}>Average duration</span><br />4.2 s</div>
-            <div><span style={{ color: CV_COLORS.muted }}>P95 duration</span><br />6.8 s</div>
-            <div><span style={{ color: CV_COLORS.muted }}>Failed tasks, 24h</span><br />1</div>
-          </div>
-        </div>
-        <div className="flex gap-2 pt-2">
-          <Btn>View logs</Btn>
-          <Btn disabled>Retry failed task</Btn>
+          <div><span style={{ color: CV_COLORS.muted }}>Task type</span><br />{worker.task_type}</div>
+          <div><span style={{ color: CV_COLORS.muted }}>Worker ID</span><br />{worker.worker_id}</div>
+          <div><span style={{ color: CV_COLORS.muted }}>Last heartbeat</span><br />{new Date(worker.last_heartbeat_at).toLocaleString()}</div>
+          <div><span style={{ color: CV_COLORS.muted }}>Status</span><br />{alive ? 'Active' : 'Stale'}</div>
         </div>
       </div>
     </div>
