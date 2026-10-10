@@ -1,12 +1,10 @@
 # backend/app/lpr/ocr.py
-"""License plate recognition using PaddleOCR with Indian plate validation."""
+"""License plate recognition using fast-plate-ocr with Indian plate validation."""
 import logging
 import re
 
 logger = logging.getLogger(__name__)
 
-# Indian vehicle plate formats:
-# KL-01-AB-1234, KL01AB1234, KL 01 AB 1234
 INDIAN_PLATE_PATTERN = re.compile(
     r"[A-Z]{2}[\s\-]?\d{2}[\s\-]?[A-Z]{1,3}[\s\-]?\d{4}",
     re.IGNORECASE,
@@ -18,11 +16,9 @@ def validate_indian_plate(text: str) -> str | None:
     match = INDIAN_PLATE_PATTERN.search(text.upper().strip())
     if not match:
         return None
-    # Normalize: remove spaces/dashes, reformat as XX-00-XX-0000
     raw = re.sub(r"[\s\-]", "", match.group())
     if len(raw) < 9 or len(raw) > 11:
         return None
-    # Format: XX-00-XX(X)-0000
     state = raw[:2]
     district = raw[2:4]
     series = raw[4:-4]
@@ -30,44 +26,58 @@ def validate_indian_plate(text: str) -> str | None:
     return f"{state}-{district}-{series}-{number}"
 
 
+_recognizer = None
+
+
+def _get_recognizer():
+    global _recognizer
+    if _recognizer is not None:
+        return _recognizer
+    try:
+        from fast_plate_ocr import LicensePlateRecognizer
+        _recognizer = LicensePlateRecognizer("cct-s-v2-global-model")
+        logger.info("fast-plate-ocr initialized (cct-s-v2-global-model)")
+        return _recognizer
+    except Exception as e:
+        logger.warning("fast-plate-ocr unavailable: %s", e)
+        return None
+
+
 class LPREngine:
-    """License plate recognition engine using PaddleOCR."""
+    """License plate recognition engine using fast-plate-ocr."""
 
     def __init__(self):
-        self._ocr = None
-        try:
-            from paddleocr import PaddleOCR
-            self._ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
-            logger.info("PaddleOCR initialized")
-        except ImportError:
-            logger.warning("PaddleOCR not available — LPR will be disabled")
+        self._recognizer = _get_recognizer()
 
     def read_plate(self, image_path: str) -> dict | None:
-        """Read plate from an image. Returns {plate_number, confidence, raw_texts}."""
-        if not self._ocr:
+        """Read plate from a cropped plate image. Returns {plate_number, confidence, raw_texts}."""
+        if self._recognizer is None:
+            self._recognizer = _get_recognizer()
+        if self._recognizer is None:
             return None
 
         try:
-            results = self._ocr.ocr(image_path, cls=True)
-            if not results or not results[0]:
+            predictions = self._recognizer.run(image_path)
+            if not predictions:
                 return None
 
-            texts = []
-            for line in results[0]:
-                text = line[1][0]
-                conf = line[1][1]
-                texts.append({"text": text, "confidence": conf})
+            raw_texts = []
+            for pred in predictions:
+                if isinstance(pred, tuple):
+                    text, conf = pred[0], pred[1] if len(pred) > 1 else 0.0
+                else:
+                    text, conf = str(pred), 0.0
+                raw_texts.append({"text": text, "confidence": float(conf)})
 
-            # Try to find a valid Indian plate
-            all_text = " ".join(t["text"] for t in texts)
+            all_text = " ".join(t["text"] for t in raw_texts)
             plate = validate_indian_plate(all_text)
 
             if plate:
-                avg_conf = sum(t["confidence"] for t in texts) / len(texts)
+                avg_conf = sum(t["confidence"] for t in raw_texts) / len(raw_texts) if raw_texts else 0.0
                 return {
                     "plate_number": plate,
                     "confidence": round(avg_conf, 3),
-                    "raw_texts": texts,
+                    "raw_texts": raw_texts,
                 }
             return None
         except Exception:

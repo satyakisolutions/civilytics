@@ -1,6 +1,7 @@
 # backend/app/api/routes/reid.py
-"""ReID — person/vehicle re-identification via CLIP + Qdrant."""
+"""ReID — person/vehicle re-identification via CLIP-ReID + Qdrant."""
 import logging
+import os
 import uuid
 from pathlib import Path
 
@@ -14,8 +15,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reid", tags=["reid"])
 
 _QDRANT_URL = "http://qdrant:6333"
-_CLIP_MODEL_NAME = "ViT-B/32"
+_CLIP_MODEL_NAME = "ViT-B/16"
 _EMBEDDING_DIM = 512
+_CLIP_REID_CHECKPOINT = os.getenv("CLIP_REID_CHECKPOINT", "/app/models/clip_reid.pth")
 
 _clip_model = None
 _clip_preprocess = None
@@ -44,7 +46,26 @@ def _get_clip():
         import torch
         device = "cuda" if torch.cuda.is_available() else "cpu"
         _clip_model, _clip_preprocess = clip.load(_CLIP_MODEL_NAME, device=device)
-        logger.info("CLIP %s loaded on %s", _CLIP_MODEL_NAME, device)
+        checkpoint_path = Path(_CLIP_REID_CHECKPOINT)
+        if checkpoint_path.exists():
+            state = torch.load(checkpoint_path, map_location=device, weights_only=True)
+            # CLIP-ReID checkpoints store model state under 'model' or 'state_dict' key
+            if isinstance(state, dict):
+                state = state.get("model", state.get("state_dict", state))
+            # Filter to only keys matching the visual encoder
+            visual_keys = {k: v for k, v in state.items() if k.startswith("visual.") or k.startswith("model.visual.")}
+            if visual_keys:
+                # Strip 'model.' prefix if present
+                visual_keys = {k.replace("model.", "", 1) if k.startswith("model.") else k: v for k, v in visual_keys.items()}
+                missing, unexpected = _clip_model.load_state_dict(visual_keys, strict=False)
+                logger.info("CLIP-ReID checkpoint loaded on %s (%d keys, %d missing, %d unexpected)",
+                            device, len(visual_keys), len(missing), len(unexpected))
+            else:
+                _clip_model.load_state_dict(state, strict=False)
+                logger.info("CLIP-ReID checkpoint loaded on %s (full state)", device)
+        else:
+            logger.info("CLIP-ReID checkpoint not found at %s, using vanilla %s on %s",
+                        _CLIP_REID_CHECKPOINT, _CLIP_MODEL_NAME, device)
         return _clip_model, _clip_preprocess
     except Exception as e:
         logger.warning("CLIP unavailable: %s", e)
