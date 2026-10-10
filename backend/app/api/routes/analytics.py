@@ -1,4 +1,5 @@
 # backend/app/api/routes/analytics.py
+import logging
 from datetime import datetime
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Query
@@ -48,8 +49,8 @@ async def upsert_analytics(
         results = await pipe.execute()
         version = results[-1]
         await r.aclose()
-    except Exception:
-        pass
+    except Exception as e:
+        logging.getLogger(__name__).warning("Redis analytics update failed: %s", e)
 
     return {"version": version}
 

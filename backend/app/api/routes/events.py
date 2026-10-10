@@ -1,4 +1,5 @@
 import csv
+import logging
 import io
 import uuid
 from datetime import datetime
@@ -63,8 +64,8 @@ async def publish_event(
                 )
             await db.commit()
             return {"id": str(event.id)}
-    except (ValueError, Exception):
-        pass
+    except (ValueError, Exception) as e:
+        logging.getLogger(__name__).warning("Event publish update failed for %s: %s", body.event_id, e)
 
     return {"id": body.event_id}
 

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import {
-  Settings as SettingsIcon, Users, Camera, HardDrive, Bell, Workflow, FileText,
+  Settings as SettingsIcon, Users, Camera, HardDrive, Bell, Workflow, FileText, Activity,
   Check, ChevronRight, X, Plus, MoreVertical, Download, Eye, Clock,
   ArrowRight, AlertTriangle, RefreshCw, MessageCircle, Phone, Volume2, Mail, Database,
 } from 'lucide-react';
@@ -8,8 +8,9 @@ import { CV_COLORS } from '@/lib/cv-colors';
 import { cn } from '@/lib/utils';
 import { API_BASE } from '@/lib/api-base';
 import { useMonitoring } from '@/context/MonitoringContext';
+import { OperationsView } from './OperationsView';
 
-type Section = 'general' | 'users' | 'cameras' | 'evidence' | 'notifications' | 'workflows' | 'audit';
+type Section = 'general' | 'users' | 'cameras' | 'evidence' | 'notifications' | 'workflows' | 'audit' | 'operations';
 
 const SECTIONS: { id: Section; label: string; icon: typeof SettingsIcon }[] = [
   { id: 'general', label: 'General', icon: SettingsIcon },
@@ -19,6 +20,7 @@ const SECTIONS: { id: Section; label: string; icon: typeof SettingsIcon }[] = [
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'workflows', label: 'Workflow operations', icon: Workflow },
   { id: 'audit', label: 'Audit log', icon: FileText },
+  { id: 'operations', label: 'Operations', icon: Activity },
 ];
 
 export function SettingsView() {
@@ -73,6 +75,7 @@ export function SettingsView() {
           {section === 'notifications' && <NotificationsSection onSave={() => showToast('Notification rules saved')} />}
           {section === 'workflows' && <WorkflowsSection />}
           {section === 'audit' && <AuditSection />}
+          {section === 'operations' && <OperationsView />}
         </div>
       </div>
 
@@ -130,6 +133,9 @@ function GeneralSection({ onSave }: { onSave: () => void }) {
   const [lang, setLang] = useState('English');
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const logoRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/config/workspace_settings`).then(r => r.ok ? r.json() : null)
@@ -141,9 +147,22 @@ function GeneralSection({ onSave }: { onSave: () => void }) {
         if (v.timezone) setTz(v.timezone);
         if (v.date_format) setDf(v.date_format);
         if (v.language) setLang(v.language);
+        if (v.logo_url) setLogoUrl(v.logo_url);
       })
       .catch(() => {});
   }, []);
+
+  const uploadLogo = async (file: File) => {
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await fetch(`${API_BASE}/api/config/logo`, { method: 'POST', body: fd });
+      if (!r.ok) throw new Error('Upload failed');
+      const data = await r.json();
+      setLogoUrl(data.logo_url);
+    } finally { setUploading(false); }
+  };
 
   const mark = (fn: (v: string) => void) => (v: string) => { fn(v); setDirty(true); };
 
@@ -162,6 +181,14 @@ function GeneralSection({ onSave }: { onSave: () => void }) {
   return <>
     <SectionTitle title="Workspace details" subtitle="Organisation and operating defaults." />
     <Panel>
+      <Field label="Workspace logo">
+        <div className="flex items-center gap-3">
+          {logoUrl && <img src={logoUrl} alt="Logo" className="h-8 w-8 rounded object-contain" style={{ background: CV_COLORS.bg }} />}
+          <input ref={logoRef} type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) uploadLogo(f); }} />
+          <Btn onClick={() => logoRef.current?.click()}>{uploading ? 'Uploading…' : logoUrl ? 'Change logo' : 'Upload logo'}</Btn>
+        </div>
+      </Field>
       <Field label="Workspace name"><Inp value={ws} onChange={mark(setWs)} /></Field>
       <Field label="Organisation name"><Inp value={org} onChange={mark(setOrg)} /></Field>
       <Field label="Time zone"><Sel value={tz} options={['IST (UTC+05:30)']} onChange={mark(setTz)} /></Field>
@@ -720,9 +747,21 @@ function NotificationsSection({ onSave }: { onSave: () => void }) {
         <p className="text-[10px] mt-3" style={{ color: CV_COLORS.muted }}>
           Credentials are stored server-side and never exposed in the browser.
         </p>
-        <div className="flex justify-end gap-2 mt-4">
-          <Btn onClick={() => setConfiguring(null)}>Cancel</Btn>
-          <Btn primary onClick={saveChannelConfig}>{saving ? 'Saving…' : 'Save & enable'}</Btn>
+        <div className="flex justify-between items-center mt-4">
+          <Btn onClick={async () => {
+            try {
+              const r = await fetch(`${API_BASE}/api/config/test-channel`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channel: configuring.id }),
+              });
+              if (!r.ok) throw new Error('Not configured');
+              alert(`Test alert sent to ${configuring.label}!`);
+            } catch { alert(`Failed — save config first.`); }
+          }}>Send test alert</Btn>
+          <div className="flex gap-2">
+            <Btn onClick={() => setConfiguring(null)}>Cancel</Btn>
+            <Btn primary onClick={saveChannelConfig}>{saving ? 'Saving…' : 'Save & enable'}</Btn>
+          </div>
         </div>
       </Modal>
     )}

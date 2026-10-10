@@ -1,4 +1,5 @@
 # backend/app/api/routes/clustering.py
+import logging
 import uuid
 from datetime import timedelta
 from pydantic import BaseModel
@@ -62,7 +63,7 @@ async def analyze_clusters(
                     "min": 0,
                     "max": 24,
                 })
-    except (ValueError, Exception):
-        pass
+    except (ValueError, Exception) as e:
+        logging.getLogger(__name__).warning("Cluster analysis failed for %s: %s", body.event_id, e)
 
     return {"match_groups": match_groups, "similarity_ranges": similarity_ranges}

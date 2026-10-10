@@ -1,4 +1,5 @@
 # backend/app/api/routes/evidence.py
+import logging
 import hashlib
 import json
 import os
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
-from app.auth.middleware import require_viewer
+from app.auth.middleware import require_admin, require_viewer
 from app.db.models import EvidenceFile, ViolationEvent
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
@@ -40,7 +41,7 @@ async def extract_evidence(
     try:
         event_uuid = uuid.UUID(body.event_id)
     except ValueError:
-        pass
+        logging.getLogger(__name__).warning("Invalid event_id UUID: %s", body.event_id)
 
     for category in ("violations", "suspicious"):
         base = EVIDENCE_ROOT / category
@@ -72,6 +73,37 @@ async def extract_evidence(
         "timestamps": timestamps,
         "integrity": "verified" if evidence_refs else "no_evidence",
     }
+
+
+class EvidenceCleanupRequest(BaseModel):
+    before: str
+    dry_run: bool = True
+
+
+@router.delete("/cleanup")
+async def cleanup_evidence(
+    body: EvidenceCleanupRequest,
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_admin),
+):
+    cutoff = datetime.fromisoformat(body.before)
+    result = await db.execute(
+        select(EvidenceFile).where(EvidenceFile.created_at < cutoff)
+    )
+    files = result.scalars().all()
+    count = len(files)
+
+    if not body.dry_run:
+        for f in files:
+            if f.local_path:
+                try:
+                    Path(f.local_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            await db.delete(f)
+        await db.commit()
+
+    return {"deleted": count, "dry_run": body.dry_run}
 
 
 @router.get("", response_model=list[dict])

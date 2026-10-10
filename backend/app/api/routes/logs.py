@@ -10,7 +10,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.auth.middleware import get_current_user, require_admin
 from app.db.engine import async_session
@@ -61,6 +61,25 @@ async def search_logs(
             for row in rows
         ],
     }
+
+
+class LogCleanupRequest(BaseModel):
+    before: str
+
+
+@router.delete("/cleanup")
+async def cleanup_logs(
+    body: LogCleanupRequest,
+    _user: dict = Depends(require_admin),
+):
+    from datetime import datetime
+    cutoff = datetime.fromisoformat(body.before)
+    async with async_session() as session:
+        result = await session.execute(
+            delete(LogEntry).where(LogEntry.timestamp < cutoff)
+        )
+        await session.commit()
+    return {"deleted": result.rowcount}
 
 
 class CaptureRequest(BaseModel):
