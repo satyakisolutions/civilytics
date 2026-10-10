@@ -5,7 +5,7 @@ export const CV_COLORS = {
   border: '#26364D',
   fg: '#F4F7FB',
   fg2: '#89A0BD',
-  muted: '#64768E',
+  muted: '#7A8FA8',
   track: '#0E1E33',
   cyan: '#12D8F2',
   orange: '#FF9A2E',

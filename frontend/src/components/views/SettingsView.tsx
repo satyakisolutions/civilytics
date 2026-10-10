@@ -24,7 +24,7 @@ const SECTIONS: { id: Section; label: string; icon: typeof SettingsIcon }[] = [
 export function SettingsView() {
   const [section, setSection] = useState<Section>('general');
   const [toast, setToast] = useState('');
-  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2500); };
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3500); };
 
   return (
     <div className="flex flex-col h-full" style={{ background: CV_COLORS.bg }}>
@@ -77,7 +77,7 @@ export function SettingsView() {
       </div>
 
       {toast && (
-        <div className="fixed bottom-6 right-6 z-50 px-4 py-2 rounded-lg text-sm font-medium shadow-lg animate-in fade-in slide-in-from-bottom-2"
+        <div role="status" aria-live="polite" className="fixed bottom-6 right-6 z-50 px-4 py-2 rounded-lg text-sm font-medium shadow-lg animate-in fade-in slide-in-from-bottom-2"
           style={{ background: CV_COLORS.green, color: CV_COLORS.bg }}>
           <Check className="w-4 h-4 inline mr-1.5 -mt-0.5" />{toast}
         </div>
@@ -93,19 +93,21 @@ function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) 
 function Panel({ children, className }: { children: React.ReactNode; className?: string }) {
   return <div className={cn('rounded-[10px] p-5 mb-5', className)} style={{ background: CV_COLORS.panel, border: `1px solid ${CV_COLORS.border}` }}>{children}</div>;
 }
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 py-2"><span className="text-xs font-medium" style={{ color: CV_COLORS.fg2 }}>{label}</span>{children}</div>;
+function Field({ label, children, htmlFor }: { label: string; children: React.ReactNode; htmlFor?: string }) {
+  return <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 py-2"><label htmlFor={htmlFor} className="text-xs font-medium" style={{ color: CV_COLORS.fg2 }}>{label}</label>{children}</div>;
 }
-function Inp({ value, onChange, className }: { value: string; onChange: (v: string) => void; className?: string }) {
-  return <input value={value} onChange={e => onChange(e.target.value)} className={cn('px-3 py-1.5 rounded-md text-xs outline-none', className)} style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg }} />;
+function Inp({ value, onChange, className, id }: { value: string; onChange: (v: string) => void; className?: string; id?: string }) {
+  return <input id={id} value={value} onChange={e => onChange(e.target.value)} className={cn('px-3 py-1.5 rounded-md text-xs outline-none focus:ring-1 focus:ring-[#12D8F2]', className)} style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg }} />;
 }
-function Sel({ value, options, onChange }: { value: string; options: string[]; onChange: (v: string) => void }) {
-  return <select value={value} onChange={e => onChange(e.target.value)} className="px-3 py-1.5 rounded-md text-xs outline-none appearance-none cursor-pointer" style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg }}>
+function Sel({ value, options, onChange, id }: { value: string; options: string[]; onChange: (v: string) => void; id?: string }) {
+  return <select id={id} value={value} onChange={e => onChange(e.target.value)} className="px-3 py-1.5 rounded-md text-xs outline-none appearance-none cursor-pointer focus:ring-1 focus:ring-[#12D8F2]" style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg }}>
     {options.map(o => <option key={o} value={o}>{o}</option>)}
   </select>;
 }
-function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
-  return <button onClick={onToggle} className="w-9 h-5 rounded-full relative transition-colors" style={{ background: on ? CV_COLORS.cyan : CV_COLORS.border }}>
+function Toggle({ on, onToggle, label }: { on: boolean; onToggle: () => void; label?: string }) {
+  return <button onClick={onToggle} role="switch" aria-checked={on} aria-label={label}
+    className="w-9 h-5 rounded-full relative transition-colors cursor-pointer p-2 -m-2"
+    style={{ background: on ? CV_COLORS.cyan : CV_COLORS.border }}>
     <div className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform" style={{ left: on ? 18 : 2 }} />
   </button>;
 }
@@ -127,7 +129,36 @@ function GeneralSection({ onSave }: { onSave: () => void }) {
   const [df, setDf] = useState('DD MMM YYYY');
   const [lang, setLang] = useState('English');
   const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/config/workspace_settings`).then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.value) return;
+        const v = data.value;
+        if (v.workspace_name) setWs(v.workspace_name);
+        if (v.org_name) setOrg(v.org_name);
+        if (v.timezone) setTz(v.timezone);
+        if (v.date_format) setDf(v.date_format);
+        if (v.language) setLang(v.language);
+      })
+      .catch(() => {});
+  }, []);
+
   const mark = (fn: (v: string) => void) => (v: string) => { fn(v); setDirty(true); };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/api/config/workspace_settings`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: { workspace_name: ws, org_name: org, timezone: tz, date_format: df, language: lang } }),
+      });
+      setDirty(false);
+      onSave();
+    } finally { setSaving(false); }
+  };
+
   return <>
     <SectionTitle title="Workspace details" subtitle="Organisation and operating defaults." />
     <Panel>
@@ -138,7 +169,7 @@ function GeneralSection({ onSave }: { onSave: () => void }) {
       <Field label="Default evidence language"><Sel value={lang} options={['English', 'Kannada', 'Hindi']} onChange={mark(setLang)} /></Field>
       <div className="flex justify-end gap-2 mt-4">
         <Btn onClick={() => setDirty(false)}>Cancel</Btn>
-        <Btn primary disabled={!dirty} onClick={() => { onSave(); setDirty(false); }}>Save changes</Btn>
+        <Btn primary disabled={!dirty || saving} onClick={save}>{saving ? 'Saving…' : 'Save changes'}</Btn>
       </div>
     </Panel>
   </>;
@@ -248,32 +279,50 @@ function CamerasSection({ onSave }: { onSave: () => void }) {
   </>;
 }
 
-const DEMO_CAMERAS = [
-  { id: 'cam-entry', name: 'Entry Gate', zone: 'Zone A', confidence: 0.75, sensitivity: 'High', nightBoost: true, cooldown: 30 },
-  { id: 'cam-02', name: 'Cam-02', zone: 'Zone B', confidence: 0.80, sensitivity: 'Medium', nightBoost: false, cooldown: 60 },
-  { id: 'cam-03', name: 'Cam-03', zone: 'Zone C', confidence: 0.70, sensitivity: 'High', nightBoost: true, cooldown: 30 },
-];
+interface CameraDetectionConfig {
+  dwell_violation_threshold_s: number;
+  waste_proximity_alert_window_s: number;
+  waste_proximity_px: number;
+}
+interface CameraRow {
+  id: string; name: string; zone_name?: string;
+  detection_config: CameraDetectionConfig;
+}
 
 function CameraThresholds() {
-  const [cameras, setCameras] = useState(DEMO_CAMERAS);
+  const [cameras, setCameras] = useState<CameraRow[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
-  const [form, setForm] = useState({ confidence: 0.75, sensitivity: 'High', nightBoost: true, cooldown: 30 });
+  const [form, setForm] = useState<CameraDetectionConfig>({ dwell_violation_threshold_s: 15, waste_proximity_alert_window_s: 300, waste_proximity_px: 120 });
+  const [saving, setSaving] = useState(false);
 
-  const openEdit = (cam: typeof DEMO_CAMERAS[0]) => {
-    setEditing(cam.id);
-    setForm({ confidence: cam.confidence, sensitivity: cam.sensitivity, nightBoost: cam.nightBoost, cooldown: cam.cooldown });
-  };
-  const saveEdit = () => {
+  useEffect(() => {
+    fetch(`${API_BASE}/api/cameras`).then(r => r.ok ? r.json() : [])
+      .then((data: any[]) => setCameras(data.map(c => ({
+        id: c.id, name: c.name, zone_name: c.zone_name,
+        detection_config: c.detection_config || { dwell_violation_threshold_s: 15, waste_proximity_alert_window_s: 300, waste_proximity_px: 120 },
+      }))))
+      .catch(() => {});
+  }, []);
+
+  const openEdit = (cam: CameraRow) => { setEditing(cam.id); setForm({ ...cam.detection_config }); };
+  const saveEdit = async () => {
     if (!editing) return;
-    setCameras(cameras.map(c => c.id === editing ? { ...c, ...form } : c));
-    setEditing(null);
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/api/cameras/${editing}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ detection_config: form }),
+      });
+      setCameras(cameras.map(c => c.id === editing ? { ...c, detection_config: form } : c));
+      setEditing(null);
+    } finally { setSaving(false); }
   };
 
   return <>
     <div className="overflow-x-auto">
       <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
         <thead><tr style={{ color: CV_COLORS.muted }} className="border-b">
-          {['Camera', 'Zone', 'Min confidence', 'Sensitivity', 'Night boost', 'Cooldown (s)', ''].map(h =>
+          {['Camera', 'Zone', 'Dwell threshold (s)', 'Proximity window (s)', 'Proximity (px)', ''].map(h =>
             <th key={h} className="text-left py-2 pr-3 font-medium" style={{ borderColor: CV_COLORS.border }}>{h}</th>
           )}
         </tr></thead>
@@ -281,14 +330,14 @@ function CameraThresholds() {
           {cameras.map(c => (
             <tr key={c.id} className="border-b" style={{ borderColor: CV_COLORS.border }}>
               <td className="py-2 pr-3 font-medium">{c.name}</td>
-              <td className="pr-3" style={{ color: CV_COLORS.fg2 }}>{c.zone}</td>
-              <td className="pr-3 font-mono">{(c.confidence * 100).toFixed(0)}%</td>
-              <td className="pr-3"><Chip label={c.sensitivity} color={c.sensitivity === 'High' ? CV_COLORS.orange : CV_COLORS.blue} /></td>
-              <td className="pr-3">{c.nightBoost ? <Chip label="On" color={CV_COLORS.cyan} /> : <Chip label="Off" color={CV_COLORS.muted} />}</td>
-              <td className="pr-3 font-mono">{c.cooldown}s</td>
+              <td className="pr-3" style={{ color: CV_COLORS.fg2 }}>{c.zone_name || '—'}</td>
+              <td className="pr-3 font-mono">{c.detection_config.dwell_violation_threshold_s}s</td>
+              <td className="pr-3 font-mono">{c.detection_config.waste_proximity_alert_window_s}s</td>
+              <td className="pr-3 font-mono">{c.detection_config.waste_proximity_px}px</td>
               <td><button onClick={() => openEdit(c)} className="text-[11px] font-medium" style={{ color: CV_COLORS.cyan }}>Edit</button></td>
             </tr>
           ))}
+          {cameras.length === 0 && <tr><td colSpan={6} className="py-4 text-center" style={{ color: CV_COLORS.muted }}>No cameras configured</td></tr>}
         </tbody>
       </table>
     </div>
@@ -297,27 +346,33 @@ function CameraThresholds() {
       <Modal title={`Thresholds — ${cameras.find(c => c.id === editing)?.name}`} onClose={() => setEditing(null)}>
         <div className="space-y-3">
           <div>
-            <label className="text-[11px] font-medium block mb-1" style={{ color: CV_COLORS.fg2 }}>Minimum confidence (%)</label>
-            <input type="number" min={0} max={100} value={Math.round(form.confidence * 100)}
-              onChange={e => setForm({ ...form, confidence: Number(e.target.value) / 100 })}
+            <label className="text-[11px] font-medium block mb-1" style={{ color: CV_COLORS.fg2 }}>Dwell violation threshold (seconds)</label>
+            <input type="number" min={1} max={300} value={form.dwell_violation_threshold_s}
+              onChange={e => setForm({ ...form, dwell_violation_threshold_s: Number(e.target.value) })}
               className="w-full px-3 py-1.5 rounded-md text-xs outline-none"
               style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg }} />
-            <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>Events below this threshold are ignored for this camera.</p>
+            <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>How long a person/vehicle must dwell before triggering a violation.</p>
           </div>
-          <Field label="Sensitivity"><Sel value={form.sensitivity} options={['Low', 'Medium', 'High']} onChange={v => setForm({ ...form, sensitivity: v })} /></Field>
-          <Field label="Night detection boost"><Toggle on={form.nightBoost} onToggle={() => setForm({ ...form, nightBoost: !form.nightBoost })} /></Field>
           <div>
-            <label className="text-[11px] font-medium block mb-1" style={{ color: CV_COLORS.fg2 }}>Event cooldown (seconds)</label>
-            <input type="number" min={0} max={600} value={form.cooldown}
-              onChange={e => setForm({ ...form, cooldown: Number(e.target.value) })}
+            <label className="text-[11px] font-medium block mb-1" style={{ color: CV_COLORS.fg2 }}>Waste proximity alert window (seconds)</label>
+            <input type="number" min={10} max={3600} value={form.waste_proximity_alert_window_s}
+              onChange={e => setForm({ ...form, waste_proximity_alert_window_s: Number(e.target.value) })}
               className="w-full px-3 py-1.5 rounded-md text-xs outline-none"
               style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg }} />
-            <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>Minimum seconds between events from this camera before a new alert triggers.</p>
+            <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>Time window for detecting waste proximity to a person/vehicle.</p>
+          </div>
+          <div>
+            <label className="text-[11px] font-medium block mb-1" style={{ color: CV_COLORS.fg2 }}>Waste proximity distance (pixels)</label>
+            <input type="number" min={10} max={1000} value={form.waste_proximity_px}
+              onChange={e => setForm({ ...form, waste_proximity_px: Number(e.target.value) })}
+              className="w-full px-3 py-1.5 rounded-md text-xs outline-none"
+              style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}`, color: CV_COLORS.fg }} />
+            <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>Max pixel distance between waste and subject for attribution.</p>
           </div>
         </div>
         <div className="flex justify-end gap-2 mt-4">
           <Btn onClick={() => setEditing(null)}>Cancel</Btn>
-          <Btn primary onClick={saveEdit}>Save thresholds</Btn>
+          <Btn primary disabled={saving} onClick={saveEdit}>{saving ? 'Saving…' : 'Save thresholds'}</Btn>
         </div>
       </Modal>
     )}
@@ -329,20 +384,51 @@ function EvidenceSection({ onSave }: { onSave: () => void }) {
   const [meta, setMeta] = useState('12 months');
   const [frames, setFrames] = useState('30 days');
   const [clips, setClips] = useState('30 days');
+  const [storageGb, setStorageGb] = useState(6.8);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/config/retention_settings`).then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.value) return;
+        const v = data.value;
+        if (v.metadata_retention) setMeta(v.metadata_retention);
+        if (v.frame_retention) setFrames(v.frame_retention);
+        if (v.clip_retention) setClips(v.clip_retention);
+        if (v.storage_used_gb != null) setStorageGb(v.storage_used_gb);
+      })
+      .catch(() => {});
+  }, []);
+
+  const mark = (fn: (v: string) => void) => (v: string) => { fn(v); setDirty(true); };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/api/config/retention_settings`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: { metadata_retention: meta, frame_retention: frames, clip_retention: clips, storage_used_gb: storageGb } }),
+      });
+      setDirty(false);
+      onSave();
+    } finally { setSaving(false); }
+  };
+
   return <>
     <SectionTitle title="Evidence & retention" subtitle="Set how long Civilytics keeps event records and evidence." />
     <Panel>
-      <Field label="Event metadata retention"><Sel value={meta} options={['6 months', '12 months', '18 months', '24 months']} onChange={setMeta} /></Field>
-      <Field label="Evidence frame retention"><Sel value={frames} options={['7 days', '30 days', '60 days', '90 days']} onChange={setFrames} /></Field>
-      <Field label="Recorded clip retention"><Sel value={clips} options={['7 days', '30 days', '60 days', '90 days']} onChange={setClips} /></Field>
+      <Field label="Event metadata retention"><Sel value={meta} options={['6 months', '12 months', '18 months', '24 months']} onChange={mark(setMeta)} /></Field>
+      <Field label="Evidence frame retention"><Sel value={frames} options={['7 days', '30 days', '60 days', '90 days']} onChange={mark(setFrames)} /></Field>
+      <Field label="Recorded clip retention"><Sel value={clips} options={['7 days', '30 days', '60 days', '90 days']} onChange={mark(setClips)} /></Field>
       <Field label="Evidence download access"><span className="text-xs" style={{ color: CV_COLORS.fg }}>Reviewers and administrators</span></Field>
     </Panel>
     <Panel>
       <h3 className="text-xs font-semibold mb-3" style={{ color: CV_COLORS.fg }}>Storage usage</h3>
-      <Field label="Current evidence storage"><span className="text-xs font-semibold" style={{ color: CV_COLORS.fg }}>6.8 GB</span></Field>
+      <Field label="Current evidence storage"><span className="text-xs font-semibold" style={{ color: CV_COLORS.fg }}>{storageGb} GB</span></Field>
       <Field label="Included storage window"><span className="text-xs" style={{ color: CV_COLORS.fg }}>30 days</span></Field>
       <Field label="Storage warning"><Chip label="No warning" color={CV_COLORS.green} /></Field>
-      <div className="flex justify-end mt-4"><Btn primary onClick={onSave}>Save retention policy</Btn></div>
+      <div className="flex justify-end mt-4"><Btn primary disabled={!dirty || saving} onClick={save}>{saving ? 'Saving…' : 'Save retention policy'}</Btn></div>
     </Panel>
   </>;
 }
@@ -736,39 +822,47 @@ function WorkerDrawer({ worker, onClose }: { worker: typeof WORKERS[0]; onClose:
 }
 
 /* ── 7. Audit Log ── */
-const AUDIT_DATA = [
-  { time: '09 Oct 2026, 10:12 IST', user: 'Neeraj Kumar SJ', action: 'Updated evidence retention', target: '30 days', result: 'Success' },
-  { time: '09 Oct 2026, 09:54 IST', user: 'Sandesh C', action: 'Confirmed event', target: 'EVT-240930-027', result: 'Success' },
-  { time: '09 Oct 2026, 08:42 IST', user: 'System', action: 'Retried workflow task', target: 'extract_evidence', result: 'Success' },
-  { time: '08 Oct 2026, 17:18 IST', user: 'Neeraj Kumar SJ', action: 'Updated notification rules', target: 'Workflow failures', result: 'Success' },
-];
-
 function AuditSection() {
+  const [entries, setEntries] = useState<{ id: string; actor_id: string; actor_role: string; action: string; target_type: string; target_id: string; result: string | null; created_at: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/operations/audit-log?limit=50`)
+      .then(r => r.ok ? r.json() : [])
+      .then(setEntries)
+      .catch(() => setEntries([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const fmt = (iso: string) => new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
+
   return <>
     <SectionTitle title="Audit log" subtitle="Review configuration and controlled workflow actions." />
     <Panel>
       <div className="flex justify-between items-center mb-3">
-        <span className="text-xs" style={{ color: CV_COLORS.muted }}>{AUDIT_DATA.length} entries</span>
+        <span className="text-xs" style={{ color: CV_COLORS.muted }}>{loading ? '…' : `${entries.length} entries`}</span>
         <Btn><Download className="w-3 h-3 inline mr-1" />Export CSV</Btn>
       </div>
+      {loading ? <p className="text-xs py-4 text-center" style={{ color: CV_COLORS.muted }}>Loading…</p> : entries.length === 0 ? <p className="text-xs py-4 text-center" style={{ color: CV_COLORS.muted }}>No audit entries yet.</p> : (
       <div className="overflow-x-auto">
         <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
           <thead><tr style={{ color: CV_COLORS.muted }} className="border-b">
-            {['Time', 'User', 'Action', 'Target', 'Result'].map(h => <th key={h} className="text-left py-2 pr-3 font-medium" style={{ borderColor: CV_COLORS.border }}>{h}</th>)}
+            {['Time', 'Actor', 'Action', 'Target', 'Result'].map(h => <th key={h} className="text-left py-2 pr-3 font-medium" style={{ borderColor: CV_COLORS.border }}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {AUDIT_DATA.map((a, i) => (
-              <tr key={i} className="border-b" style={{ borderColor: CV_COLORS.border }}>
-                <td className="py-2 pr-3 whitespace-nowrap" style={{ color: CV_COLORS.muted }}>{a.time}</td>
-                <td className="pr-3">{a.user}</td>
+            {entries.map(a => (
+              <tr key={a.id} className="border-b" style={{ borderColor: CV_COLORS.border }}>
+                <td className="py-2 pr-3 whitespace-nowrap" style={{ color: CV_COLORS.muted }}>{fmt(a.created_at)}</td>
+                <td className="pr-3">{a.actor_id} <span style={{ color: CV_COLORS.muted }}>({a.actor_role})</span></td>
                 <td className="pr-3">{a.action}</td>
-                <td className="pr-3 font-mono text-[11px]" style={{ color: CV_COLORS.fg2 }}>{a.target}</td>
-                <td><Chip label={a.result} color={CV_COLORS.green} /></td>
+                <td className="pr-3 font-mono text-[11px]" style={{ color: CV_COLORS.fg2 }}>{a.target_type}/{a.target_id}</td>
+                <td><Chip label={a.result || 'OK'} color={a.result === 'FAILURE' ? CV_COLORS.orange : CV_COLORS.green} /></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      )}
     </Panel>
   </>;
 }
@@ -782,10 +876,10 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
   }, [onClose]);
   return <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
     <div className="absolute inset-0 bg-black/40" />
-    <div className="relative w-full max-w-md rounded-[10px] p-5" style={{ background: CV_COLORS.panel, border: `1px solid ${CV_COLORS.border}` }} onClick={e => e.stopPropagation()}>
+    <div role="dialog" aria-modal="true" aria-label={title} className="relative w-full max-w-md rounded-[10px] p-5" style={{ background: CV_COLORS.panel, border: `1px solid ${CV_COLORS.border}` }} onClick={e => e.stopPropagation()}>
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-sm font-semibold" style={{ color: CV_COLORS.fg }}>{title}</h3>
-        <button onClick={onClose}><X className="w-4 h-4" style={{ color: CV_COLORS.muted }} /></button>
+        <button onClick={onClose} aria-label="Close dialog"><X className="w-4 h-4" style={{ color: CV_COLORS.muted }} /></button>
       </div>
       {children}
     </div>
