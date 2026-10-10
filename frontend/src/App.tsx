@@ -7,7 +7,6 @@ import { Loader2 } from "lucide-react";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
-import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
@@ -38,15 +37,13 @@ const App = () => (
         <AuthProvider>
           <Routes>
             <Route
-              path="/"
+              path="/*"
               element={
                 <RequireAuth>
                   <Index />
                 </RequireAuth>
               }
             />
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-            <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
       </BrowserRouter>

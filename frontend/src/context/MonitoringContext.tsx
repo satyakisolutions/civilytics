@@ -1,7 +1,21 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, ReactNode } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { GridLayout, Alert, ViolationEvent } from '@/types/monitoring';
 import { mockViolationEvents } from '@/data/mockData';
 import { API_BASE } from '@/lib/api-base';
+
+type ViewId = 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline' | 'billing';
+
+const VALID_VIEWS: Set<string> = new Set(['monitoring', 'analytics', 'history', 'cameras', 'settings', 'map', 'timeline', 'billing']);
+
+function pathToView(pathname: string): ViewId {
+  const seg = pathname.replace(/^\/+/, '').split('/')[0] || '';
+  return VALID_VIEWS.has(seg) ? seg as ViewId : 'monitoring';
+}
+
+function viewToPath(view: ViewId): string {
+  return view === 'monitoring' ? '/' : `/${view}`;
+}
 
 interface MonitoringContextType {
   gridLayout: GridLayout;
@@ -16,8 +30,8 @@ interface MonitoringContextType {
   setIsAlertPanelOpen: (open: boolean) => void;
   isSoundEnabled: boolean;
   setIsSoundEnabled: (enabled: boolean) => void;
-  currentView: 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline' | 'billing';
-  setCurrentView: (view: 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline' | 'billing') => void;
+  currentView: ViewId;
+  setCurrentView: (view: ViewId) => void;
 }
 
 const MonitoringContext = createContext<MonitoringContextType | undefined>(undefined);
@@ -177,7 +191,21 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('touchstart', unlock);
     };
   }, []);
-  const [currentView, setCurrentView] = useState<'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline' | 'billing'>('monitoring');
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [currentView, setCurrentViewRaw] = useState<ViewId>(() => pathToView(location.pathname));
+
+  // Browser back/forward → update currentView
+  useEffect(() => {
+    const fromUrl = pathToView(location.pathname);
+    setCurrentViewRaw(prev => prev !== fromUrl ? fromUrl : prev);
+  }, [location.pathname]);
+
+  // setCurrentView also pushes URL
+  const setCurrentView = useCallback((view: ViewId) => {
+    setCurrentViewRaw(view);
+    navigate(viewToPath(view));
+  }, [navigate]);
 
   const acknowledgeAlert = async (id: string) => {
     // Update locally first (instant UI feedback)
