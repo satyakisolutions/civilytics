@@ -279,6 +279,38 @@ function CamerasSection({ onSave }: { onSave: () => void }) {
   const [autoMark, setAutoMark] = useState(false);
   const [reqConfirm, setReqConfirm] = useState(true);
   const [escalate, setEscalate] = useState(true);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/config/detection_settings`).then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.value) return;
+        const v = data.value;
+        if (v.person_dump != null) setPersonDump(v.person_dump);
+        if (v.vehicle_dump != null) setVehicleDump(v.vehicle_dump);
+        if (v.person_match != null) setPersonMatch(v.person_match);
+        if (v.vehicle_plate != null) setVehiclePlate(v.vehicle_plate);
+        if (v.auto_mark != null) setAutoMark(v.auto_mark);
+        if (v.req_confirm != null) setReqConfirm(v.req_confirm);
+        if (v.escalate != null) setEscalate(v.escalate);
+      }).catch(() => {});
+  }, []);
+
+  const tog = (fn: (v: boolean) => void, cur: boolean) => () => { fn(!cur); setDirty(true); };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/api/config/detection_settings`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: { person_dump: personDump, vehicle_dump: vehicleDump, person_match: personMatch, vehicle_plate: vehiclePlate, auto_mark: autoMark, req_confirm: reqConfirm, escalate } }),
+      });
+      setDirty(false);
+      onSave();
+    } finally { setSaving(false); }
+  };
+
   return <>
     <SectionTitle title="Cameras & detection" subtitle="Control detection windows and review rules for this workspace." />
     <Panel>
@@ -288,20 +320,20 @@ function CamerasSection({ onSave }: { onSave: () => void }) {
     </Panel>
     <Panel>
       <h3 className="text-xs font-semibold mb-3" style={{ color: CV_COLORS.fg }}>Detection types</h3>
-      <Field label="Person dumping"><Toggle on={personDump} onToggle={() => setPersonDump(!personDump)} /></Field>
-      <Field label="Vehicle dumping"><Toggle on={vehicleDump} onToggle={() => setVehicleDump(!vehicleDump)} /></Field>
-      <Field label="Person visual match groups"><Toggle on={personMatch} onToggle={() => setPersonMatch(!personMatch)} /></Field>
-      <Field label="Vehicle plate evidence"><Toggle on={vehiclePlate} onToggle={() => setVehiclePlate(!vehiclePlate)} /></Field>
+      <Field label="Person dumping"><Toggle on={personDump} onToggle={tog(setPersonDump, personDump)} /></Field>
+      <Field label="Vehicle dumping"><Toggle on={vehicleDump} onToggle={tog(setVehicleDump, vehicleDump)} /></Field>
+      <Field label="Person visual match groups"><Toggle on={personMatch} onToggle={tog(setPersonMatch, personMatch)} /></Field>
+      <Field label="Vehicle plate evidence"><Toggle on={vehiclePlate} onToggle={tog(setVehiclePlate, vehiclePlate)} /></Field>
     </Panel>
     <Panel>
       <h3 className="text-xs font-semibold mb-3" style={{ color: CV_COLORS.fg }}>Review rules</h3>
-      <Field label="Auto-mark confidence ≥ 95%"><Toggle on={autoMark} onToggle={() => setAutoMark(!autoMark)} /></Field>
+      <Field label="Auto-mark confidence ≥ 95%"><Toggle on={autoMark} onToggle={tog(setAutoMark, autoMark)} /></Field>
       {autoMark && <p className="text-[10px] px-1 py-1 rounded" style={{ color: CV_COLORS.orange, background: `${CV_COLORS.orange}15` }}>Warning: auto-confirmation bypasses reviewer oversight.</p>}
-      <Field label="Require reviewer confirmation"><Toggle on={reqConfirm} onToggle={() => setReqConfirm(!reqConfirm)} /></Field>
-      <Field label="Create escalation for high priority events"><Toggle on={escalate} onToggle={() => setEscalate(!escalate)} /></Field>
+      <Field label="Require reviewer confirmation"><Toggle on={reqConfirm} onToggle={tog(setReqConfirm, reqConfirm)} /></Field>
+      <Field label="Create escalation for high priority events"><Toggle on={escalate} onToggle={tog(setEscalate, escalate)} /></Field>
       <div className="flex justify-between items-center mt-4">
         <button onClick={() => setCurrentView('cameras')} className="text-xs font-medium" style={{ color: CV_COLORS.cyan }}>Manage cameras →</button>
-        <Btn primary onClick={onSave}>Save changes</Btn>
+        <Btn primary disabled={saving || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save changes'}</Btn>
       </div>
     </Panel>
 
