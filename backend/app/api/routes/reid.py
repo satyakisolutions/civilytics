@@ -157,6 +157,9 @@ async def analyze_reid(
             matches = [{"event_id": r.payload.get("event_id", ""), "evidence_ref": r.payload.get("evidence_ref", ""),
                          "similarity": round(r.score, 4)}
                         for r in results if r.payload.get("event_id") != body.event_id]
+            if matches:
+                logger.info("ReID %s: %d matches, scores %.4f–%.4f", body.event_id,
+                            len(matches), matches[-1]["similarity"], matches[0]["similarity"])
         except Exception as e:
             logger.warning("Qdrant search failed: %s", e)
 

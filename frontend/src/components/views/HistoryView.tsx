@@ -16,6 +16,9 @@ import {
   Shield,
   XCircle,
   ArrowUpRight,
+  User,
+  Car,
+  Loader2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CV_COLORS } from '@/lib/cv-colors';
@@ -371,6 +374,12 @@ function EventDrawer({ event, onClose, onReview }: { event: EventRow; onClose: (
           </div>
         </div>
 
+        {/* Related Subjects (ReID) */}
+        <CollapsibleReID eventId={event.id} snapshotUrl={event.snapshotUrl} />
+
+        {/* Vehicle / LPR */}
+        <CollapsibleLPR eventId={event.id} />
+
         {/* Event Description */}
         {(event.title || event.message) && (
           <div>
@@ -415,6 +424,103 @@ function EventDrawer({ event, onClose, onReview }: { event: EventRow; onClose: (
           <ArrowUpRight className="w-4 h-4" /> Escalate
         </button>
       </div>
+    </div>
+  );
+}
+
+/* ─── ReID + LPR Panels ─── */
+
+function CollapsibleReID({ eventId, snapshotUrl }: { eventId: string; snapshotUrl?: string }) {
+  const [open, setOpen] = useState(false);
+  const [matches, setMatches] = useState<{ event_id: string; evidence_ref: string; similarity: number }[]>([]);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+
+  useEffect(() => {
+    if (!open || status !== 'idle') return;
+    if (!snapshotUrl) { setStatus('done'); return; }
+    setStatus('loading');
+    fetch(`${API_BASE}/api/reid/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event_id: eventId, evidence_refs: [snapshotUrl] }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => { setMatches(d.matches || []); setStatus('done'); })
+      .catch(() => setStatus('error'));
+  }, [open, status, eventId, snapshotUrl]);
+
+  return (
+    <div>
+      <button onClick={() => setOpen(!open)} className="flex items-center gap-2 w-full text-left">
+        <ChevronDown className={cn('w-3.5 h-3.5 text-cv-muted transition-transform', !open && '-rotate-90')} />
+        <User className="w-3.5 h-3.5 text-cv-cyan" />
+        <h3 className="text-xs uppercase text-cv-muted font-medium">Related Subjects</h3>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {status === 'loading' && <div className="flex items-center gap-2 text-xs text-cv-muted"><Loader2 className="w-3.5 h-3.5 animate-spin" />Searching…</div>}
+          {status === 'error' && <p className="text-xs text-cv-muted">ReID unavailable</p>}
+          {status === 'done' && matches.length === 0 && <p className="text-xs text-cv-muted">No matches found</p>}
+          {matches.map((m, i) => (
+            <div key={i} className="flex items-center gap-3 p-2 rounded-md bg-cv-bg border border-cv-border">
+              {m.evidence_ref ? (
+                <img src={`${API_BASE}${m.evidence_ref}`} alt="" className="w-12 h-12 object-cover rounded border border-cv-border" />
+              ) : (
+                <div className="w-12 h-12 rounded bg-cv-panel flex items-center justify-center"><User className="w-5 h-5 text-cv-muted" /></div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-cv-fg truncate">Event {m.event_id.slice(0, 8)}…</p>
+                <p className="text-[11px] text-cv-muted">Similarity: {(m.similarity * 100).toFixed(1)}%</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CollapsibleLPR({ eventId }: { eventId: string }) {
+  const [open, setOpen] = useState(false);
+  const [plates, setPlates] = useState<{ plate_number: string; confidence: number; plate_image_url?: string }[]>([]);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+
+  useEffect(() => {
+    if (!open || status !== 'idle') return;
+    setStatus('loading');
+    fetch(`${API_BASE}/api/lpr/plates?event_id=${eventId}`)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => { setPlates(Array.isArray(d) ? d : []); setStatus('done'); })
+      .catch(() => setStatus('error'));
+  }, [open, status, eventId]);
+
+  return (
+    <div>
+      <button onClick={() => setOpen(!open)} className="flex items-center gap-2 w-full text-left">
+        <ChevronDown className={cn('w-3.5 h-3.5 text-cv-muted transition-transform', !open && '-rotate-90')} />
+        <Car className="w-3.5 h-3.5 text-[#A55CFF]" />
+        <h3 className="text-xs uppercase text-cv-muted font-medium">Vehicle / LPR</h3>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {status === 'loading' && <div className="flex items-center gap-2 text-xs text-cv-muted"><Loader2 className="w-3.5 h-3.5 animate-spin" />Loading…</div>}
+          {status === 'error' && <p className="text-xs text-cv-muted">LPR unavailable</p>}
+          {status === 'done' && plates.length === 0 && <p className="text-xs text-cv-muted">No plates detected</p>}
+          {plates.map((p, i) => (
+            <div key={i} className="flex items-center gap-3 p-2 rounded-md bg-cv-bg border border-cv-border">
+              {p.plate_image_url ? (
+                <img src={`${API_BASE}${p.plate_image_url}`} alt="" className="w-20 h-10 object-cover rounded border border-cv-border" />
+              ) : (
+                <div className="w-20 h-10 rounded bg-cv-panel flex items-center justify-center"><Car className="w-5 h-5 text-cv-muted" /></div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-mono font-medium text-cv-fg">{p.plate_number}</p>
+                <p className="text-[11px] text-cv-muted">Confidence: {p.confidence}%</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
