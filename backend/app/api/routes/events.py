@@ -2,6 +2,7 @@ import csv
 import io
 import uuid
 from datetime import datetime
+from pydantic import BaseModel as PydanticBaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
@@ -12,6 +13,59 @@ from app.db.models import ViolationEvent, TrackSession, EventFSMState
 from app.schemas.event import ViolationEventResponse, ViolationEventUpdate, TrackSessionResponse
 
 router = APIRouter(prefix="/events", tags=["events"])
+
+
+class EventPublishRequest(PydanticBaseModel):
+    event_id: str
+    workflow_id: str | None = None
+    workspace_id: str | None = None
+    zone_id: str | None = None
+    camera_id: str | None = None
+    detection_type: str | None = None
+    confidence: float | None = None
+    priority: str | None = None
+    evidence_refs: list[str] = []
+    lpr_result: list | None = None
+    cluster_result: list | None = None
+    analytics_status: str | None = None
+    published_at: str | None = None
+
+
+@router.post("/publish")
+async def publish_event(
+    body: EventPublishRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        event_uuid = uuid.UUID(body.event_id)
+        result = await db.execute(
+            select(ViolationEvent).where(ViolationEvent.id == event_uuid)
+        )
+        event = result.scalar_one_or_none()
+        if event:
+            if body.lpr_result:
+                event.relation_result = {
+                    **(event.relation_result or {}),
+                    "lpr_plates": body.lpr_result,
+                }
+            if body.cluster_result:
+                event.relation_result = {
+                    **(event.relation_result or {}),
+                    "cluster_matches": body.cluster_result,
+                }
+            if body.evidence_refs:
+                event.video_clip_url = event.video_clip_url or next(
+                    (r for r in body.evidence_refs if r.endswith(".mp4")), None
+                )
+                event.snapshot_url = event.snapshot_url or next(
+                    (r for r in body.evidence_refs if r.endswith((".jpg", ".png"))), None
+                )
+            await db.commit()
+            return {"id": str(event.id)}
+    except (ValueError, Exception):
+        pass
+
+    return {"id": body.event_id}
 
 
 @router.get("", response_model=list[ViolationEventResponse])

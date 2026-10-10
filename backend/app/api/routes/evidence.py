@@ -1,19 +1,76 @@
 # backend/app/api/routes/evidence.py
+import hashlib
 import json
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_viewer
-from app.db.models import EvidenceFile
+from app.db.models import EvidenceFile, ViolationEvent
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 
 EVIDENCE_ROOT = Path(os.environ.get("WW_EVIDENCE_DIR", "/app/evidence"))
+
+
+class EvidenceExtractRequest(BaseModel):
+    event_id: str
+    video_ref: str = ""
+    frame_ref: str = ""
+    workspace_id: str | None = None
+    camera_id: str | None = None
+
+
+@router.post("/extract")
+async def extract_evidence(
+    body: EvidenceExtractRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    evidence_refs: list[str] = []
+    timestamps: list[str] = []
+
+    event_uuid = None
+    try:
+        event_uuid = uuid.UUID(body.event_id)
+    except ValueError:
+        pass
+
+    for category in ("violations", "suspicious"):
+        base = EVIDENCE_ROOT / category
+        if not base.exists():
+            continue
+        for path in base.rglob(f"*{body.event_id[:8]}*"):
+            if path.suffix not in (".jpg", ".jpeg", ".png", ".mp4", ".json"):
+                continue
+            existing = await db.execute(
+                select(EvidenceFile).where(EvidenceFile.local_path == str(path))
+            )
+            if existing.scalar_one_or_none():
+                evidence_refs.append(str(path))
+                continue
+            file_type = "video_clip" if path.suffix == ".mp4" else "metadata_json" if path.suffix == ".json" else "snapshot"
+            ef = EvidenceFile(
+                event_id=event_uuid,
+                file_type=file_type,
+                local_path=str(path),
+                checksum=hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+            db.add(ef)
+            evidence_refs.append(str(path))
+            timestamps.append(datetime.now(timezone.utc).isoformat())
+
+    await db.commit()
+    return {
+        "evidence_refs": evidence_refs,
+        "timestamps": timestamps,
+        "integrity": "verified" if evidence_refs else "no_evidence",
+    }
 
 
 @router.get("", response_model=list[dict])

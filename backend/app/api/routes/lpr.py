@@ -1,13 +1,60 @@
 # backend/app/api/routes/lpr.py
 import uuid
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_viewer
-from app.db.models import PlateRead
+from app.db.models import PlateRead, ViolationEvent, TrackSession
 
 router = APIRouter(prefix="/lpr", tags=["lpr"])
+
+
+class LPRAnalyzeRequest(BaseModel):
+    event_id: str
+    evidence_refs: list[str] = []
+    workspace_id: str | None = None
+
+
+@router.post("/analyze")
+async def analyze_lpr(
+    body: LPRAnalyzeRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if not body.evidence_refs:
+        return {"plates": []}
+
+    plates = []
+    try:
+        event_uuid = uuid.UUID(body.event_id)
+        evt_result = await db.execute(
+            select(ViolationEvent).where(ViolationEvent.id == event_uuid)
+        )
+        event = evt_result.scalar_one_or_none()
+        if event and event.track_id:
+            ts_result = await db.execute(
+                select(TrackSession).where(
+                    TrackSession.camera_id == event.camera_id,
+                    TrackSession.track_id == event.track_id,
+                )
+            )
+            track = ts_result.scalar_one_or_none()
+            if track:
+                plate_result = await db.execute(
+                    select(PlateRead).where(PlateRead.track_session_id == track.id)
+                )
+                for p in plate_result.scalars().all():
+                    plates.append({
+                        "plate_number": p.plate_number,
+                        "plate_normalised": p.plate_normalised,
+                        "confidence": p.confidence,
+                        "timestamp": p.timestamp.isoformat(),
+                    })
+    except (ValueError, Exception):
+        pass
+
+    return {"plates": plates}
 
 @router.get("/plates", response_model=list[dict])
 async def list_plates(
