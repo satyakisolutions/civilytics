@@ -138,7 +138,7 @@ class KafkaIntakeService:
                 headers=headers,
                 json={
                     "name": "dumping_event_processing",
-                    "version": 1,
+                    "version": 2,
                     "correlationId": correlation_id,
                     "input": {"event": payload},
                 },

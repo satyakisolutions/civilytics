@@ -1,0 +1,201 @@
+{
+  "name": "dumping_event_processing",
+  "description": "Process a validated dumping event: evidence extraction, LPR, ReID, clustering, analytics, report composition, dispatch, and publication.",
+  "version": 2,
+  "schemaVersion": 2,
+  "tasks": [
+    {
+      "name": "validate_dumping_event",
+      "taskReferenceName": "validate",
+      "type": "SIMPLE",
+      "inputParameters": {
+        "event": "${workflow.input.event}"
+      }
+    },
+    {
+      "name": "extract_evidence",
+      "taskReferenceName": "evidence",
+      "type": "SIMPLE",
+      "inputParameters": {
+        "validated_event": "${validate.output}"
+      }
+    },
+    {
+      "name": "fork_analysis",
+      "taskReferenceName": "fork_analysis",
+      "type": "FORK_JOIN",
+      "forkTasks": [
+        [
+          {
+            "name": "run_lpr_analysis",
+            "taskReferenceName": "lpr",
+            "type": "SIMPLE",
+            "inputParameters": {
+              "event": "${validate.output}",
+              "evidence_refs": "${evidence.output.evidence_refs}"
+            }
+          }
+        ],
+        [
+          {
+            "name": "cluster_subject_sightings",
+            "taskReferenceName": "cluster",
+            "type": "SIMPLE",
+            "inputParameters": {
+              "event": "${validate.output}",
+              "evidence_refs": "${evidence.output.evidence_refs}"
+            }
+          }
+        ],
+        [
+          {
+            "name": "reid_analyze",
+            "taskReferenceName": "reid",
+            "type": "SIMPLE",
+            "inputParameters": {
+              "event": "${validate.output}",
+              "evidence_refs": "${evidence.output.evidence_refs}"
+            },
+            "optional": true
+          }
+        ],
+        [
+          {
+            "name": "vlm_describe",
+            "taskReferenceName": "vlm",
+            "type": "SIMPLE",
+            "inputParameters": {
+              "event": "${validate.output}",
+              "evidence_refs": "${evidence.output.evidence_refs}"
+            },
+            "optional": true
+          }
+        ]
+      ]
+    },
+    {
+      "name": "join_analysis",
+      "taskReferenceName": "join_analysis",
+      "type": "JOIN",
+      "joinOn": ["lpr", "cluster", "reid", "vlm"]
+    },
+    {
+      "name": "update_analytics",
+      "taskReferenceName": "analytics",
+      "type": "SIMPLE",
+      "inputParameters": {
+        "event": "${validate.output}",
+        "lpr_result": "${lpr.output}",
+        "cluster_result": "${cluster.output}"
+      }
+    },
+    {
+      "name": "compose_incident_report",
+      "taskReferenceName": "compose",
+      "type": "SIMPLE",
+      "inputParameters": {
+        "event": "${validate.output}",
+        "evidence_refs": "${evidence.output.evidence_refs}",
+        "lpr_result": "${lpr.output}",
+        "cluster_result": "${cluster.output}",
+        "reid_result": "${reid.output}",
+        "vlm_result": "${vlm.output}"
+      }
+    },
+    {
+      "name": "publish_event_record",
+      "taskReferenceName": "publish",
+      "type": "SIMPLE",
+      "inputParameters": {
+        "event": "${validate.output}",
+        "evidence_refs": "${evidence.output.evidence_refs}",
+        "lpr_result": "${lpr.output}",
+        "cluster_result": "${cluster.output}",
+        "report": "${compose.output.report}"
+      }
+    },
+    {
+      "name": "fork_dispatch",
+      "taskReferenceName": "fork_dispatch",
+      "type": "FORK_JOIN",
+      "forkTasks": [
+        [
+          {
+            "name": "dispatch_telegram",
+            "taskReferenceName": "tg",
+            "type": "SIMPLE",
+            "inputParameters": {
+              "event": "${publish.output}"
+            },
+            "optional": true
+          }
+        ],
+        [
+          {
+            "name": "dispatch_email",
+            "taskReferenceName": "email",
+            "type": "SIMPLE",
+            "inputParameters": {
+              "event": "${publish.output}"
+            },
+            "optional": true
+          }
+        ],
+        [
+          {
+            "name": "dispatch_whatsapp",
+            "taskReferenceName": "wa",
+            "type": "SIMPLE",
+            "inputParameters": {
+              "event": "${publish.output}"
+            },
+            "optional": true
+          }
+        ],
+        [
+          {
+            "name": "dispatch_ip_speaker",
+            "taskReferenceName": "speaker",
+            "type": "SIMPLE",
+            "inputParameters": {
+              "event": "${publish.output}"
+            },
+            "optional": true
+          }
+        ],
+        [
+          {
+            "name": "dispatch_sip",
+            "taskReferenceName": "sip",
+            "type": "SIMPLE",
+            "inputParameters": {
+              "event": "${publish.output}"
+            },
+            "optional": true
+          }
+        ]
+      ]
+    },
+    {
+      "name": "join_dispatch",
+      "taskReferenceName": "join_dispatch",
+      "type": "JOIN",
+      "joinOn": ["tg", "email", "wa", "speaker", "sip"]
+    }
+  ],
+  "failureWorkflow": "dumping_event_failure_handler",
+  "outputParameters": {
+    "event_id": "${validate.output.event_id}",
+    "evidence_count": "${evidence.output.evidence_count}",
+    "lpr": "${lpr.output}",
+    "cluster": "${cluster.output}",
+    "report": "${compose.output.report}",
+    "dispatch_results": {
+      "telegram": "${tg.output}",
+      "email": "${email.output}",
+      "whatsapp": "${wa.output}",
+      "ip_speaker": "${speaker.output}",
+      "sip": "${sip.output}"
+    }
+  }
+}

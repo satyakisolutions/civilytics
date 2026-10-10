@@ -15,6 +15,11 @@ from workers.tasks.publish_event import handle_publish_event
 from workers.tasks.notify_failure import handle_notify_failure
 from workers.tasks.dispatch_telegram import handle_dispatch_telegram
 from workers.tasks.dispatch_email import handle_dispatch_email
+from workers.tasks.cleanup_retention import handle_cleanup_retention
+from workers.tasks.compose_report import handle_compose_report
+from workers.tasks.dispatch_ip_speaker import handle_dispatch_ip_speaker
+from workers.tasks.dispatch_whatsapp import handle_dispatch_whatsapp
+from workers.tasks.dispatch_sip import handle_dispatch_sip
 from workers.intake.kafka_consumer import KafkaIntakeService
 
 structlog.configure(
@@ -38,6 +43,11 @@ TASK_HANDLERS = [
     ("notify_workflow_failure", handle_notify_failure),
     ("dispatch_telegram", handle_dispatch_telegram),
     ("dispatch_email", handle_dispatch_email),
+    ("compose_incident_report", handle_compose_report),
+    ("cleanup_retention", handle_cleanup_retention),
+    ("dispatch_ip_speaker", handle_dispatch_ip_speaker),
+    ("dispatch_whatsapp", handle_dispatch_whatsapp),
+    ("dispatch_sip", handle_dispatch_sip),
 ]
 
 
