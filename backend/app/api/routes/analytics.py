@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
-from app.auth.middleware import require_viewer
+from app.auth.middleware import require_viewer, require_admin
 from app.analytics.aggregator import get_summary, get_hourly_stats, get_daily_trend, get_by_zone, get_by_camera, get_heatmap, get_daily_by_category
 from app.config.settings import settings as app_settings
 
@@ -28,6 +28,7 @@ class AnalyticsUpsertRequest(BaseModel):
 async def upsert_analytics(
     body: AnalyticsUpsertRequest,
     db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_admin),
 ):
     import redis.asyncio as aioredis
 

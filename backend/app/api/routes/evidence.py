@@ -31,6 +31,7 @@ class EvidenceExtractRequest(BaseModel):
 async def extract_evidence(
     body: EvidenceExtractRequest,
     db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_admin),
 ):
     evidence_refs: list[str] = []
     timestamps: list[str] = []

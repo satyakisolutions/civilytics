@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
-from app.auth.middleware import require_viewer
+from app.auth.middleware import require_viewer, require_admin
 from app.db.models import PlateRead, ViolationEvent, TrackSession
 
 router = APIRouter(prefix="/lpr", tags=["lpr"])
@@ -21,6 +21,7 @@ class LPRAnalyzeRequest(BaseModel):
 async def analyze_lpr(
     body: LPRAnalyzeRequest,
     db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_admin),
 ):
     if not body.evidence_refs:
         return {"plates": []}

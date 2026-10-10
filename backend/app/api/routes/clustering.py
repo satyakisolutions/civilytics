@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
+from app.auth.middleware import require_admin
 from app.db.models import ViolationEvent
 
 router = APIRouter(prefix="/clustering", tags=["clustering"])
@@ -22,6 +23,7 @@ class ClusterAnalyzeRequest(BaseModel):
 async def analyze_clusters(
     body: ClusterAnalyzeRequest,
     db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_admin),
 ):
     # ponytail: temporal proximity only; CLIP+Qdrant when ReID service lands
     match_groups = []

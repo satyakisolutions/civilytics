@@ -35,6 +35,7 @@ class EventPublishRequest(PydanticBaseModel):
 async def publish_event(
     body: EventPublishRequest,
     db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_admin),
 ):
     try:
         event_uuid = uuid.UUID(body.event_id)
