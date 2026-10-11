@@ -1,6 +1,7 @@
 """VLM client — in-process SmolVLM2 inference (no external server)."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import logging
@@ -127,16 +128,19 @@ class VLMClient:
         inputs = self._processor(text=prompt, images=images, return_tensors="pt").to(self._model.device)
 
         try:
-            with torch.inference_mode():
-                output_ids = self._model.generate(
-                    **inputs,
-                    max_new_tokens=settings.vlm_max_tokens,
-                    temperature=settings.vlm_temperature,
-                    do_sample=settings.vlm_temperature > 0,
-                )
-            # Decode only new tokens
-            generated = output_ids[0, inputs["input_ids"].shape[1]:]
-            return self._processor.decode(generated, skip_special_tokens=True)
+            return await asyncio.to_thread(self._generate_sync, inputs)
         except Exception as exc:
             logger.error("SmolVLM2 inference failed: %s", exc)
             return None
+
+    def _generate_sync(self, inputs) -> str:
+        """Blocking inference — runs in a thread to avoid stalling the event loop."""
+        with torch.inference_mode():
+            output_ids = self._model.generate(
+                **inputs,
+                max_new_tokens=settings.vlm_max_tokens,
+                temperature=settings.vlm_temperature,
+                do_sample=settings.vlm_temperature > 0,
+            )
+        generated = output_ids[0, inputs["input_ids"].shape[1]:]
+        return self._processor.decode(generated, skip_special_tokens=True)
