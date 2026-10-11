@@ -44,7 +44,6 @@ from app.db.models import (
     EvidenceFile,
     PlateRead,
     ViolationEvent,
-    VLMAnalysis,
     SystemConfig,
 )
 

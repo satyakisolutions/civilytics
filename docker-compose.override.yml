@@ -1,88 +1,45 @@
-# Local override: wires up an RTSP file-simulator sidecar that publishes
-# the 6 sample videos from sample_videos/ into the LSG mediamtx service as
-# rtsp://mediamtx:8554/cam-01 ... cam-06. Loops forever.
-#
-# This pattern is borrowed from Satyaki StreamingScripts/rtsp-streamer but
-# adapted to publish INTO the existing LSG mediamtx instead of standing up
-# a separate rtsp-simple-server.
-#
-# Not tracked by git in upstream; feel free to commit or ignore locally.
+# Local dev overrides: bind-mount pipeline source for hot-reload,
+# frontend dev server, history-publisher as pipeline profile.
 
 services:
-  # NOTE: host-port remap for api is done in docker-compose.yml directly
-  # because Compose merge semantics make !reset unreliable across versions.
-
-  # Bind-mount the pipeline models dir so ONNX changes on the host are
-  # picked up without having to rebuild the 30 GB DeepStream image.
+  # Bind-mount pipeline source so changes are picked up without rebuild.
   pipeline:
     volumes:
       - ./pipeline/models:/app/models:rw
       - ./pipeline/configs:/app/configs:rw
       - ./pipeline/app:/app/app:rw
       - ./scripts:/scripts:ro
+      - ./sample_videos:/videos:ro
+      - ./local-config:/config:ro
+      - ./pipeline/plugins/gstwastewatchvlmpublisher:/app/plugins/gstwastewatchvlmpublisher:ro
     environment:
-      # Comma-separated list of `cam-id=rtsp://...` pairs. Left empty --
-      # the actual test camera ("Entry", UUID 46230f99-...) is registered
-      # dynamically via the backend DB and carries the real ROI polygon;
-      # a static cam-01/cam-02 entry here has no ROI at all, so nothing
-      # can ever reach ENTER/VIOLATION on it (confirmed: zero FSM
-      # transitions for an entire test run while this was set).
       WW_SOURCES: ""
-      # Diagnostic: force nvinfer debug to level 5 so we can see parse
-      # function resolution, custom-lib loading, and per-batch object
-      # counts in the container logs.
       GST_DEBUG: "nvinfer:4"
+      # History publisher env (used when running with --profile history)
+      HISTORY_VIDEO_DIR: /videos
+      HISTORY_KAFKA_BOOTSTRAP: kafka:9092
+      HISTORY_VLM_TOPIC: wastewatch.vlm.requests
+      HISTORY_CAMERA_ID: 6c12c568-745c-4875-a1e6-7ef1f7d00fd4
+      HISTORY_ZONE_NAME: Lake Shore Gardens - Block 1
+      HISTORY_SAMPLE_COUNT: "6"
+      HISTORY_FRAME_WIDTH: "512"
+      HISTORY_SESSION_MAP: /config/session-map.json
 
-  # One-shot ONNX -> TRT engine converter. Reuses the pipeline image
-  # (has CUDA + trtexec + our onnx/onnxsim/onnx_graphsurgeon pins).
-  # Runs as root so it can write sanitised ONNX back to the bind-mounted
-  # models dir regardless of host uid; the long-running pipeline service
-  # keeps its non-root `appuser` identity untouched.
-  # Usage:
-  #   docker compose run --rm onnx-to-engine              # all models
-  #   docker compose run --rm onnx-to-engine rfdetr       # just RF-DETR
-  #   docker compose run --rm onnx-to-engine --force      # rebuild existing
-  onnx-to-engine:
-    build:
-      context: ./pipeline
-    image: lsg-wastewatch-pipeline
-    container_name: lsg-onnx-to-engine
-    user: "0:0"
-    volumes:
-      - ./pipeline/models:/app/models:rw
-      - ./pipeline/configs:/app/configs:ro
-      - ./scripts:/scripts:ro
-    entrypoint: ["python3", "-u", "/scripts/onnx_to_engine.py"]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: "no"
-
-  # One-shot container that replays recorded clips through a GStreamer
-  # pipeline ending in the custom `wastewatchvlmpublisher` sink, which
-  # publishes one VLMRequest per clip into Kafka for the VLM worker to
-  # consume. Reuses the existing pipeline image so all deps come from
-  # pipeline/requirements.txt — nothing is installed on the host.
+  # One-shot history replay — run with:
+  #   docker compose run --rm history-publisher
   history-publisher:
     build:
       context: ./pipeline
     image: lsg-wastewatch-pipeline
     container_name: lsg-history-publisher
+    profiles: ["history"]
     depends_on:
       kafka:
         condition: service_healthy
-      api:
-        condition: service_started
     volumes:
       - ./sample_videos:/videos:ro
       - ./local-config:/config:ro
       - ./pipeline/plugins/gstwastewatchvlmpublisher:/app/plugins/gstwastewatchvlmpublisher:ro
-      # Mount the harness script so iterating is a container restart,
-      # not an image rebuild.
       - ./pipeline/app/history_publisher.py:/app/app/history_publisher.py:ro
     environment:
       HISTORY_VIDEO_DIR: /videos
@@ -93,24 +50,13 @@ services:
       HISTORY_SAMPLE_COUNT: "6"
       HISTORY_FRAME_WIDTH: "512"
       HISTORY_SESSION_MAP: /config/session-map.json
-      # GStreamer needs to discover our python plugin — set both the
-      # plugin path (libgstpython.so scans $GST_PLUGIN_PATH/python/) and
-      # drop the registry into a writable location.
       GST_PLUGIN_PATH: /app/plugins/gstwastewatchvlmpublisher
       GST_REGISTRY: /tmp/gst-registry.bin
       GST_DEBUG: "2"
     entrypoint: ["python3", "-u", "app/history_publisher.py"]
     restart: "no"
 
-  # ──────────────────────────────────────────────────────────────
   # Frontend dev server (Vite + React + shadcn/ui)
-  # ──────────────────────────────────────────────────────────────
-  # Runs `npm run dev` inside a node:20-alpine container, binding
-  # the frontend/ source as a read-write mount so HMR picks up
-  # host edits live. Host port 5174 because 8080 (vite's default)
-  # and 5173 are already in use on this workstation. API/WS URLs
-  # point at the LSG API remapped to host 8082; mediamtx stays on
-  # its native 8889 (WebRTC) / 8554 (RTSP).
   frontend:
     image: node:20-alpine
     container_name: lsg-frontend-dev
@@ -122,27 +68,5 @@ services:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      # Intentionally NOT setting VITE_API_URL / VITE_WS_URL /
-      # VITE_MEDIAMTX_URL here. The frontend's src/lib/api-base.ts
-      # auto-derives those from window.location.hostname so that
-      # opening the app at http://localhost:5174 and at
-      # http://192.168.1.8:5174 both resolve to the correct backend
-      # and MediaMTX endpoints without a config edit.
       CHOKIDAR_USEPOLLING: "true"
-    restart: unless-stopped
-
-  rtsp-streamer:
-    image: jrottenberg/ffmpeg:6-alpine
-    container_name: lsg-rtsp-streamer
-    depends_on:
-      mediamtx:
-        condition: service_started
-    volumes:
-      - ./sample_videos:/videos:ro
-    entrypoint: ["/bin/sh", "/videos/stream.sh"]
-    environment:
-      MEDIAMTX_HOST: mediamtx
-      MEDIAMTX_PORT: "8554"
-      VIDEO_DIR: /videos
-      LSG_LIVE_SRC_2: VID-20260131-WA0006.mp4
     restart: unless-stopped

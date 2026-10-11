@@ -47,7 +47,6 @@ from app.preprocessor import ROIPreprocessor
 from app.roi import ROIManager
 from app.source_manager import SourceManager
 from app.tracking import TrackStateManager
-from app.vlm_grpc_client import VLMGrpcClient
 
 logging.basicConfig(
     level=getattr(logging, os.environ.get("WW_LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -2818,7 +2817,6 @@ def main() -> None:
     stage_timestamps: dict[tuple, dict[str, float]] = {}
 
     kafka_producer = PipelineKafkaProducer()
-    vlm_client = VLMGrpcClient()
     health = CameraHealth(timeout_s=30.0)
     source_manager = SourceManager(pipeline, streammux)
 
@@ -2909,7 +2907,6 @@ def main() -> None:
 
         probe_ctx = {
             "kafka_producer": kafka_producer,
-            "vlm_client": vlm_client,
             "health": health,
             "track_manager": track_manager,
             "roi_manager": roi_manager,

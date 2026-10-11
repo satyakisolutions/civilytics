@@ -1,23 +1,12 @@
 # backend/services/combined_workers/main.py
-"""Runs alerts, sip, evidence, health_monitor, logs, reports, lpr, and
-healer as one process instead of eight separate containers.
+"""Combined backend workers — all lightweight Kafka/Redis/gRPC consumers
+in one process.
 
-All eight are lightweight Kafka/Redis consumers built from the same
-./backend image with no real resource isolation need between them
-(unlike vlm-worker/vlm, which are GPU-bound and stay separate) -- one
-process just means one less container to schedule/monitor for the same
-work.
-
-ponytail: each service's own main() still registers its own SIGTERM/
-SIGINT handlers via loop.add_signal_handler on the SAME signal -- only
-the last-registered handler per signal actually fires, so most workers
-won't see a graceful-shutdown signal here (asyncio.gather itself is
-untouched, tasks just don't get their internal `shutdown.wait()` woken).
-In practice this only affects shutdown niceness: Docker's stop sequence
-(SIGTERM, wait, SIGKILL) still terminates the process either way. Fix
-properly if graceful per-worker shutdown ever matters here: give each
-service's main() an optional external `shutdown: asyncio.Event`
-parameter instead of creating its own internal one.
+ponytail: each service's own main() registers its own SIGTERM/SIGINT
+handlers via loop.add_signal_handler on the SAME signal — only the
+last-registered handler per signal actually fires. In practice this only
+affects shutdown niceness: Docker's stop sequence (SIGTERM, wait, SIGKILL)
+still terminates the process either way.
 """
 import asyncio
 import logging
@@ -32,6 +21,8 @@ from services.lpr.main import main as lpr_main
 from services.healer.main import _main as healer_main
 from services.analytics.main import main as analytics_main
 from services.alert_delivery.main import main as alert_delivery_main
+from services.vlm.main import main as vlm_main
+from services.tts.main import main as tts_main
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +37,8 @@ WORKERS = {
     "healer": healer_main,
     "analytics": analytics_main,
     "alert_delivery": alert_delivery_main,
+    "vlm": vlm_main,
+    "tts": tts_main,
 }
 
 
