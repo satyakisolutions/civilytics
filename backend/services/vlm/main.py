@@ -1,16 +1,15 @@
 # Copyright (c) 2024-2026 Satyaki Solutions Pvt Ltd. All rights reserved.
 """VLM Analysis Microservice — Qwen2.5-VL-7B waste dumping confirmation.
 
-Entry path: gRPC :50061 (`wastewatch.vlm.v1.VLMService/Analyze`).
-Result path: Kafka `wastewatch.vlm.results` (unchanged, so alert_consumer
-and other subscribers work as before).
+Consumes: wastewatch.vlm.requests (Kafka)
+Produces: wastewatch.vlm.results (Kafka)
 """
 import asyncio
 import logging
-import os
 import signal
 
-from app.vlm.grpc_server import serve
+from app.vlm.worker import VLMWorker
+from app.config.settings import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,27 +19,22 @@ logger = logging.getLogger("wastewatch.vlm-service")
 
 
 async def main() -> None:
-    port = int(os.environ.get("WW_VLM_GRPC_PORT", "50061"))
-    logger.info("Starting VLM Analysis Service (gRPC on :%d)", port)
-    logger.info("Result topic: wastewatch.vlm.results")
+    logger.info("Starting VLM Analysis Service (Kafka consumer)")
 
-    serve_task = asyncio.create_task(serve(port=port))
+    worker = VLMWorker(bootstrap_servers=settings.kafka_bootstrap_servers)
+    await worker.start()
 
     shutdown = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, shutdown.set)
 
-    logger.info("VLM service ready — waiting for RPCs")
+    logger.info("VLM service ready — consuming wastewatch.vlm.requests")
     try:
         await shutdown.wait()
     finally:
         logger.info("Shutting down VLM service")
-        serve_task.cancel()
-        try:
-            await serve_task
-        except asyncio.CancelledError:
-            pass
+        await worker.stop()
         logger.info("VLM service stopped")
 
 

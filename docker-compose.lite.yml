@@ -95,41 +95,6 @@ services:
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
     restart: unless-stopped
 
-  vlm-worker:
-    build:
-      context: ./backend
-    env_file:
-      - .env
-    environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_VLM_BASE_URL: http://vlm:8000/v1
-      WW_VLM_GRPC_PORT: "50061"
-    depends_on:
-      kafka:
-        condition: service_healthy
-    ports:
-      - "50061:50061"
-    command: ["python3", "-m", "services.vlm.main"]
-    restart: unless-stopped
-
-  tts-worker:
-    build:
-      context: ./backend
-    env_file:
-      - .env
-    environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_TTS_LANG: en
-    depends_on:
-      kafka:
-        condition: service_healthy
-    volumes:
-      - tts_data:/tmp/wastewatch/tts
-      - ./backend/models/piper:/tmp/piper_voices:ro
-      - pipeline_models:/models:ro
-    command: ["python3", "-m", "services.tts.main"]
-    restart: unless-stopped
-
   backend-workers:
     build:
       context: ./backend
@@ -150,6 +115,8 @@ services:
         condition: service_healthy
     volumes:
       - evidence_data:/tmp/wastewatch/evidence
+      - tts_data:/tmp/wastewatch/tts
+      - ./backend/models/piper:/tmp/piper_voices:ro
     ports:
       - "9100:9100"
     command: ["python3", "-m", "services.combined_workers.main"]
@@ -165,7 +132,6 @@ services:
       WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
       WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
       WW_EVIDENCE_DIR: /app/evidence
-      WW_VLM_GRPC_TARGET: vlm-worker:50061
       WW_USE_SEG_MODEL: ${WW_USE_SEG_MODEL:-1}
     volumes:
       - evidence_data:/app/evidence
@@ -203,16 +169,6 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
 
-  tts:
-    image: python:3.11-slim
-    command: >
-      bash -c "pip install piper-tts && python -m http.server 8100"
-    ports:
-      - "8100:8100"
-    volumes:
-      - tts_data:/tmp/wastewatch/tts
-    restart: unless-stopped
-
   frontend:
     image: node:20-alpine
     working_dir: /app
@@ -226,25 +182,9 @@ services:
       CHOKIDAR_USEPOLLING: "true"
     restart: unless-stopped
 
-  rtsp-streamer:
-    image: jrottenberg/ffmpeg:6-alpine
-    depends_on:
-      mediamtx:
-        condition: service_started
-    volumes:
-      - ./sample_videos:/videos:ro
-    entrypoint: ["/bin/sh", "/videos/stream.sh"]
-    environment:
-      MEDIAMTX_HOST: mediamtx
-      MEDIAMTX_PORT: "8554"
-      VIDEO_DIR: /videos
-      LSG_LIVE_SRC: VID-20260131-WA0010.mp4
-    restart: unless-stopped
-
 volumes:
   postgres_data:
   kafka_data:
   redis_data:
   tts_data:
   evidence_data:
-  pipeline_models:
