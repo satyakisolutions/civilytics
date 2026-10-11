@@ -12,8 +12,6 @@ httpx==0.28.1
 numpy==1.26.4
 # Pillow for capture_frame_probe — converts RGBA raw → JPEG for VLM.
 Pillow>=10.0.0
-# gRPC client for synchronous VLM trigger (replaces Kafka vlm.requests).
-grpcio>=1.66.0
 # CommandReceiver's Redis pub/sub subscriber (backend -> pipeline control
 # channel: add/remove/update camera, clear violation, etc). Was previously
 # unused because CommandReceiver was never wired into pipeline.py's main().

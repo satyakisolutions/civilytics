@@ -122,9 +122,9 @@ services:
     restart: unless-stopped
 
   # ── Combined Backend Workers ───────────────────────────────────
-  # All Kafka/Redis/gRPC consumers in one process: alerts, sip, evidence,
+  # All Kafka/Redis consumers in one process: alerts, sip, evidence,
   # health_monitor, logs, reports, lpr, healer, analytics, alert_delivery,
-  # vlm (gRPC server), and tts.
+  # vlm, and tts.
   backend-workers:
     build:
       context: ./backend

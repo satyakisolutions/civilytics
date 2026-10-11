@@ -1,5 +1,5 @@
 # backend/services/combined_workers/main.py
-"""Combined backend workers — all lightweight Kafka/Redis/gRPC consumers
+"""Combined backend workers — all lightweight Kafka/Redis consumers
 in one process.
 
 ponytail: each service's own main() registers its own SIGTERM/SIGINT
