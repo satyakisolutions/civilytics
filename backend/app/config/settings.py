@@ -11,9 +11,10 @@ class Settings(BaseSettings):
     api_port: int = 8080
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:8080"]
 
-    vlm_model: str = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
+    vlm_model: str = "LiquidAI/LFM2.5-VL-1.6B"
     vlm_max_tokens: int = 512
     vlm_temperature: float = 0.1
+    vlm_max_image_px: int = 512
 
     telegram_bot_token: str = ""
     telegram_chat_ids: list[str] = []

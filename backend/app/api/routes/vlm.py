@@ -1,5 +1,5 @@
 # backend/app/api/routes/vlm.py
-"""VLM — scene description via vLLM-hosted vision model."""
+"""VLM — in-process vision-language model inference."""
 import base64
 import logging
 from pathlib import Path
@@ -34,6 +34,13 @@ class VLMDescribeRequest(BaseModel):
     event_id: str
     evidence_refs: list[str] = []
     workspace_id: str | None = None
+
+
+class VLMAnalyzeRequest(BaseModel):
+    frames_base64: list[str]
+    camera_id: str = "review-ui"
+    zone_name: str = ""
+    class_name: str = "unknown"
 
 
 @router.post("/describe")
@@ -84,3 +91,49 @@ async def describe_scene(
     except Exception as e:
         logger.error("VLM describe failed: %s", e)
         return {"description": "", "model": settings.vlm_model, "status": "error", "message": str(e)[:200]}
+
+
+@router.post("/analyze")
+async def analyze_frame(
+    body: VLMAnalyzeRequest,
+    _user: dict = Depends(require_admin),
+):
+    """Direct frame analysis for the review UI — accepts base64 images, returns full VLM result."""
+    if not body.frames_base64:
+        return {"status": "no_images", "model": settings.vlm_model}
+
+    client = _get_vlm()
+    if client is None:
+        return {"status": "service_unavailable", "model": settings.vlm_model}
+
+    try:
+        from app.vlm.schemas import VLMRequest
+        request = VLMRequest(
+            camera_id=body.camera_id, track_id=0, track_session_id="review",
+            zone_name=body.zone_name, dwell_time_s=0, class_name=body.class_name,
+            path_summary="", frame_timestamps=[0.0] * len(body.frames_base64),
+            frames_base64=body.frames_base64,
+        )
+        result = await client.analyze(request)
+        if result and result.response:
+            return {
+                "status": "ok",
+                "model": result.model_version,
+                "inference_time_ms": result.inference_time_ms,
+                "frames_analyzed": result.frames_analyzed,
+                "response": {
+                    "person_description": result.response.person_description,
+                    "action": result.response.action,
+                    "is_dumping": result.response.is_dumping,
+                    "waste_type": result.response.waste_type.value,
+                    "severity": result.response.severity.value,
+                    "confidence": result.response.confidence,
+                    "reasoning": result.response.reasoning,
+                    "command": result.response.command,
+                    "deterrent_message": result.response.deterrent_message,
+                },
+            }
+        return {"status": "no_response", "model": settings.vlm_model}
+    except Exception as e:
+        logger.error("VLM analyze failed: %s", e)
+        return {"status": "error", "model": settings.vlm_model, "message": str(e)[:200]}

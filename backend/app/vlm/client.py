@@ -1,4 +1,4 @@
-"""VLM client — in-process SmolVLM2 inference (no external server)."""
+"""VLM client — in-process inference (no external server)."""
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +10,7 @@ from typing import Optional
 
 import torch
 from PIL import Image
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from app.config.settings import settings
 from app.vlm.prompts import build_prompt
@@ -22,7 +22,7 @@ _STRICT_SUFFIX = "\n\nRespond with ONLY valid JSON. No markdown, no explanation.
 
 
 class VLMClient:
-    """Runs SmolVLM2 in-process for frame analysis."""
+    """Runs VLM in-process for frame analysis."""
 
     def __init__(self) -> None:
         self._model = None
@@ -31,14 +31,14 @@ class VLMClient:
     def _ensure_loaded(self) -> None:
         if self._model is not None:
             return
-        logger.info("Loading SmolVLM2 model: %s", settings.vlm_model)
+        logger.info("Loading VLM model: %s", settings.vlm_model)
         self._processor = AutoProcessor.from_pretrained(settings.vlm_model)
-        self._model = AutoModelForVision2Seq.from_pretrained(
+        self._model = AutoModelForImageTextToText.from_pretrained(
             settings.vlm_model,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             device_map="auto",
         )
-        logger.info("SmolVLM2 loaded")
+        logger.info("VLM loaded — VRAM: %.1fGB", torch.cuda.memory_allocated() / 1024**3 if torch.cuda.is_available() else 0)
 
     async def analyze(self, request: VLMRequest) -> Optional[VLMResult]:
         start = time.monotonic()
@@ -104,12 +104,14 @@ class VLMClient:
     async def _call_vlm(
         self, system_prompt: str, frames_base64: list[str]
     ) -> Optional[str]:
-        """Run SmolVLM2 inference in-process."""
+        """Run VLM inference in-process."""
         self._ensure_loaded()
 
+        max_px = settings.vlm_max_image_px
         images = []
         for b64 in frames_base64:
             img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+            img.thumbnail((max_px, max_px))
             images.append(img)
 
         if len(frames_base64) >= 2:
@@ -117,7 +119,6 @@ class VLMClient:
         else:
             user_text = "Analyse this frame. Focus on the object at the trigger location mentioned in the system prompt. Describe it and generate a deterrent_message addressing it specifically."
 
-        # Build chat messages for SmolVLM2
         image_tokens = [{"type": "image"} for _ in images]
         messages = [
             {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
@@ -130,7 +131,7 @@ class VLMClient:
         try:
             return await asyncio.to_thread(self._generate_sync, inputs)
         except Exception as exc:
-            logger.error("SmolVLM2 inference failed: %s", exc)
+            logger.error("VLM inference failed: %s", exc)
             return None
 
     def _generate_sync(self, inputs) -> str:

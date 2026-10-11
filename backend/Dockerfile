@@ -1,9 +1,14 @@
-FROM python:3.12-slim
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir uv
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv python3-dev ffmpeg \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --break-system-packages uv
 COPY pyproject.toml .
-RUN uv pip install --system -e .
+RUN uv pip install --system --break-system-packages -e .
 COPY . .
 
 RUN adduser --disabled-password --gecos "" appuser \
