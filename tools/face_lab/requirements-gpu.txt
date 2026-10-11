@@ -1,8 +1,0 @@
-# GPU inference on Windows (any DirectX 12 GPU: NVIDIA / AMD / Intel), no CUDA install needed.
-# Replaces the CPU onnxruntime package -- the two cannot be installed side by side:
-#   .venv/Scripts/python -m pip uninstall -y onnxruntime
-#   .venv/Scripts/python -m pip install -r requirements-gpu.txt
-numpy>=1.26
-onnxruntime-directml>=1.20
-opencv-python>=4.10
-pytest>=8.3

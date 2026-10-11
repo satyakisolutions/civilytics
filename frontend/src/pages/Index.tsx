@@ -3,7 +3,6 @@ import { MainLayout } from '@/components/layout/MainLayout';
 import { MonitoringView } from '@/components/views/MonitoringView';
 import { AnalyticsView } from '@/components/views/AnalyticsView';
 import { HistoryView } from '@/components/views/HistoryView';
-import { SubjectsView } from '@/components/views/SubjectsView';
 import { CameraManagementView } from '@/components/views/CameraManagementView';
 import { SettingsView } from '@/components/views/SettingsView';
 import { MapView } from '@/components/views/MapView';
@@ -19,7 +18,6 @@ function DashboardContent() {
       {currentView === 'map' && <MapView />}
       {currentView === 'analytics' && <AnalyticsView />}
       {currentView === 'history' && <HistoryView />}
-      {currentView === 'subjects' && <SubjectsView />}
       {currentView === 'timeline' && <TimelineView />}
       {currentView === 'cameras' && <CameraManagementView />}
       {currentView === 'billing' && <BillingView />}

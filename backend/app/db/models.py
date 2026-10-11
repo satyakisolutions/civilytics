@@ -3,8 +3,6 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    JSON,
-    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -13,11 +11,9 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    LargeBinary,
     String,
     Text,
     UniqueConstraint,
-    Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -363,9 +359,6 @@ class Alert(Base):
     # mount) of the frame this alert fired on. Set by alert_consumer.py
     # from the pipeline's send_alert(..., snapshot_url=...) payload.
     snapshot_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Pipeline-minted id shared by the alert and its face request
-    # (wastewatch.faces.requests); GET /api/alerts joins subject data on it.
-    incident_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -560,108 +553,3 @@ class LogEntry(Base):
     meta: Mapped[dict | None] = mapped_column("metadata", JSONB)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-# ── Face-based subject IDs (docs/superpowers/specs/2026-09-29-face-subject-id-design.md) ──
-# Generic Uuid/JSON types (not postgresql.*) so the service layer is testable on SQLite.
-
-
-def subject_code(code_num: int) -> str:
-    return f"S-{code_num:03d}"
-
-
-class Subject(Base):
-    """Anonymous person involved in >= 1 violation. Never has a name."""
-    __tablename__ = "subjects"
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    code_num: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")  # active | merged
-    merged_into_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("subjects.id", ondelete="SET NULL"), nullable=True
-    )
-    incident_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    cover_face_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-    @property
-    def code(self) -> str:
-        return subject_code(self.code_num)
-
-
-class SubjectFace(Base):
-    __tablename__ = "subject_faces"
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)  # = Qdrant point id
-    subject_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    incident_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
-    crop_path: Mapped[str] = mapped_column(Text, nullable=False)
-    quality: Mapped[float] = mapped_column(Float, nullable=False)
-    embedding: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)  # 512 x float32
-    qdrant_synced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-
-class SubjectIncident(Base):
-    __tablename__ = "subject_incidents"
-    incident_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    subject_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    camera_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    match_type: Mapped[str] = mapped_column(String(16), nullable=False)  # new | auto | review_merged | detached
-    similarity: Mapped[float | None] = mapped_column(Float, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-
-class FaceIncident(Base):
-    """One row per processed face request (matched, no_face or deleted)."""
-    __tablename__ = "face_incidents"
-    incident_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    status: Mapped[str] = mapped_column(String(16), nullable=False)  # matched | no_face | deleted
-    camera_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-
-class SubjectMatchReview(Base):
-    __tablename__ = "subject_match_reviews"
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    incident_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-    new_subject_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    candidate_subject_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    similarity: Mapped[float] = mapped_column(Float, nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")  # pending | merged | rejected | obsolete
-    decided_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-
-class SubjectAccessLog(Base):
-    __tablename__ = "subject_access_log"
-    id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
-    )
-    subject_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)  # no FK: outlives deletion
-    action: Mapped[str] = mapped_column(String(32), nullable=False)
-    actor: Mapped[str] = mapped_column(String(255), nullable=False)
-    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

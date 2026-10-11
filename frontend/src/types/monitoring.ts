@@ -67,13 +67,6 @@ export interface Alert {
   cameraId: string;
   zone: string;
   ttsAudioUrl?: string;
-  // Face subject badge fields from GET /api/alerts (face subject-ID feature).
-  incidentId?: string;
-  faceStatus?: 'matched' | 'no_face' | 'deleted' | null;
-  subjectId?: string;
-  subjectCode?: string;
-  subjectIncidentCount?: number;
-  subjectReviewPending?: boolean;
 }
 
 export interface AnalyticsData {

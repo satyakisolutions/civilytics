@@ -1,7 +1,4 @@
 import uuid
-from dataclasses import asdict
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,22 +6,8 @@ from app.api.deps import get_db
 from app.auth.middleware import require_viewer, require_admin
 from app.db.models import Alert, AlertStatus
 from app.schemas.alert import AlertResponse, AlertAcknowledge
-from app.subjects.queries import alert_badges
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
-
-# An alert whose face incident has no result this long after firing is shown
-# as "Face not captured" (request lost, pipeline restarted, worker down, ...),
-# so every alert reaches a final badge state.
-FACE_RESULT_TIMEOUT_S = 120
-
-
-def _face_result_timed_out(ts: datetime | None, now: datetime) -> bool:
-    if ts is None:
-        return False
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return (now - ts).total_seconds() > FACE_RESULT_TIMEOUT_S
 
 
 @router.get("", response_model=list[AlertResponse])
@@ -41,19 +24,7 @@ async def list_alerts(
     if status is not None:
         stmt = stmt.where(Alert.status == status)
     result = await db.execute(stmt)
-    alerts = result.scalars().all()
-    badges = await alert_badges(db, [a.incident_id for a in alerts if a.incident_id is not None])
-    now = datetime.now(timezone.utc)
-    out = []
-    for alert in alerts:
-        item = AlertResponse.model_validate(alert)
-        badge = badges.get(alert.incident_id) if alert.incident_id is not None else None
-        if badge is not None:
-            item = item.model_copy(update=asdict(badge))
-        elif alert.incident_id is not None and _face_result_timed_out(alert.timestamp, now):
-            item = item.model_copy(update={"face_status": "no_face"})
-        out.append(item)
-    return out
+    return result.scalars().all()
 
 
 @router.patch("/{alert_id}", response_model=AlertResponse)

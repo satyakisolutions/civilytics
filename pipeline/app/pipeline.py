@@ -23,7 +23,6 @@ import math
 import threading
 import time
 from pathlib import Path
-from collections import OrderedDict
 from typing import Optional
 
 import gi
@@ -40,15 +39,6 @@ from app.config import pipeline_settings
 from app.overlay import resolve_person_overlay
 from app.connection_monitor import ConnectionMonitor
 from app.event_fsm import EventFSMManager, FSMState
-from app.face_capture import (
-    TOPIC_FACES_REQUESTS,
-    FaceCropBuffer,
-    TrackIncidents,
-    alert_incident_fields,
-    ensure_faces_dirs,
-    head_crop_box,
-    run_flusher,
-)
 from app.frame_batcher import FrameBatcher
 from app.health import CameraHealth
 from app.kafka_producer import PipelineKafkaProducer
@@ -231,20 +221,6 @@ _ALERTS_DISABLED = os.environ.get("WW_ALERTS_DISABLED", "0") == "1"
 _ALERT_DEDUP_WINDOW_S = 0.8
 _alert_dedup_lock = threading.Lock()
 _alert_last_fired_at: dict[str, float] = {}
-# Violation-time face capture (docs/superpowers/specs/2026-09-29-face-subject-id-design.md).
-# Off by default: with WW_FACE_CAPTURE_ENABLED unset the raw branch is never
-# built and _face_buffer stays None, so behaviour is exactly as before.
-_FACE_CAPTURE_ENABLED = os.environ.get("WW_FACE_CAPTURE_ENABLED", "0") == "1"
-_FACE_CAPTURE_INTERVAL_S = float(os.environ.get("WW_FACE_CAPTURE_INTERVAL_S", "0.5"))
-_FACE_POSTROLL_S = float(os.environ.get("WW_FACE_POSTROLL_S", "2.0"))
-_FACES_PRIVATE_DIR = Path(os.environ.get("WW_FACES_PRIVATE_DIR", "/app/faces_private"))
-_UNTRACKED_OBJECT_ID = 0xFFFFFFFFFFFFFFFF
-_face_buffer: FaceCropBuffer | None = (
-    FaceCropBuffer(postroll_s=_FACE_POSTROLL_S) if _FACE_CAPTURE_ENABLED else None
-)
-# One incident per person-track violation episode (spec D4): a track's
-# incident id is reused by its later alerts for 600 s after its last use.
-_track_incidents = TrackIncidents()
 # Above this many frames of lateness, a "captured requested evidence" match
 # is flagged as degraded (queue drop, not the exact target) instead of
 # logged as a routine success.
@@ -349,13 +325,8 @@ def _fire_waste_alert_async(
     snapshot_exact_cache: dict[tuple[int, int], bytes] | None = None,
     snapshot_target_frame: int | None = None,
     snapshot_capture_requests: set[tuple[int, int]] | None = None,
-    capture_face: bool = False,
 ) -> None:
     """Write the snapshot and publish the alert off the GStreamer pad probe.
-
-    `capture_face=True` only at call sites firing a first-time critical
-    violation for a person: that alert starts (or reuses) the person track's
-    face incident. Warnings and reminders only carry an existing incident id.
 
     No-ops entirely when _ALERTS_DISABLED (WW_ALERTS_DISABLED=1, default)
     -- attribution/FSM/OSD/evidence-capture logic upstream of this call all
@@ -394,13 +365,6 @@ def _fire_waste_alert_async(
             )
             return
         _alert_last_fired_at[camera_id] = now_monotonic
-    # One incident per person-track violation episode. The id rides on the
-    # alert and on the face request so the API can join them (spec D4/D6).
-    # With face capture disabled this is {} and the payload is unchanged.
-    face_fields = alert_incident_fields(
-        _face_buffer, _track_incidents, camera_id, track_id, dumped_by_track_id,
-        capture_face=capture_face, now=now_monotonic, detected_at=detected_at,
-    )
     has_snapshot = (
         (bool(jpeg_bytes) and len(jpeg_bytes) >= 1000)
         or (snapshot_cache is not None and snapshot_source_id is not None)
@@ -425,7 +389,6 @@ def _fire_waste_alert_async(
             bbox=bbox,
             snapshot_url=snap_url if snapshot_available else None,
             detected_at=detected_at,
-            **face_fields,
         )
 
     def _run():
@@ -1479,161 +1442,6 @@ def capture_frame_probe(
     return Gst.PadProbeReturn.OK
 
 
-def _iter_frame_metas(batch_meta):
-    frame_list = batch_meta.frame_meta_list
-    while frame_list is not None:
-        try:
-            yield pyds.NvDsFrameMeta.cast(frame_list.data)
-        except StopIteration:
-            return
-        try:
-            frame_list = frame_list.next
-        except StopIteration:
-            return
-
-
-def _iter_person_objs(frame_meta):
-    obj_list = frame_meta.obj_meta_list
-    while obj_list is not None:
-        try:
-            obj = pyds.NvDsObjectMeta.cast(obj_list.data)
-        except StopIteration:
-            return
-        if COCO_CLASS_MAP.get(int(obj.class_id)) == "person":
-            yield obj
-        try:
-            obj_list = obj_list.next
-        except StopIteration:
-            return
-
-
-def _snapshot_person_boxes(batch_meta, source_manager) -> list:
-    """[(batch_id, camera_id, [(track_id, left, top, width, height), ...]), ...]
-
-    Taken on the streaming thread BEFORE nvosd's decorate_for_osd probe runs:
-    nvvideoconvert passes the same NvDsBatchMeta downstream, and
-    decorate_for_osd mutates object lists, so the raw branch's own thread
-    must never walk obj_meta_list itself.
-    """
-    pad_map = source_manager.pad_to_camera if source_manager is not None else {}
-    frames = []
-    for frame_meta in _iter_frame_metas(batch_meta):
-        camera_id = pad_map.get(frame_meta.source_id, f"cam-{frame_meta.source_id + 1:02d}")
-        persons = []
-        for obj in _iter_person_objs(frame_meta):
-            track_id = int(obj.object_id)
-            if track_id == _UNTRACKED_OBJECT_ID:
-                continue
-            r = obj.rect_params
-            persons.append((track_id, float(r.left), float(r.top), float(r.width), float(r.height)))
-        frames.append((int(frame_meta.batch_id), camera_id, persons))
-    return frames
-
-
-def raw_face_throttle_probe(pad: Gst.Pad, info: Gst.PadProbeInfo, state: dict) -> Gst.PadProbeReturn:
-    """On tee_raw's first src pad: DROP unless a capture tick is due and a person is present.
-
-    Runs before the synchronous RGBA conversion, so the conversion itself is
-    limited to <= 1/_FACE_CAPTURE_INTERVAL_S fps and only when people exist.
-    """
-    now = time.monotonic()
-    if now - state["last"] < _FACE_CAPTURE_INTERVAL_S:
-        return Gst.PadProbeReturn.DROP
-    buf = info.get_buffer()
-    if buf is None:
-        return Gst.PadProbeReturn.DROP
-    batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(buf))
-    if batch_meta is None:
-        return Gst.PadProbeReturn.DROP
-    frames = _snapshot_person_boxes(batch_meta, state["source_manager"])
-    if not any(persons for _, _, persons in frames):
-        return Gst.PadProbeReturn.DROP
-    state["last"] = now
-    with state["lock"]:
-        snapshots = state["snapshots"]
-        snapshots[buf.pts] = frames
-        while len(snapshots) > 4:
-            snapshots.popitem(last=False)
-    return Gst.PadProbeReturn.OK
-
-
-def raw_face_probe(pad: Gst.Pad, info: Gst.PadProbeInfo, state: dict) -> Gst.PadProbeReturn:
-    """On fakesink_raw's sink pad: crop each snapshotted person's head from the clean frame."""
-    buffer = _face_buffer
-    buf = info.get_buffer()
-    if buffer is None or buf is None:
-        return Gst.PadProbeReturn.OK
-    with state["lock"]:
-        frames = state["snapshots"].pop(buf.pts, None)
-    if not frames:
-        return Gst.PadProbeReturn.OK
-    success, map_info = buf.map(Gst.MapFlags.READ)
-    if not success:
-        return Gst.PadProbeReturn.OK
-    try:
-        import io
-        import numpy as np
-        from PIL import Image
-
-        w = pipeline_settings.muxer_output_width
-        h = pipeline_settings.muxer_output_height
-        frame_size = w * h * 4
-        raw = map_info.data
-        now = time.monotonic()
-        for batch_id, camera_id, persons in frames:
-            offset = batch_id * frame_size
-            if offset + frame_size > len(raw):
-                continue
-            frame = np.frombuffer(raw, dtype=np.uint8, count=frame_size, offset=offset).reshape((h, w, 4))
-            for track_id, left, top, width, height in persons:
-                box = head_crop_box(left, top, width, height, w, h)
-                if box is None:
-                    continue
-                x1, y1, x2, y2 = box
-                out = io.BytesIO()
-                Image.fromarray(frame[y1:y2, x1:x2, :3]).save(out, format="JPEG", quality=90)
-                buffer.add(camera_id, track_id, now, out.getvalue())
-    except Exception:
-        logger.exception("raw_face_probe failed")
-    finally:
-        buf.unmap(map_info)
-    return Gst.PadProbeReturn.OK
-
-
-def _attach_face_capture(pipeline, source_manager, kafka_producer) -> None:
-    """Attach the raw-branch probes and start the flusher thread (WW_FACE_CAPTURE_ENABLED=1 only)."""
-    tee_raw = pipeline.get_by_name("tee_raw")
-    fakesink_raw = pipeline.get_by_name("fakesink_raw")
-    if tee_raw is None or fakesink_raw is None or _face_buffer is None:
-        logger.error("Face capture enabled but raw branch missing -- face capture disabled")
-        return
-    try:
-        ensure_faces_dirs(_FACES_PRIVATE_DIR)
-    except OSError:
-        logger.error("Face capture disabled: cannot prepare %s", _FACES_PRIVATE_DIR, exc_info=True)
-        return
-    state = {
-        "last": 0.0,
-        "snapshots": OrderedDict(),
-        "lock": threading.Lock(),
-        "source_manager": source_manager,
-    }
-    tee_raw.get_static_pad("src_0").add_probe(Gst.PadProbeType.BUFFER, raw_face_throttle_probe, state)
-    fakesink_raw.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, raw_face_probe, state)
-
-    def _publish(camera_id: str, payload: dict) -> None:
-        kafka_producer.produce(TOPIC_FACES_REQUESTS, key=camera_id, value=payload)
-
-    threading.Thread(
-        target=run_flusher,
-        args=(_face_buffer, _FACES_PRIVATE_DIR, _publish, threading.Event()),
-        kwargs={"on_error": lambda: logger.exception("Face flusher tick failed")},
-        daemon=True,
-        name="face-flusher",
-    ).start()
-    logger.info("Face capture enabled: raw pre-OSD branch + flusher (dir=%s)", _FACES_PRIVATE_DIR)
-
-
 def extract_metadata(
     pad: Gst.Pad,
     info: Gst.PadProbeInfo,
@@ -2244,7 +2052,6 @@ def extract_metadata(
                                     snapshot_exact_cache=ctx.get("frame_jpeg_exact_cache"),
                                     snapshot_target_frame=_snapshot_target_frame,
                                     snapshot_capture_requests=ctx.get("frame_capture_requests"),
-                                    capture_face=True,
                                 )
                                 logger.debug(
                                     "WASTE ALERT (post-highlight) %s waste=%d person=%d: dumped by %s; "
@@ -2379,9 +2186,6 @@ def extract_metadata(
                                 dwell_time_s=fsm_event.dwell_time_s,
                                 bbox=bbox_dict,
                                 detected_at=time.time(),
-                                # Only a person has a face to enrol; bag /
-                                # vehicle / waste dwell violations do not.
-                                capture_face=_category == "person",
                             )
                             _fsm_obj.vlm_fired = True
 
@@ -2458,7 +2262,6 @@ def extract_metadata(
                                     dwell_time_s=track_info.dwell_time_s,
                                     bbox=bbox_dict,
                                     detected_at=time.time(),
-                                    capture_face=True,
                                 )
                                 logger.debug(
                                     "WASTE ALERT %s track=%d: %s", camera_id, track_id, _msg
@@ -2798,32 +2601,6 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
         pass
     pipeline.add(nvosd)
 
-    # --- Raw (pre-OSD) face-capture branch ---------------------------------
-    # nvdsosd rasterises boxes/privacy rectangles IN PLACE on the shared
-    # surface, and tee does not copy buffers -- so the clean copy must be
-    # made before nvosd sees the buffer. tee pushes to its src pads in
-    # request order on the streaming thread; the raw branch is requested
-    # FIRST and has no queue before nvvideoconvert, so the RGBA conversion
-    # (which writes a new buffer) completes before nvosd draws. The queue
-    # after the conversion moves the Python crop work to its own thread.
-    tee_raw = None
-    if _FACE_CAPTURE_ENABLED:
-        tee_raw = make_element("tee", "tee_raw")
-        nvconv_raw = make_element("nvvideoconvert", "nvconv_raw")
-        capsfilter_raw = make_element("capsfilter", "capsfilter_raw")
-        capsfilter_raw.set_property("caps", Gst.Caps.from_string("video/x-raw, format=RGBA"))
-        queue_raw = make_element("queue", "queue_raw")
-        queue_raw.set_property("leaky", 2)  # 2 = downstream (drop old)
-        queue_raw.set_property("max-size-buffers", 1)
-        queue_raw.set_property("max-size-bytes", 0)
-        queue_raw.set_property("max-size-time", 0)
-        fakesink_raw = make_element("fakesink", "fakesink_raw")
-        fakesink_raw.set_property("sync", False)
-        fakesink_raw.set_property("async", False)
-        for elem in (tee_raw, nvconv_raw, capsfilter_raw, queue_raw, fakesink_raw):
-            pipeline.add(elem)
-    osd_input = tee_raw if tee_raw is not None else nvosd
-
     # --- Tee — splits stream to RTSP output branch and metadata branch ------
     tee = make_element("tee", "stream_tee")
     pipeline.add(tee)
@@ -2918,31 +2695,13 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
         if not nvdsanalytics.link(ww_meta_elem):
             logger.critical("Failed to link nvdsanalytics -> wastewatchmeta")
             sys.exit(1)
-        if not ww_meta_elem.link(osd_input):
-            logger.critical("Failed to link wastewatchmeta -> %s", osd_input.get_name())
+        if not ww_meta_elem.link(nvosd):
+            logger.critical("Failed to link wastewatchmeta -> nvosd")
             sys.exit(1)
     else:
         # Fallback path: nvdsanalytics -> nvosd (original behavior)
-        if not nvdsanalytics.link(osd_input):
-            logger.critical("Failed to link nvdsanalytics -> %s", osd_input.get_name())
-            sys.exit(1)
-
-    if tee_raw is not None:
-        # Request the raw pad FIRST -- see the raw-branch comment above.
-        tee_raw_src_face = tee_raw.get_request_pad("src_%u")
-        if tee_raw_src_face.link(nvconv_raw.get_static_pad("sink")) != Gst.PadLinkReturn.OK:
-            logger.critical("Failed to link tee_raw -> nvconv_raw")
-            sys.exit(1)
-        tee_raw_src_osd = tee_raw.get_request_pad("src_%u")
-        if tee_raw_src_osd.link(nvosd.get_static_pad("sink")) != Gst.PadLinkReturn.OK:
-            logger.critical("Failed to link tee_raw -> nvosd")
-            sys.exit(1)
-        if not (
-            nvconv_raw.link(capsfilter_raw)
-            and capsfilter_raw.link(queue_raw)
-            and queue_raw.link(fakesink_raw)
-        ):
-            logger.critical("Failed to link raw face-capture branch")
+        if not nvdsanalytics.link(nvosd):
+            logger.critical("Failed to link nvdsanalytics -> nvosd")
             sys.exit(1)
 
     if not nvosd.link(tee):
@@ -3236,12 +2995,6 @@ def main() -> None:
                 },
             )
             logger.debug("OSD decoration probe attached to nvdsosd.sink")
-
-    # --- Violation-time face capture (raw pre-OSD branch) --------------------
-    # Only the Python metadata path calls _fire_waste_alert_async; with the
-    # native wastewatchmeta path no alerts fire here, so no faces are taken.
-    if _face_buffer is not None:
-        _attach_face_capture(pipeline, source_manager, kafka_producer)
 
     # Connection monitor — manages both input sources and per-camera output
     # streams, with RTSP probing, health checks, and auto-reconnection.
