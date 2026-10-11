@@ -1,5 +1,5 @@
 # Local dev overrides: bind-mount pipeline source for hot-reload,
-# frontend dev server, history-publisher as pipeline profile.
+# frontend dev server.
 
 services:
   # Bind-mount pipeline source so changes are picked up without rebuild.
@@ -9,52 +9,11 @@ services:
       - ./pipeline/configs:/app/configs:rw
       - ./pipeline/app:/app/app:rw
       - ./scripts:/scripts:ro
-      - ./sample_videos:/videos:ro
       - ./local-config:/config:ro
       - ./pipeline/plugins/gstwastewatchvlmpublisher:/app/plugins/gstwastewatchvlmpublisher:ro
     environment:
       WW_SOURCES: ""
       GST_DEBUG: "nvinfer:4"
-      # History publisher env (used when running with --profile history)
-      HISTORY_VIDEO_DIR: /videos
-      HISTORY_KAFKA_BOOTSTRAP: kafka:9092
-      HISTORY_VLM_TOPIC: wastewatch.vlm.requests
-      HISTORY_CAMERA_ID: 6c12c568-745c-4875-a1e6-7ef1f7d00fd4
-      HISTORY_ZONE_NAME: Lake Shore Gardens - Block 1
-      HISTORY_SAMPLE_COUNT: "6"
-      HISTORY_FRAME_WIDTH: "512"
-      HISTORY_SESSION_MAP: /config/session-map.json
-
-  # One-shot history replay — run with:
-  #   docker compose run --rm history-publisher
-  history-publisher:
-    build:
-      context: ./pipeline
-    image: lsg-wastewatch-pipeline
-    container_name: lsg-history-publisher
-    profiles: ["history"]
-    depends_on:
-      kafka:
-        condition: service_healthy
-    volumes:
-      - ./sample_videos:/videos:ro
-      - ./local-config:/config:ro
-      - ./pipeline/plugins/gstwastewatchvlmpublisher:/app/plugins/gstwastewatchvlmpublisher:ro
-      - ./pipeline/app/history_publisher.py:/app/app/history_publisher.py:ro
-    environment:
-      HISTORY_VIDEO_DIR: /videos
-      HISTORY_KAFKA_BOOTSTRAP: kafka:9092
-      HISTORY_VLM_TOPIC: wastewatch.vlm.requests
-      HISTORY_CAMERA_ID: 6c12c568-745c-4875-a1e6-7ef1f7d00fd4
-      HISTORY_ZONE_NAME: Lake Shore Gardens - Block 1
-      HISTORY_SAMPLE_COUNT: "6"
-      HISTORY_FRAME_WIDTH: "512"
-      HISTORY_SESSION_MAP: /config/session-map.json
-      GST_PLUGIN_PATH: /app/plugins/gstwastewatchvlmpublisher
-      GST_REGISTRY: /tmp/gst-registry.bin
-      GST_DEBUG: "2"
-    entrypoint: ["python3", "-u", "app/history_publisher.py"]
-    restart: "no"
 
   # Frontend dev server (Vite + React + shadcn/ui)
   frontend:
