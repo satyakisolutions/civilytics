@@ -29,6 +29,16 @@ TOPIC_TTS = "wastewatch.tts"
 TTS_DIR = Path("/tmp/wastewatch/tts")
 
 
+def _parse_uuid(value) -> str | None:
+    """Pipeline-minted incident_id, or None if absent/invalid."""
+    if not value:
+        return None
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return None
+
+
 class AlertConsumer:
     def __init__(self, bootstrap_servers: str):
         self._bootstrap_servers = bootstrap_servers
@@ -139,6 +149,7 @@ class AlertConsumer:
         # in that chain previously showed up as the alert's timestamp
         # drifting later than when the event actually happened.
         _detected_at = payload.get("detected_at")
+        incident_id = _parse_uuid(payload.get("incident_id"))
 
         # Resolve pipeline camera name to DB UUID
         camera_uuid = await self._resolve_camera_uuid(camera_name)
@@ -223,6 +234,7 @@ class AlertConsumer:
                             zone=camera_zone,
                             tts_audio_url=tts_audio_url,
                             snapshot_url=snapshot_url,
+                            incident_id=incident_id,
                             status="active",
                             timestamp=now,
                             created_at=now,
@@ -246,6 +258,7 @@ class AlertConsumer:
             "message": display_message,
             "tts_audio_url": tts_audio_url,
             "snapshot_url": snapshot_url,
+            "incident_id": incident_id,
             "timestamp": now.isoformat(),
         }
         await broadcast_alert(ws_payload)

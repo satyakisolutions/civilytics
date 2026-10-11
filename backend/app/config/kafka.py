@@ -16,6 +16,7 @@ TOPIC_CAMERA_STATUS = "wastewatch.camera.status"
 TOPIC_HEALTH = "wastewatch.health"
 TOPIC_HEALING = "wastewatch.healing"
 TOPIC_MISSES = "wastewatch.misses"
+TOPIC_FACES_REQUESTS = "wastewatch.faces.requests"
 
 # Workflow Operations
 TOPIC_DUMPING_EVENTS = "civilytics.dumping.events"
@@ -35,3 +36,4 @@ GROUP_HEALTH_MONITOR = "wastewatch.group.health-monitor"
 GROUP_HEALER = "wastewatch.group.healer"
 GROUP_ANALYTICS = "wastewatch.group.analytics"
 GROUP_WORKFLOW_INTAKE = "civilytics.group.workflow-intake"
+GROUP_SUBJECT_WORKER = "wastewatch.group.subject-worker"

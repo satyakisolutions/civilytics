@@ -20,6 +20,10 @@ import {
   Car,
   Loader2,
 } from 'lucide-react';
+import { Alert } from '@/types/monitoring';
+import { mapSubjectFields } from '@/lib/subjects';
+import { SubjectBadge } from '@/components/subjects/SubjectBadge';
+import { useMonitoring } from '@/context/MonitoringContext';
 import { cn } from '@/lib/utils';
 import { CV_COLORS } from '@/lib/cv-colors';
 import { API_BASE } from '@/lib/api-base';
@@ -428,6 +432,14 @@ function EventDrawer({ event, onClose, onReview }: { event: EventRow; onClose: (
   );
 }
 
+function EventRow({ event }: { event: ViolationEvent }) {
+  const { openSubject } = useMonitoring();
+  const severityConfig = {
+    critical: { icon: AlertTriangle, color: 'text-destructive', badge: 'badge-critical' },
+    warning: { icon: AlertTriangle, color: 'text-warning', badge: 'badge-warning' },
+    info: { icon: Clock, color: 'text-info', badge: 'badge-info' },
+  };
+
 /* ─── ReID + LPR Panels ─── */
 
 function CollapsibleReID({ eventId, snapshotUrl }: { eventId: string; snapshotUrl?: string }) {
@@ -473,6 +485,9 @@ function CollapsibleReID({ eventId, snapshotUrl }: { eventId: string; snapshotUr
                 <p className="text-[11px] text-cv-muted">Similarity: {(m.similarity * 100).toFixed(1)}%</p>
               </div>
             </div>
+            <span className="text-xs text-muted-foreground">{event.id}</span>
+            <SubjectBadge fields={event as any} onOpen={openSubject} className="mt-1" />
+          </div>
           ))}
         </div>
       )}

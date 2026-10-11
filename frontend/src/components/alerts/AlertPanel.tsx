@@ -1,3 +1,4 @@
+import { SubjectBadge } from '@/components/subjects/SubjectBadge';
 import {
   X,
   Bell,
@@ -30,7 +31,7 @@ import {
 } from '@/components/ui/alert-dialog';
 
 export function AlertPanel() {
-  const { alerts, acknowledgeAlert, clearAlerts, setIsAlertPanelOpen, setCurrentView, setSelectedCamera, setGridLayout } = useMonitoring();
+  const { alerts, acknowledgeAlert, clearAlerts, setIsAlertPanelOpen, setCurrentView, setSelectedCamera, setGridLayout, openSubject } = useMonitoring();
 
   const sortedAlerts = [...alerts].sort((a, b) => {
     // Sort by status (active first) then by timestamp
@@ -98,6 +99,7 @@ export function AlertPanel() {
               alert={alert}
               onAcknowledge={() => acknowledgeAlert(alert.id)}
               onViewCamera={() => handleViewCamera(alert.cameraId)}
+              onOpenSubject={(id) => { openSubject(id); setIsAlertPanelOpen(false); }}
             />
           ))}
         </div>
@@ -123,9 +125,10 @@ interface AlertCardProps {
   alert: AlertType;
   onAcknowledge: () => void;
   onViewCamera: () => void;
+  onOpenSubject: (subjectId: string) => void;
 }
 
-function AlertCard({ alert, onAcknowledge, onViewCamera }: AlertCardProps) {
+function AlertCard({ alert, onAcknowledge, onViewCamera, onOpenSubject }: AlertCardProps) {
   const severityConfig = {
     critical: {
       icon: AlertTriangle,
@@ -192,6 +195,7 @@ function AlertCard({ alert, onAcknowledge, onViewCamera }: AlertCardProps) {
           <MapPin className="w-3 h-3" />
           {alert.zone}
         </span>
+        <SubjectBadge fields={alert} onOpen={onOpenSubject} />
       </div>
 
       {/* Actions */}

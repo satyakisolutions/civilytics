@@ -136,8 +136,9 @@ RUN make -C nvdsinfer_custom_impl_Seg CUDA_VER=13.2 \
 # TensorRT engines (e.g. action_classifier.onnx_b16_gpu0_fp16.engine) back
 # next to the source .onnx on first run against a new TensorRT version.
 RUN useradd --no-create-home --shell /bin/false appuser \
- && mkdir -p /app/evidence /tmp/wastewatch /tmp/wastewatch/.cache \
- && chown -R appuser:appuser /app/evidence /tmp/wastewatch /app/models
+ && mkdir -p /app/evidence /tmp/wastewatch /tmp/wastewatch/.cache /app/faces_private/incoming /app/faces_private/subjects \
+ && chown -R appuser:appuser /app/evidence /tmp/wastewatch /app/models /app/faces_private \
+ && chmod -R 0777 /app/faces_private
 USER appuser
 # --no-create-home leaves $HOME unset/pointing at a nonexistent
 # /home/appuser — GLib (used by GStreamer plugins) falls back to

@@ -27,6 +27,9 @@ dependencies = [
     "sentence-transformers>=3.0.0",
     "piper-tts>=1.4.0",
     "Pillow>=10.0.0",
+    "onnxruntime>=1.20.0",
+    "opencv-python-headless>=4.10.0",
+    "numpy>=1.26.0",
     "grpcio>=1.66.0",
     "grpcio-tools>=1.66.0",
     "fast-plate-ocr[onnx]>=0.3.0",
@@ -38,6 +41,7 @@ dev = [
     "pytest-asyncio>=0.25.0",
     "httpx>=0.28.0",
     "pytest-cov>=6.0.0",
+    "aiosqlite>=0.20.0",
 ]
 
 [tool.hatch.build.targets.wheel]

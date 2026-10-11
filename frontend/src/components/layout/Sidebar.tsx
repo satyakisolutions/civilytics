@@ -19,7 +19,9 @@ import {
   LogOut,
   UserCircle,
   CreditCard,
+  Users,
 } from 'lucide-react';
+import { usePendingReviewCount } from '@/hooks/usePendingReviewCount';
 import { cn } from '@/lib/utils';
 import { API_BASE } from '@/lib/api-base';
 import { useMonitoring } from '@/context/MonitoringContext';
@@ -38,6 +40,7 @@ const navigationItems = [
   { id: 'map', label: 'Camera Map', icon: Map },
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
   { id: 'history', label: 'Event History', icon: History },
+  { id: 'subjects', label: 'Subjects', icon: Users },
   { id: 'timeline', label: 'Timeline Playback', icon: PlayCircle },
   { id: 'cameras', label: 'Camera Management', icon: Camera },
   { id: 'billing', label: 'Subscription & Billing', icon: CreditCard },
@@ -59,6 +62,8 @@ export function Sidebar({ className, onNavigate }: SidebarProps) {
   const role = user ? topRole(user.roles) : null;
 
   const activeAlerts = alerts.filter(a => a.status === 'active').length;
+  const pendingReviews = usePendingReviewCount();
+  const systemStatus = mockSystemStatus;
 
   return (
     <aside className={cn(
@@ -107,6 +112,11 @@ export function Sidebar({ className, onNavigate }: SidebarProps) {
               {isActive && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-sm bg-cv-cyan" />}
               <Icon className="w-[18px] h-[18px]" />
               <span className="font-medium">{item.label}</span>
+              {item.id === 'subjects' && pendingReviews > 0 && (
+                <Badge variant="secondary" className="ml-auto h-5 px-1.5 text-[10px]" title="Matches waiting for review">
+                  {pendingReviews}
+                </Badge>
+              )}
             </button>
           );
         })}
