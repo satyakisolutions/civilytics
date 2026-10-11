@@ -11,11 +11,9 @@ class Settings(BaseSettings):
     api_port: int = 8080
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:8080"]
 
-    vlm_base_url: str = "http://localhost:8000/v1"
-    vlm_model: str = "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
+    vlm_model: str = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
     vlm_max_tokens: int = 512
     vlm_temperature: float = 0.1
-    vlm_timeout_s: int = 30
 
     telegram_bot_token: str = ""
     telegram_chat_ids: list[str] = []

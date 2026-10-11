@@ -1,11 +1,15 @@
-"""VLM client for vLLM OpenAI-compatible API."""
+"""VLM client — in-process SmolVLM2 inference (no external server)."""
 from __future__ import annotations
 
+import base64
+import io
 import logging
 import time
 from typing import Optional
 
-import httpx
+import torch
+from PIL import Image
+from transformers import AutoModelForVision2Seq, AutoProcessor
 
 from app.config.settings import settings
 from app.vlm.prompts import build_prompt
@@ -17,24 +21,25 @@ _STRICT_SUFFIX = "\n\nRespond with ONLY valid JSON. No markdown, no explanation.
 
 
 class VLMClient:
-    """Async client that sends image frames to a vLLM endpoint for analysis."""
+    """Runs SmolVLM2 in-process for frame analysis."""
 
     def __init__(self) -> None:
-        self._http = httpx.AsyncClient(
-            base_url=settings.vlm_base_url,
-            timeout=settings.vlm_timeout_s,
-        )
+        self._model = None
+        self._processor = None
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    def _ensure_loaded(self) -> None:
+        if self._model is not None:
+            return
+        logger.info("Loading SmolVLM2 model: %s", settings.vlm_model)
+        self._processor = AutoProcessor.from_pretrained(settings.vlm_model)
+        self._model = AutoModelForVision2Seq.from_pretrained(
+            settings.vlm_model,
+            torch_dtype=torch.float16,
+            device_map="auto",
+        )
+        logger.info("SmolVLM2 loaded")
 
     async def analyze(self, request: VLMRequest) -> Optional[VLMResult]:
-        """Analyse frames from a VLMRequest and return a VLMResult.
-
-        Retries once with a stricter prompt if the initial response cannot be
-        parsed. Returns a fallback VLMResult if both attempts fail.
-        """
         start = time.monotonic()
 
         system_prompt = build_prompt(
@@ -47,11 +52,9 @@ class VLMClient:
             trigger_bbox=getattr(request, 'trigger_bbox', None),
         )
 
-        # First attempt
         raw = await self._call_vlm(system_prompt, request.frames_base64)
         response = parse_vlm_response(raw) if raw is not None else None
 
-        # Retry with stricter prompt if parsing failed
         if response is None:
             logger.warning(
                 "VLM parse failed on first attempt for track %s — retrying with strict prompt",
@@ -90,45 +93,50 @@ class VLMClient:
         )
 
     async def close(self) -> None:
-        """Close the underlying HTTP client."""
-        await self._http.aclose()
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+        del self._model
+        del self._processor
+        self._model = None
+        self._processor = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     async def _call_vlm(
         self, system_prompt: str, frames_base64: list[str]
     ) -> Optional[str]:
-        """Send one chat completion request and return the raw assistant text."""
-        content: list[dict] = []
-        for frame in frames_base64:
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{frame}"},
-                }
-            )
-        if len(frames_base64) >= 2:
-            content.append({"type": "text", "text": "Image 1 is a CROPPED close-up of the suspect object that triggered the alert. Image 2 is the full scene for context. Describe the object/person in Image 1 — that is the one in the restricted zone. Generate the deterrent_message addressing them specifically."})
-        else:
-            content.append({"type": "text", "text": "Analyse this frame. Focus on the object at the trigger location mentioned in the system prompt. Describe it and generate a deterrent_message addressing it specifically."})
+        """Run SmolVLM2 inference in-process."""
+        self._ensure_loaded()
 
-        payload = {
-            "model": settings.vlm_model,
-            "max_tokens": settings.vlm_max_tokens,
-            "temperature": settings.vlm_temperature,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": content},
-            ],
-        }
+        images = []
+        for b64 in frames_base64:
+            img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+            images.append(img)
+
+        if len(frames_base64) >= 2:
+            user_text = "Image 1 is a CROPPED close-up of the suspect object that triggered the alert. Image 2 is the full scene for context. Describe the object/person in Image 1 — that is the one in the restricted zone. Generate the deterrent_message addressing them specifically."
+        else:
+            user_text = "Analyse this frame. Focus on the object at the trigger location mentioned in the system prompt. Describe it and generate a deterrent_message addressing it specifically."
+
+        # Build chat messages for SmolVLM2
+        image_tokens = [{"type": "image"} for _ in images]
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+            {"role": "user", "content": image_tokens + [{"type": "text", "text": user_text}]},
+        ]
+
+        prompt = self._processor.apply_chat_template(messages, add_generation_prompt=True)
+        inputs = self._processor(text=prompt, images=images, return_tensors="pt").to(self._model.device)
 
         try:
-            resp = await self._http.post("/chat/completions", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            with torch.inference_mode():
+                output_ids = self._model.generate(
+                    **inputs,
+                    max_new_tokens=settings.vlm_max_tokens,
+                    temperature=settings.vlm_temperature,
+                    do_sample=settings.vlm_temperature > 0,
+                )
+            # Decode only new tokens
+            generated = output_ids[0, inputs["input_ids"].shape[1]:]
+            return self._processor.decode(generated, skip_special_tokens=True)
         except Exception as exc:
-            logger.error("VLM HTTP call failed: %s", exc)
+            logger.error("SmolVLM2 inference failed: %s", exc)
             return None
