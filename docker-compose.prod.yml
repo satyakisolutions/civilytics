@@ -269,6 +269,7 @@ services:
       start_period: 45s
     volumes:
       - evidence_data:/tmp/wastewatch/evidence
+      - tts_data:/tmp/wastewatch/tts
       # The healer inspects and restarts sibling containers. This grants
       # effective root on the host — drop this mount and set
       # WW_HEALER_ENABLED=false if self-healing is not wanted in prod.
@@ -276,6 +277,13 @@ services:
     expose:
       - "9100"
     command: ["python3", "-m", "services.combined_workers.main"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     logging: *logging
     restart: always
 
@@ -338,27 +346,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    logging: *logging
-    restart: always
-
-  # ── Deterrent audio (feature-flagged) ──────────────────────────────
-  # Only needed while the EN/KN warnings are synthesised at runtime. If
-  # the phrase set is fixed, pre-render to files at build time and drop
-  # this service entirely.
-  tts:
-    image: python:3.11-slim
-    command: >
-      bash -c "pip install --no-cache-dir piper-tts && python -m http.server 8100"
-    expose:
-      - "8100"
-    volumes:
-      - tts_data:/tmp/wastewatch/tts
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100').status==200 else 1)\""]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s   # pip install piper-tts on first boot
     logging: *logging
     restart: always
 
