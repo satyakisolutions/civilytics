@@ -30,6 +30,7 @@ dependencies = [
     "grpcio>=1.66.0",
     "grpcio-tools>=1.66.0",
     "fast-plate-ocr[onnx]>=0.3.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
