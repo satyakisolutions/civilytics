@@ -72,3 +72,7 @@ pipeline/models/**/v1*_backup/
 
 # Tooling scratch state
 .understand-anything/
+
+# Ralph (autonomous loop tool, local automation state/logs, not project code)
+.ralph/
+.ralphrc
