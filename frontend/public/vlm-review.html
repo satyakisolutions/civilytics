@@ -256,38 +256,41 @@ async function runAnalysis() {
 
 function renderResult(data) {
   const r = data.response;
-  const severityBadge = {
-    critical: 'badge-red', warning: 'badge-yellow', info: 'badge-blue'
-  }[r.severity] || 'badge-blue';
-
-  const dumpingBadge = r.is_dumping
-    ? '<span class="badge badge-red">DUMPING DETECTED</span>'
-    : '<span class="badge badge-green">CLEAR</span>';
+  const hasStructured = r.confidence > 0;
 
   outputArea.innerHTML = `
     <div class="stats">
       <div class="stat"><div class="val">${(data.inference_time_ms / 1000).toFixed(1)}s</div><div class="lbl">Inference</div></div>
       <div class="stat"><div class="val">${data.frames_analyzed}</div><div class="lbl">Frames</div></div>
-      <div class="stat"><div class="val">${(r.confidence * 100).toFixed(0)}%</div><div class="lbl">Confidence</div></div>
+      <div class="stat"><div class="val">${data.model.split('/').pop()}</div><div class="lbl">Model</div></div>
     </div>
 
-    <div class="result-card">
-      <div class="result-row"><span class="label">Verdict</span><span class="value">${dumpingBadge}</span></div>
-      <div class="result-row"><span class="label">Severity</span><span class="value"><span class="badge ${severityBadge}">${r.severity}</span></span></div>
-      <div class="result-row"><span class="label">Waste Type</span><span class="value">${r.waste_type || 'none'}</span></div>
-      <div class="result-row"><span class="label">Action</span><span class="value">${r.action || '—'}</span></div>
-      <div class="result-row"><span class="label">Command</span><span class="value">${r.command || '—'}</span></div>
-      <div class="result-row"><span class="label">Person Description</span><span class="value">${r.person_description || '—'}</span></div>
-      <div class="result-row"><span class="label">Model</span><span class="value">${data.model}</span></div>
-    </div>
+    <h2>Scene Description</h2>
+    <div class="reasoning-box">${r.person_description || r.reasoning || 'No description returned'}</div>
 
-    <h2 style="margin-top:16px">Reasoning</h2>
-    <div class="reasoning-box">${r.reasoning || 'No reasoning provided'}</div>
+    ${r.reasoning && r.reasoning !== r.person_description ? `
+      <h2 style="margin-top:16px">Reasoning</h2>
+      <div class="reasoning-box">${r.reasoning}</div>
+    ` : ''}
 
     ${r.deterrent_message ? `
       <h2 style="margin-top:16px">Deterrent Message</h2>
       <div class="deterrent-box">${r.deterrent_message}</div>
     ` : ''}
+
+    <details style="margin-top:16px;${hasStructured ? '' : 'opacity:0.5'}">
+      <summary style="font-size:12px;color:var(--muted);cursor:pointer">
+        Structured fields ${hasStructured ? '' : '(defaults — model returned prose only)'}
+      </summary>
+      <div class="result-card" style="margin-top:8px">
+        <div class="result-row"><span class="label">Verdict</span><span class="value">${r.is_dumping ? '<span class="badge badge-red">DUMPING</span>' : '<span class="badge badge-green">CLEAR</span>'}</span></div>
+        <div class="result-row"><span class="label">Confidence</span><span class="value">${(r.confidence * 100).toFixed(0)}%</span></div>
+        <div class="result-row"><span class="label">Severity</span><span class="value">${r.severity}</span></div>
+        <div class="result-row"><span class="label">Waste Type</span><span class="value">${r.waste_type || 'none'}</span></div>
+        <div class="result-row"><span class="label">Action</span><span class="value">${r.action || '—'}</span></div>
+        <div class="result-row"><span class="label">Command</span><span class="value">${r.command || '—'}</span></div>
+      </div>
+    </details>
   `;
 }
 
@@ -297,10 +300,7 @@ function addToHistory(data, thumbUrl) {
     time: new Date().toLocaleTimeString(),
     model: data.model,
     ms: data.inference_time_ms,
-    isDumping: r.is_dumping,
-    severity: r.severity,
-    confidence: r.confidence,
-    reasoning: r.reasoning?.substring(0, 80) || '',
+    description: (r.person_description || r.reasoning || '').substring(0, 100),
     thumbUrl,
     fullData: data,
   });
@@ -315,11 +315,7 @@ function renderHistory() {
         <span>${h.time}</span>
         <span>${(h.ms / 1000).toFixed(1)}s</span>
       </div>
-      <div class="summary">
-        ${h.isDumping ? '<span class="badge badge-red">DUMP</span>' : '<span class="badge badge-green">CLEAR</span>'}
-        <span class="badge ${h.severity === 'critical' ? 'badge-red' : h.severity === 'warning' ? 'badge-yellow' : 'badge-blue'}">${h.severity}</span>
-        ${(h.confidence * 100).toFixed(0)}% — ${h.reasoning}
-      </div>
+      <div class="summary">${h.description}</div>
     </div>
   `).join('');
 }

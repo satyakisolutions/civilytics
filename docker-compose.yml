@@ -119,6 +119,13 @@ services:
       - evidence_data:/app/evidence
       - ./backend/models:/app/models:ro
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
 
   # ── Combined Backend Workers ───────────────────────────────────

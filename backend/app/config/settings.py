@@ -9,10 +9,10 @@ class Settings(BaseSettings):
     mediamtx_rtsp_url: str = "rtsp://localhost:8554"
     api_host: str = "0.0.0.0"
     api_port: int = 8080
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:8080"]
+    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:8080"]
 
-    vlm_model: str = "LiquidAI/LFM2.5-VL-1.6B"
-    vlm_max_tokens: int = 512
+    vlm_model: str = "moondream2"
+    vlm_max_tokens: int = 150
     vlm_temperature: float = 0.1
     vlm_max_image_px: int = 512
 
@@ -54,11 +54,6 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = True
     auth_cookie_samesite: str = "lax"
     auth_cookie_domain: str = ""
-
-    # Conductor OSS
-    conductor_server_url: str = "http://localhost:8080/api"
-    conductor_auth_mode: str = ""
-    conductor_auth_token: str = ""
 
     # Static file roots. Defaults are the in-container paths; overridable so
     # the test suite can import the app outside Docker, where /app is not
