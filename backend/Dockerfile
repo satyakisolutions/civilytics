@@ -2,7 +2,8 @@ FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-pip python3-venv python3-dev ffmpeg \
+        python3 python3-pip python3-venv python3-dev ffmpeg git \
+        build-essential cmake \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
