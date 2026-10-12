@@ -513,8 +513,7 @@ wastewatch/
 ├── docs/
 │   ├── architecture.drawio         # System architecture diagram
 │   └── cloud-deployment.drawio     # Cloud deployment diagram
-├── docker-compose.yml              # Production services
-├── docker-compose.dev.yml          # Development overrides
+├── docker-compose.yml              # All environments (profiles: dev/test/prod/lite)
 └── mediamtx.yml                    # MediaMTX configuration
 ```
 
@@ -666,8 +665,7 @@ npm run lint         # ESLint
 ### Development Compose
 
 ```bash
-# Uses docker-compose.dev.yml overrides (volume mounts, debug logging)
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+./scripts/start.sh dev
 ```
 
 ---

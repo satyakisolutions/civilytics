@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
-# Civilytics / WasteWatch — stack startup.
+# Civilytics / WasteWatch — single script, single compose file.
 #
-#   ./scripts/start.sh dev|test|prod [options]
+#   ./scripts/start.sh dev|test|prod|lite [options]
 #
 #   --build        rebuild images before starting
 #   --pull         pull newer base images first
 #   --turn         prod only: also start coturn (TURN relay)
 #   --no-wait      return as soon as compose returns, don't wait for health
 #   --timeout N    seconds to wait for health (default 900)
+#   --rotate       prod only: regenerate generated passwords in .env
 #   --down         stop the stack (test also removes its volumes)
 #   --status       show health of every container and exit
 #
-# The previous version of this script sequenced startup by hand with
-# sleeps, and referenced qdrant / rtsp-streamer / vlm, which no longer
-# exist. Ordering is now declarative: every service has a healthcheck and
-# depends_on: condition: service_healthy, with api and pipeline gating
-# backend-workers, and nginx gating on both. Compose does the ordering;
-# this script only waits and reports.
+# This script now does everything the old scripts/bootstrap.sh did
+# (secret generation/prompting) and everything the old scripts/start.sh
+# did (sequencing, health wait), against ONE docker-compose.yml with one
+# profile per environment, instead of docker-compose.{dev,test,prod,lite}.yml.
 #
-# Original kept at docker/legacy/start.sh.bak
+# Previous 5 compose files + bootstrap.sh kept at docker/legacy/.
 # ──────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+ENV_FILE=".env"
 ENVIRONMENT=""
-BUILD="" PULL="" PROFILES=() WAIT=1 TIMEOUT=900 ACTION="up"
+BUILD="" PULL="" EXTRA_PROFILES=() WAIT=1 TIMEOUT=900 ACTION="up" ROTATE=0
 
 c_red() { printf '\033[31m%s\033[0m\n' "$*"; }
 c_grn() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -34,11 +34,11 @@ c_ylw() { printf '\033[33m%s\033[0m\n' "$*"; }
 c_dim() { printf '\033[2m%s\033[0m\n' "$*"; }
 die()   { c_red "ERROR: $*" >&2; exit 1; }
 
-usage() { sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '3,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
 
 [ $# -ge 1 ] || usage
 case "$1" in
-    dev|test|prod) ENVIRONMENT="$1"; shift ;;
+    dev|test|prod|lite) ENVIRONMENT="$1"; shift ;;
     *) usage ;;
 esac
 
@@ -46,30 +46,26 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --build)    BUILD="--build"; shift ;;
         --pull)     PULL=1; shift ;;
-        --turn)     PROFILES+=(--profile turn); shift ;;
+        --turn)     EXTRA_PROFILES+=(--profile turn); shift ;;
         --no-wait)  WAIT=0; shift ;;
         --timeout)  TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
+        --rotate)   ROTATE=1; shift ;;
         --down)     ACTION="down"; shift ;;
         --status)   ACTION="status"; shift ;;
         *) die "unknown option: $1" ;;
     esac
 done
 
-COMPOSE_FILE="docker-compose.${ENVIRONMENT}.yml"
-[ -f "$COMPOSE_FILE" ] || die "$COMPOSE_FILE not found"
-
-DC=(docker compose -f "$COMPOSE_FILE" "${PROFILES[@]+"${PROFILES[@]}"}")
-
-if [ "${PROFILES[*]+x}" ] && [ "$ENVIRONMENT" != "prod" ]; then
-    die "--turn is prod only (coturn is defined in the prod stack)"
+if [ "${#EXTRA_PROFILES[@]}" -gt 0 ] && [ "$ENVIRONMENT" != "prod" ]; then
+    die "--turn is prod only (coturn is defined under the turn profile)"
 fi
 
-# ── down / status ─────────────────────────────────────────────────────
+DC=(docker compose -f docker-compose.yml --profile "$ENVIRONMENT" "${EXTRA_PROFILES[@]+"${EXTRA_PROFILES[@]}"}")
+
+# ── down / status — no secret handling needed ──────────────────────────
 if [ "$ACTION" = "down" ]; then
     if [ "$ENVIRONMENT" = "test" ]; then
-        # Test state is meant to be disposable; leaving volumes behind
-        # would let one run's data leak into the next.
-        c_ylw "Stopping test stack and REMOVING its volumes"
+        c_ylw "Stopping test stack and REMOVING its volumes (test state is disposable)"
         "${DC[@]}" down -v
     else
         "${DC[@]}" down
@@ -82,50 +78,197 @@ if [ "$ACTION" = "status" ]; then
     exit 0
 fi
 
-# ── Preflight ─────────────────────────────────────────────────────────
+# ── Preflight ────────────────────────────────────────────────────────
 command -v docker >/dev/null || die "docker not found"
 docker compose version >/dev/null 2>&1 || die "docker compose v2 plugin not found"
 
-[ -f .env ] || {
-    c_ylw ".env missing — creating an empty one (compose declares env_file: .env)"
-    touch .env
-}
-
-# GPU is required by the pipeline in all three environments.
 if ! docker info 2>/dev/null | grep -qi nvidia; then
     c_ylw "WARNING: the NVIDIA container runtime was not detected."
     c_ylw "         The pipeline service will fail to start without it."
 fi
 
-if [ "$ENVIRONMENT" = "prod" ]; then
+# ── Host directories compose expects to already exist ──────────────────
+mkdir -p nginx/certs keycloak/empty docker/legacy
+[ -f keycloak/empty/.gitkeep ] || touch keycloak/empty/.gitkeep
+
+# ── .env helpers (folded in from the old bootstrap.sh) ──────────────────
+[ -f "$ENV_FILE" ] || { touch "$ENV_FILE"; chmod 600 "$ENV_FILE"; }
+
+env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -1; }
+
+env_set() {
+    local key="$1" val="$2" tmp
+    tmp="$(mktemp)"
+    grep -v "^${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
+    printf '%s=%s\n' "$key" "$val" >> "$tmp"
+    mv "$tmp" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+}
+
+# Set only if absent — never overwrite an operator's existing value.
+env_default() {
+    local key="$1" val="$2"
+    [ -z "$(env_get "$key")" ] && env_set "$key" "$val"
+}
+
+gen_password() {
+    # 32 alphanumeric chars from a CSPRNG — no punctuation, because these
+    # get interpolated into a SQLAlchemy URL and passed to redis-server
+    # --requirepass, where '/', '@', '#' or ':' silently breaks parsing.
+    LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32
+}
+
+ensure_generated() {
+    local key="$1" existing
+    existing="$(env_get "$key")"
+    if [ -n "$existing" ] && [ "$ROTATE" -eq 0 ]; then
+        return
+    fi
+    if [ -n "$existing" ] && [ "$ROTATE" -eq 1 ]; then
+        c_ylw "$key: rotating. Dependent services must be restarted, and an"
+        c_ylw "    existing Postgres volume will REJECT the new password --"
+        c_ylw "    rotate the role inside the DB too, or start from a fresh volume."
+    fi
+    env_set "$key" "$(gen_password)"
+}
+
+ensure_prompted() {
+    local key="$1" desc="$2" secret="${3:-0}" optional="${4:-0}" existing val
+    existing="$(env_get "$key")"
+    [ -n "$existing" ] && return
+    if [ ! -t 0 ]; then
+        if [ "$optional" = "1" ]; then
+            c_ylw "$key unset and no TTY — leaving empty (feature stays disabled)"
+            env_set "$key" ""
+            return
+        fi
+        die "$key is required but there is no TTY to prompt on. Set it in $ENV_FILE and re-run."
+    fi
+    printf '\n  %s\n' "$desc"
+    if [ "$optional" = "1" ]; then printf '  %s (optional, Enter to skip): ' "$key"
+    else printf '  %s: ' "$key"; fi
+    if [ "$secret" = "1" ]; then read -rs val; printf '\n'; else read -r val; fi
+    if [ -z "$val" ] && [ "$optional" != "1" ]; then die "$key is required"; fi
+    env_set "$key" "$val"
+}
+
+c_dim "Stack: $ENVIRONMENT (writing defaults to $ENV_FILE as needed)"
+
+case "$ENVIRONMENT" in
+  # ── dev: working defaults inline, Keycloak configured by hand ──────
+  dev)
+    env_default WW_AUTH_DEV_MODE 0
+    env_default WW_AUTH_COOKIE_SECURE false
+    env_default KC_COMMAND start-dev
+    env_default KC_HOSTNAME localhost
+    ensure_generated POSTGRES_PASSWORD
+    ensure_generated REDIS_PASSWORD
+    ;;
+
+  # ── test: same topology as prod, ephemeral, offset ports ───────────
+  test)
+    env_default WW_AUTH_DEV_MODE 0     # hard requirement — never 1 here
+    env_default WW_AUTH_COOKIE_SECURE false
+    env_default KC_COMMAND "start-dev --import-realm"
+    env_default KC_HOSTNAME localhost
+    env_default KEYCLOAK_REALM_IMPORT ./keycloak
+    env_default WW_KEYCLOAK_CLIENT_SECRET test-client-secret-not-for-production
+    # +1000 offset so test can run alongside dev on one host.
+    env_default PG_PORT 6433
+    env_default KAFKA_PORT 10092
+    env_default REDIS_PORT 7380
+    env_default KEYCLOAK_PORT 9180
+    env_default MAILPIT_PORT 9025
+    env_default API_PORT 9082
+    env_default MEDIAMTX_RTSP_PORT 9554
+    env_default MEDIAMTX_WEBRTC_PORT 9889
+    env_default MEDIAMTX_ICE_PORT 9189
+    env_default MEDIAMTX_API_PORT 10997
+    env_default RESTART_POLICY no
+    ensure_generated POSTGRES_PASSWORD
+    ensure_generated REDIS_PASSWORD
+    [ -f keycloak/realm-test.json ] || c_ylw "keycloak/realm-test.json missing — Keycloak will start with an empty realm and auth tests will fail loudly (correct, not a silent pass)."
+    ;;
+
+  # ── prod: real secrets required, enforced here (not in compose) ────
+  prod)
+    if [ "$(env_get WW_AUTH_DEV_MODE)" = "1" ]; then
+        die "WW_AUTH_DEV_MODE=1 in $ENV_FILE — it bypasses ALL authentication. Set it to 0 before starting prod."
+    fi
+    env_set WW_AUTH_DEV_MODE 0
+    env_default WW_AUTH_COOKIE_SECURE true
+    env_default KC_COMMAND "start --optimized"
+    env_default RESTART_POLICY always
+    env_default PG_BIND 127.0.0.1
+    env_default KAFKA_BIND 127.0.0.1
+    env_default REDIS_BIND 127.0.0.1
+    env_default KEYCLOAK_BIND 127.0.0.1
+
+    c_dim "Generating passwords that have no external source ..."
+    ensure_generated POSTGRES_PASSWORD
+    ensure_generated REDIS_PASSWORD
+    ensure_generated KEYCLOAK_ADMIN_PASSWORD
+    ensure_generated MINIO_ROOT_PASSWORD
+
+    c_dim "Values that must come from outside this script ..."
+    ensure_prompted KEYCLOAK_ADMIN "Keycloak admin username." 0 0
+    ensure_prompted KC_HOSTNAME \
+      "Public hostname Keycloak is served on, e.g. auth.civilytics.in
+  Keycloak builds its issuer/redirect URLs from this; a wrong value makes
+  tokens fail audience validation." 0 0
+    ensure_prompted MINIO_ROOT_USER "MinIO root access key (evidence + backup object store)." 0 0
+    ensure_prompted PUBLIC_API_URL "Browser-facing API URL, e.g. https://civilytics.example/api" 0 0
+    ensure_prompted PUBLIC_WS_URL "Browser-facing WebSocket URL, e.g. wss://civilytics.example/ws" 0 0
+    ensure_prompted PUBLIC_MEDIAMTX_URL "Browser-facing MediaMTX WebRTC URL, e.g. https://civilytics.example/webrtc" 0 0
+    ensure_prompted WW_KEYCLOAK_CLIENT_SECRET \
+      "Keycloak confidential-client secret for the branded login.
+  Create the client in the realm, enable 'Direct access grants', then
+  copy Credentials > Client secret." 1 0
+    ensure_prompted WW_INTERNAL_SERVICE_TOKEN \
+      "Shared secret for worker-to-api calls (leave empty to auto-generate)." 1 1
+    [ -z "$(env_get WW_INTERNAL_SERVICE_TOKEN)" ] && env_set WW_INTERNAL_SERVICE_TOKEN "$(gen_password)"
+
+    c_dim "Optional outbound channels — press Enter to leave disabled ..."
+    ensure_prompted WW_SMTP_PASSWORD "SMTP password for report email." 1 1
+    ensure_prompted WW_TELEGRAM_BOT_TOKEN "Telegram bot token for alert messages." 1 1
+    [ -n "$(env_get WW_SMTP_PASSWORD)" ] && env_set WW_SMTP_ENABLED true || env_set WW_SMTP_ENABLED false
+    [ -n "$(env_get WW_TELEGRAM_BOT_TOKEN)" ] && env_set WW_TELEGRAM_ENABLED true || env_set WW_TELEGRAM_ENABLED false
+
     CERT_DIR="${TLS_CERT_DIR:-./nginx/certs}"
     if [ ! -f "$CERT_DIR/fullchain.pem" ]; then
         c_ylw "No TLS certificate at $CERT_DIR."
         c_ylw "nginx will generate a SELF-SIGNED one and browsers will warn."
         c_ylw "Run ./scripts/make-certs.sh first for a proper certificate."
     fi
-    # WW_AUTH_DEV_MODE bypasses REST *and* WebSocket auth and grants
-    # owner+admin+viewer. Refuse rather than warn.
-    if grep -qE '^WW_AUTH_DEV_MODE=(1|true|yes)' .env 2>/dev/null; then
-        die "WW_AUTH_DEV_MODE is enabled in .env — it bypasses ALL authentication. Set it to 0 before starting prod."
-    fi
-fi
+    c_dim "Manual steps this script cannot do: create the Keycloak realm +"
+    c_dim "confidential client (enable Direct access grants), define composite"
+    c_dim "roles owner->admin->viewer, create the MinIO bucket + retention"
+    c_dim "policy, and back up $ENV_FILE somewhere safe."
+    ;;
 
-c_dim "Validating $COMPOSE_FILE ..."
-"${DC[@]}" config >/dev/null || die "compose validation failed (missing secrets? run ./scripts/bootstrap.sh $ENVIRONMENT)"
+  # ── lite: minimal footprint, no Keycloak at all ─────────────────────
+  lite)
+    c_ylw "lite has no Keycloak — forcing WW_AUTH_DEV_MODE=1 (no auth)."
+    c_ylw "Do not expose this profile beyond localhost."
+    env_set WW_AUTH_DEV_MODE 1
+    env_default WW_AUTH_COOKIE_SECURE false
+    env_default RESTART_POLICY unless-stopped
+    ensure_generated POSTGRES_PASSWORD
+    ensure_generated REDIS_PASSWORD
+    ;;
+esac
+
+# ── Validate, then up ────────────────────────────────────────────────
+c_dim "Validating compose config (profile=$ENVIRONMENT) ..."
+"${DC[@]}" config >/dev/null || die "compose validation failed"
 
 [ -n "$PULL" ] && { c_dim "Pulling base images ..."; "${DC[@]}" pull --ignore-buildable || true; }
 
-# ── Up ────────────────────────────────────────────────────────────────
 c_grn "Starting $ENVIRONMENT stack"
-c_dim "Compose resolves the order from healthchecks: stores -> keycloak/mediamtx -> api + pipeline -> workers -> frontend -> nginx"
 "${DC[@]}" up -d ${BUILD:+$BUILD}
 
 [ "$WAIT" -eq 1 ] || { c_grn "Started (not waiting for health)"; exit 0; }
 
-# ── Wait for health ───────────────────────────────────────────────────
-# Containers without a healthcheck report no status, so "running" is the
-# best signal available for them; they must not block the wait.
 c_dim "Waiting up to ${TIMEOUT}s for containers to become healthy ..."
 deadline=$(( $(date +%s) + TIMEOUT ))
 last_report=""
@@ -146,7 +289,6 @@ while :; do
             running/unhealthy) failed+=("$name (unhealthy)") ;;
             exited/*)
                 code="$(docker inspect -f '{{.State.ExitCode}}' "$id")"
-                # A clean exit is fine for a one-shot; non-zero is not.
                 [ "$code" = "0" ] || failed+=("$name (exit $code)") ;;
             *) pending+=("$name") ;;
         esac
@@ -162,10 +304,7 @@ while :; do
         exit 1
     fi
 
-    if [ ${#pending[@]} -eq 0 ]; then
-        c_grn "All containers healthy"
-        break
-    fi
+    if [ ${#pending[@]} -eq 0 ]; then c_grn "All containers healthy"; break; fi
 
     if [ "$(date +%s)" -ge "$deadline" ]; then
         c_red "Timed out after ${TIMEOUT}s. Still starting: ${pending[*]}"
@@ -175,7 +314,6 @@ while :; do
         exit 1
     fi
 
-    # Only reprint when something changed, so the log stays readable.
     if [ "$report" != "$last_report" ]; then
         c_dim "  waiting: ${pending[*]}"
         last_report="$report"
@@ -183,7 +321,6 @@ while :; do
     sleep 5
 done
 
-# ── Report ────────────────────────────────────────────────────────────
 echo
 "${DC[@]}" ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
 echo
@@ -193,13 +330,12 @@ case "$ENVIRONMENT" in
         c_grn "Dashboard : http://localhost:5174"
         echo  "API       : http://localhost:8082/api/health"
         echo  "Keycloak  : http://localhost:8180  (admin/admin by default)"
-        echo  "WebRTC    : http://localhost:8889"
+        echo  "Conductor : http://localhost:5001"
         ;;
     test)
         c_grn "Dashboard : http://localhost:6174"
         echo  "API       : http://localhost:9082/api/health"
         echo  "Keycloak  : http://localhost:9180"
-        echo  "WebRTC    : http://localhost:9889"
         c_dim "Host ports are offset +1000 so this can run alongside dev."
         ;;
     prod)
@@ -208,9 +344,11 @@ case "$ENVIRONMENT" in
         echo  "API       : https://${host}/api/health"
         echo  "Storage   : https://${host}/storage/   (MinIO console)"
         echo  "RTSP in   : rtsp://${host}:554/<path>  (cameras publish here)"
-        echo
-        c_dim "nginx is the only ingress. The one exception is mediamtx's"
-        c_dim "8189/udp — WebRTC media is ICE over UDP and cannot be proxied."
         c_dim "Start coturn (--turn) if viewers are off the camera LAN."
+        ;;
+    lite)
+        c_grn "Dashboard : http://localhost:5174"
+        echo  "API       : http://localhost:8082/api/health"
+        c_ylw "No auth — do not expose this host beyond localhost."
         ;;
 esac

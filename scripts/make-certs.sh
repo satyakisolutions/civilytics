@@ -152,7 +152,7 @@ make_letsencrypt() {
 
     mkdir -p "$CERT_DIR" ./nginx/letsencrypt
 
-    docker compose -f docker-compose.prod.yml stop nginx 2>/dev/null || true
+    docker compose -f docker-compose.yml --profile prod stop nginx 2>/dev/null || true
 
     docker run --rm \
         -p 80:80 \
@@ -177,7 +177,7 @@ make_letsencrypt() {
 
 renew() {
     [ -d ./nginx/letsencrypt ] || die "no Let's Encrypt state found; nothing to renew"
-    docker compose -f docker-compose.prod.yml stop nginx 2>/dev/null || true
+    docker compose -f docker-compose.yml --profile prod stop nginx 2>/dev/null || true
     docker run --rm -p 80:80 \
         -v "$PWD/nginx/letsencrypt:/etc/letsencrypt" \
         certbot/certbot renew
@@ -189,7 +189,7 @@ renew() {
         cp "$live/privkey.pem"   "$CERT_DIR/privkey.pem"
         chmod 644 "$CERT_DIR/fullchain.pem"; chmod 600 "$CERT_DIR/privkey.pem"
     fi
-    docker compose -f docker-compose.prod.yml up -d nginx 2>/dev/null || true
+    docker compose -f docker-compose.yml --profile prod up -d nginx 2>/dev/null || true
     c_grn "Renewal pass complete"
 }
 
