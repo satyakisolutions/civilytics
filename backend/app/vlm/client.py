@@ -15,11 +15,9 @@ from app.vlm.schemas import VLMRequest, VLMResponse, VLMResult, VLMSeverity, Was
 
 logger = logging.getLogger(__name__)
 
-_PROMPT = (
-    "Describe what is happening in this surveillance footage. "
-    "Focus on: people (clothing, age, gender, what they carry), "
-    "vehicles (type, color), and any objects being placed or removed. "
-    "Be specific and factual. Keep under 100 words."
+_FRAME_PROMPT = (
+    "List the key objects and actions visible: people (clothing, what they carry), "
+    "vehicles, and any items on the ground. Two sentences max."
 )
 
 
@@ -76,18 +74,43 @@ class VLMClient:
         self._ensure_loaded()
 
         max_px = settings.vlm_max_image_px
-        # ponytail: single best frame — moondream2 is single-image, pick middle frame
-        idx = len(frames_base64) // 2
-        b64 = frames_base64[idx]
-        img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
-        img.thumbnail((max_px, max_px))
+        # ponytail: sample up to 3 frames (first, middle, last) for temporal coverage
+        n = len(frames_base64)
+        if n <= 3:
+            indices = list(range(n))
+        else:
+            indices = [0, n // 2, n - 1]
+
+        images = []
+        for idx in indices:
+            img = Image.open(io.BytesIO(base64.b64decode(frames_base64[idx]))).convert("RGB")
+            img.thumbnail((max_px, max_px))
+            images.append(img)
 
         try:
-            result = await asyncio.to_thread(self._query_sync, img)
-            return result
+            return await asyncio.to_thread(self._query_all_sync, images)
         except Exception as exc:
             logger.error("VLM inference failed: %s", exc)
             return None
 
-    def _query_sync(self, img: Image.Image) -> str:
-        return self._model.query(img, _PROMPT)["answer"]
+    def _query_all_sync(self, images: list[Image.Image]) -> str:
+        if len(images) == 1:
+            return self._model.query(images[0], _FRAME_PROMPT)["answer"]
+
+        # Query earlier frames for short observations
+        observations = []
+        labels = ["Start", "Middle", "End"] if len(images) == 3 else [f"Frame {i+1}" for i in range(len(images))]
+        for i, img in enumerate(images[:-1]):
+            obs = self._model.query(img, _FRAME_PROMPT)["answer"]
+            observations.append(f"{labels[i]}: {obs}")
+
+        # Final frame gets a synthesis prompt that includes earlier observations
+        context = "\n".join(observations)
+        synthesis_prompt = (
+            f"Earlier frames from this surveillance clip showed:\n{context}\n\n"
+            "Now describe this final frame and summarize the full sequence: "
+            "who arrived, what they did, what changed, did anyone dump or remove objects? "
+            "Be specific about the complete event. Under 150 words."
+        )
+        summary = self._model.query(images[-1], synthesis_prompt)["answer"]
+        return summary
