@@ -171,7 +171,10 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:6333/healthz >/dev/null 2>&1 || exit 1"]
+      # qdrant/qdrant has bash but no wget/curl -- bash's own /dev/tcp
+      # pseudo-device is the only HTTP-client-free way to confirm the
+      # port is actually accepting connections in this image.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333' 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -271,12 +274,12 @@ services:
       - "${MEDIAMTX_API_BIND:-127.0.0.1}:${MEDIAMTX_API_PORT:-9997}:9997"
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9997/v3/paths/list >/dev/null 2>&1 || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 15s
+    # No healthcheck: bluenviron/mediamtx's image has no shell and no
+    # binary besides mediamtx itself -- CMD-SHELL can't exec at all here
+    # ("stat /bin/sh: no such file or directory"), so every dependent
+    # using condition: service_healthy on this service failed to start
+    # even though mediamtx itself was running fine. Dependents use
+    # service_started instead (see depends_on below).
     logging: *logging
     restart: ${RESTART_POLICY:-unless-stopped}
 
@@ -427,7 +430,7 @@ services:
       kafka:
         condition: service_healthy
       mediamtx:
-        condition: service_healthy
+        condition: service_started  # no healthcheck possible, see mediamtx's own comment
     healthcheck:
       test: ["CMD", "python3", "-m", "app.heartbeat"]
       interval: 20s
@@ -535,7 +538,7 @@ services:
       frontend-prod:
         condition: service_started
       mediamtx:
-        condition: service_healthy
+        condition: service_started  # no healthcheck possible, see mediamtx's own comment
       minio:
         condition: service_healthy
     healthcheck:
