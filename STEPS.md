@@ -20,6 +20,8 @@
 ./scripts/start.sh lite    # minimal footprint, no auth, localhost only
 ```
 
+`prod` prompts for several hostnames/URLs interactively — see **[SAMPLE.md](SAMPLE.md)** for exact values to copy-paste (swap in your own domain).
+
 ## Stop
 ```
 ./scripts/start.sh dev --down

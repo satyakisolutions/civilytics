@@ -1,8 +1,12 @@
 # Civilytics production ingress.
 #
-# `nginx -t` at build time catches syntax errors here rather than at
-# 3am on a deploy. NGINX_SERVER_NAME is substituted at container start by
-# entrypoint.sh, so the template is validated with a placeholder.
+# NGINX_SERVER_NAME is substituted at container start by entrypoint.sh,
+# which also runs `nginx -t` there -- not here at build time. The config's
+# upstream blocks (nginx.conf: server mediamtx:8554, api:8080, ...) need
+# those hostnames to resolve, which only happens once the compose network
+# is actually up; an isolated build has no network and can never pass
+# this check, so it was failing every build regardless of config
+# correctness. entrypoint.sh's runtime check is the real validation.
 FROM nginx:1.27-alpine
 
 RUN apk add --no-cache openssl
@@ -10,16 +14,6 @@ RUN apk add --no-cache openssl
 COPY nginx.conf /etc/nginx/nginx.conf.template
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-
-# Validate the template with the placeholder filled in.
-RUN sed 's/\${NGINX_SERVER_NAME}/_/' /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf \
-    && mkdir -p /etc/nginx/certs \
-    && openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
-        -keyout /etc/nginx/certs/privkey.pem \
-        -out /etc/nginx/certs/fullchain.pem \
-        -subj "/CN=build-check" >/dev/null 2>&1 \
-    && nginx -t \
-    && rm -f /etc/nginx/certs/privkey.pem /etc/nginx/certs/fullchain.pem
 
 EXPOSE 443 554
 
