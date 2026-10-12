@@ -10,6 +10,8 @@
 #   --no-wait      return as soon as compose returns, don't wait for health
 #   --timeout N    seconds to wait for health (default 900)
 #   --rotate       prod only: regenerate generated passwords in .env
+#   --seed-owner   create the first owner account (no-op if one exists) --
+#                  NOT run by default, see scripts/seed_owner.py
 #   --down         stop the stack (test also removes its volumes)
 #   --status       show health of every container and exit
 #
@@ -26,7 +28,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 ENV_FILE=".env"
 ENVIRONMENT=""
-BUILD="" PULL="" EXTRA_PROFILES=() WAIT=1 TIMEOUT=900 ACTION="up" ROTATE=0
+BUILD="" PULL="" EXTRA_PROFILES=() WAIT=1 TIMEOUT=900 ACTION="up" ROTATE=0 SEED_OWNER=0
 
 c_red() { printf '\033[31m%s\033[0m\n' "$*"; }
 c_grn() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -50,6 +52,7 @@ while [ $# -gt 0 ]; do
         --no-wait)  WAIT=0; shift ;;
         --timeout)  TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
         --rotate)   ROTATE=1; shift ;;
+        --seed-owner) SEED_OWNER=1; shift ;;
         --down)     ACTION="down"; shift ;;
         --status)   ACTION="status"; shift ;;
         *) die "unknown option: $1" ;;
@@ -145,8 +148,32 @@ ensure_generated() {
     env_set "$key" "$(gen_password)"
 }
 
+# Hostname only: no scheme, no path, no spaces, at least one dot --
+# catches a bare word like "civlytics" typed where a real public
+# hostname (e.g. auth.civilytics.in) is needed. Keycloak builds its
+# issuer/redirect URLs from this; a bad value fails token validation
+# later, far from where the mistake was actually made.
+validate_hostname() {
+    [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$ ]]
+}
+
+# scheme://host[:port][/path], no "://" typos like "wss:///host" (an
+# extra slash some other tool's output gets pasted with), no spaces.
+validate_url() {
+    local scheme="$1" val="$2"
+    [[ "$val" =~ ^${scheme}://[A-Za-z0-9.-]+(:[0-9]+)?(/[^[:space:]]*)?$ ]]
+}
+validate_https() { validate_url https "$1"; }
+validate_wss()   { validate_url wss "$1"; }
+# nginx path-routes on these exact suffixes (nginx/nginx.conf's
+# location /api/, /ws/, /webrtc/ blocks) -- a URL missing the suffix
+# silently hits the dashboard's own "/" instead of the real backend.
+validate_api_url()      { validate_url https "$1" && [[ "$1" == */api ]]; }
+validate_ws_url()       { validate_url wss "$1" && [[ "$1" == */ws ]]; }
+validate_mediamtx_url() { validate_url https "$1" && [[ "$1" == */webrtc ]]; }
+
 ensure_prompted() {
-    local key="$1" desc="$2" secret="${3:-0}" optional="${4:-0}" existing val
+    local key="$1" desc="$2" secret="${3:-0}" optional="${4:-0}" validate="${5:-}" existing val
     existing="$(env_get "$key")"
     [ -n "$existing" ] && return
     if [ ! -t 0 ]; then
@@ -157,11 +184,22 @@ ensure_prompted() {
         fi
         die "$key is required but there is no TTY to prompt on. Set it in $ENV_FILE and re-run."
     fi
-    printf '\n  %s\n' "$desc"
-    if [ "$optional" = "1" ]; then printf '  %s (optional, Enter to skip): ' "$key"
-    else printf '  %s: ' "$key"; fi
-    if [ "$secret" = "1" ]; then read -rs val; printf '\n'; else read -r val; fi
-    if [ -z "$val" ] && [ "$optional" != "1" ]; then die "$key is required"; fi
+    while :; do
+        printf '\n  %s\n' "$desc"
+        if [ "$optional" = "1" ]; then printf '  %s (optional, Enter to skip): ' "$key"
+        else printf '  %s: ' "$key"; fi
+        if [ "$secret" = "1" ]; then read -rs val; printf '\n'; else read -r val; fi
+        if [ -z "$val" ]; then
+            [ "$optional" = "1" ] && break
+            c_red "  $key is required"
+            continue
+        fi
+        if [ -n "$validate" ] && ! "$validate" "$val"; then
+            c_red "  '$val' doesn't look right for $key — check it and try again."
+            continue
+        fi
+        break
+    done
     env_set "$key" "$val"
 }
 
@@ -176,9 +214,6 @@ case "$ENVIRONMENT" in
     env_default KC_HOSTNAME localhost
     ensure_generated POSTGRES_PASSWORD
     ensure_generated REDIS_PASSWORD
-    env_default WW_SEED_OWNER_USERNAME admin
-    env_default WW_SEED_OWNER_EMAIL admin@civilytics.local
-    ensure_generated WW_SEED_OWNER_PASSWORD
     ;;
 
   # ── test: same topology as prod, ephemeral, offset ports ───────────
@@ -189,6 +224,11 @@ case "$ENVIRONMENT" in
     env_default KC_HOSTNAME localhost
     env_default KEYCLOAK_REALM_IMPORT ./keycloak
     env_default WW_KEYCLOAK_CLIENT_SECRET test-client-secret-not-for-production
+    # Mailpit needs no credentials and can never reach a real inbox, so
+    # there's no reason to leave email-sending gated off here the way prod
+    # is -- without this, WW_SMTP_HOST pointing at mailpit was a no-op
+    # because the app's own smtp_enabled check still said no.
+    env_default WW_SMTP_ENABLED true
     # +1000 offset so test can run alongside dev on one host.
     env_default PG_PORT 6433
     env_default KAFKA_PORT 10092
@@ -203,9 +243,6 @@ case "$ENVIRONMENT" in
     env_default RESTART_POLICY no
     ensure_generated POSTGRES_PASSWORD
     ensure_generated REDIS_PASSWORD
-    env_default WW_SEED_OWNER_USERNAME admin
-    env_default WW_SEED_OWNER_EMAIL admin@civilytics.local
-    ensure_generated WW_SEED_OWNER_PASSWORD
     [ -f keycloak/realm-test.json ] || c_ylw "keycloak/realm-test.json missing — Keycloak will start with an empty realm and auth tests will fail loudly (correct, not a silent pass)."
     ;;
 
@@ -234,11 +271,11 @@ case "$ENVIRONMENT" in
     ensure_prompted KC_HOSTNAME \
       "Public hostname Keycloak is served on, e.g. auth.civilytics.in
   Keycloak builds its issuer/redirect URLs from this; a wrong value makes
-  tokens fail audience validation." 0 0
+  tokens fail audience validation." 0 0 validate_hostname
     ensure_prompted MINIO_ROOT_USER "MinIO root access key (evidence + backup object store)." 0 0
-    ensure_prompted PUBLIC_API_URL "Browser-facing API URL, e.g. https://civilytics.example/api" 0 0
-    ensure_prompted PUBLIC_WS_URL "Browser-facing WebSocket URL, e.g. wss://civilytics.example/ws" 0 0
-    ensure_prompted PUBLIC_MEDIAMTX_URL "Browser-facing MediaMTX WebRTC URL, e.g. https://civilytics.example/webrtc" 0 0
+    ensure_prompted PUBLIC_API_URL "Browser-facing API URL, e.g. https://civilytics.example/api" 0 0 validate_api_url
+    ensure_prompted PUBLIC_WS_URL "Browser-facing WebSocket URL, e.g. wss://civilytics.example/ws" 0 0 validate_ws_url
+    ensure_prompted PUBLIC_MEDIAMTX_URL "Browser-facing MediaMTX WebRTC URL, e.g. https://civilytics.example/webrtc" 0 0 validate_mediamtx_url
     ensure_prompted WW_KEYCLOAK_CLIENT_SECRET \
       "Keycloak confidential-client secret for the branded login.
   Create the client in the realm, enable 'Direct access grants', then
@@ -248,9 +285,6 @@ case "$ENVIRONMENT" in
     if [ -z "$(env_get WW_INTERNAL_SERVICE_TOKEN)" ]; then
         env_set WW_INTERNAL_SERVICE_TOKEN "$(gen_password)"
     fi
-    env_default WW_SEED_OWNER_USERNAME admin
-    env_default WW_SEED_OWNER_EMAIL admin@civilytics.local
-    ensure_generated WW_SEED_OWNER_PASSWORD
 
     c_dim "Optional outbound channels — press Enter to leave disabled ..."
     ensure_prompted WW_SMTP_PASSWORD "SMTP password for report email." 1 1
@@ -348,12 +382,24 @@ while :; do
     sleep 5
 done
 
-# ── Seed the first owner (no-op if one already exists) ─────────────────
+# ── Seed the first owner — ONLY when explicitly requested ──────────────
+# Not run by default: granting the first privileged account shouldn't be
+# an unconditional side effect of every container start. Whoever passes
+# --seed-owner is asserting they're authorized to name the first owner.
 # Requires Keycloak's confidential client + realm roles to already exist
 # (manual setup for dev/prod per the comments above; test imports its own
 # realm). Best-effort: a fresh dev/prod realm that hasn't been configured
 # yet will fail this and the operator falls back to the admin console.
-if [ "$ENVIRONMENT" != "lite" ]; then
+if [ "$SEED_OWNER" -eq 1 ] && [ "$ENVIRONMENT" != "lite" ]; then
+    if [ "$(env_get WW_SMTP_ENABLED)" != "true" ]; then
+        c_ylw "WW_SMTP_ENABLED is not 'true' — the owner invite email has nowhere to go."
+        c_ylw "The account WILL be created regardless, but nobody can finish activating it"
+        c_ylw "or log in until the setup link is delivered. Configure SMTP first, or resend"
+        c_ylw "once it's working: ${DC[*]} exec api python scripts/seed_owner.py --resend --username <user>"
+        if [ "$ENVIRONMENT" = "test" ]; then
+            c_ylw "test profile: check Mailpit instead of a real inbox — http://localhost:\${MAILPIT_PORT:-8025}"
+        fi
+    fi
     if [ -t 0 ] && [ -t 1 ]; then
         c_dim "Owner account:"
         "${DC[@]}" exec -it api python scripts/seed_owner.py --interactive \
@@ -375,14 +421,17 @@ case "$ENVIRONMENT" in
         echo  "API       : http://localhost:8082/api/health"
         echo  "Keycloak  : http://localhost:8180  (admin/admin by default)"
         echo  "Conductor : http://localhost:5001"
-        c_dim "Owner login: see 'Owner account' output above, or re-run: ${DC[*]} exec -it api python scripts/seed_owner.py --interactive"
+        [ "$SEED_OWNER" -eq 1 ] && c_dim "Owner login: see 'Owner account' output above." \
+            || c_dim "No owner yet — run: ./scripts/start.sh $ENVIRONMENT --seed-owner"
         ;;
     test)
         c_grn "Dashboard : http://localhost:6174"
         echo  "API       : http://localhost:9082/api/health"
         echo  "Keycloak  : http://localhost:9180"
+        echo  "Mailpit   : http://localhost:9025  (catches the owner/invite setup emails)"
         c_dim "Host ports are offset +1000 so this can run alongside dev."
-        c_dim "Owner login: see 'Owner account' output above, or re-run: ${DC[*]} exec -it api python scripts/seed_owner.py --interactive"
+        [ "$SEED_OWNER" -eq 1 ] && c_dim "Owner login: see 'Owner account' output above." \
+            || c_dim "No owner yet — run: ./scripts/start.sh $ENVIRONMENT --seed-owner"
         ;;
     prod)
         host="${KC_HOSTNAME:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
@@ -391,7 +440,8 @@ case "$ENVIRONMENT" in
         echo  "Storage   : https://${host}/storage/   (MinIO console)"
         echo  "RTSP in   : rtsp://${host}:554/<path>  (cameras publish here)"
         c_dim "Start coturn (--turn) if viewers are off the camera LAN."
-        c_ylw "Owner login: see 'Owner account' output above, or re-run: ${DC[*]} exec -it api python scripts/seed_owner.py --interactive"
+        [ "$SEED_OWNER" -eq 1 ] && c_ylw "Owner login: see 'Owner account' output above." \
+            || c_ylw "No owner yet — run: ./scripts/start.sh $ENVIRONMENT --seed-owner"
         ;;
     lite)
         c_grn "Dashboard : http://localhost:5174"
