@@ -55,9 +55,16 @@
 #     loopback-restricted.
 #   - minio/nginx/coturn exist ONLY under profile `prod`/`turn` — real
 #     structural removal, not a value default.
+#
+# NO top-level `name:` here on purpose. The 5 deleted files each named
+# their project civilytics-{dev,test,prod} (civilytics-lite had none,
+# so Compose used the directory name) — Compose names a project's
+# volumes after its project name, so a single fixed name here would
+# make dev/test/prod suddenly share one volume set, orphaning whatever
+# data already exists under the old per-environment names. start.sh
+# passes `-p civilytics-<env>` explicitly instead, so volume names stay
+# exactly as they were.
 # ──────────────────────────────────────────────────────────────────────
-
-name: civilytics
 
 x-logging: &logging
   driver: json-file

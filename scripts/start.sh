@@ -60,7 +60,13 @@ if [ "${#EXTRA_PROFILES[@]}" -gt 0 ] && [ "$ENVIRONMENT" != "prod" ]; then
     die "--turn is prod only (coturn is defined under the turn profile)"
 fi
 
-DC=(docker compose -f docker-compose.yml --profile "$ENVIRONMENT" "${EXTRA_PROFILES[@]+"${EXTRA_PROFILES[@]}"}")
+# Explicit -p keeps each environment's Docker volumes under the exact
+# names the old per-environment compose files used (civilytics-dev,
+# civilytics-test, civilytics-prod) -- the merged file has no top-level
+# `name:` for this reason (see its header). Without this, Compose would
+# fall back to a single shared name and existing dev/test/prod data
+# would look like it vanished on the next start.
+DC=(docker compose -f docker-compose.yml -p "civilytics-${ENVIRONMENT}" --profile "$ENVIRONMENT" "${EXTRA_PROFILES[@]+"${EXTRA_PROFILES[@]}"}")
 
 # ── down / status — no secret handling needed ──────────────────────────
 if [ "$ACTION" = "down" ]; then
