@@ -1,6 +1,6 @@
 """cleanup_retention — purge evidence, embeddings, and logs past retention window."""
 from datetime import datetime, timedelta, timezone
-import httpx
+from workers.http_client import service_client
 import structlog
 from workers.config import settings
 
@@ -8,7 +8,7 @@ log = structlog.get_logger()
 
 
 async def handle_cleanup_retention(input_data: dict, task: dict) -> dict:
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with service_client(timeout=10) as client:
         resp = await client.get(
             f"{settings.evidence_service_url}/api/config/evidence_retention"
         )
@@ -28,7 +28,7 @@ async def handle_cleanup_retention(input_data: dict, task: dict) -> dict:
     deleted_embeddings = 0
     deleted_logs = 0
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with service_client(timeout=120) as client:
         try:
             resp = await client.request(
                 "DELETE",

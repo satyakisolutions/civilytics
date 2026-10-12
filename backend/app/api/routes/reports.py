@@ -236,3 +236,59 @@ async def _set_config(db: AsyncSession, key: str, value: list) -> None:
         config = SystemConfig(key=key, value=value)
         db.add(config)
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Incident narrative (BitNet) — called by the Conductor workflow-workers
+# compose_report task, same worker-to-api pattern as /lpr/analyze.
+#
+# SECURITY: require_admin here is only satisfied today via WW_AUTH_DEV_MODE=1
+# (see app/auth/middleware.py) because the calling worker sends no auth
+# header, the same pre-existing gap as /lpr/analyze. Must be fixed with a
+# real service-to-service credential before WW_AUTH_DEV_MODE=0 in prod.
+# ---------------------------------------------------------------------------
+
+
+class IncidentNarrativeRequest(BaseModel):
+    detection_type: str = "unknown"
+    camera_id: str = "unknown"
+    timestamp: str = "unknown"
+    severity_level: str = "unknown"
+    plates: list[str] = Field(default_factory=list)
+    is_repeat_offender: bool = False
+    repeat_match_count: int = 0
+    cluster_hotspot: bool = False
+
+
+class IncidentNarrativeResponse(BaseModel):
+    narrative: str
+    generated_by: str
+
+
+_narrator_singleton = None
+
+
+def _get_narrator():
+    global _narrator_singleton
+    if _narrator_singleton is None:
+        from services.reports.bitnet_narrator import BitNetNarrator
+        _narrator_singleton = BitNetNarrator()
+    return _narrator_singleton
+
+
+@router.post("/incident-narrative", response_model=IncidentNarrativeResponse)
+async def generate_incident_narrative(
+    body: IncidentNarrativeRequest,
+    _user: dict = Depends(require_admin),
+):
+    """Write the prose narrative for one incident from code-derived facts only.
+
+    BitNet never receives evidence images/video — only the facts this request
+    carries, so it cannot invent a plate, identity, or detail not listed.
+    """
+    narrator = _get_narrator()
+    narrative = narrator.incident_narrative(body.model_dump())
+    return IncidentNarrativeResponse(
+        narrative=narrative,
+        generated_by="BitNet-b1.58-2B-4T" if narrator.available else "template",
+    )

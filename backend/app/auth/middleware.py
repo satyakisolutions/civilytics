@@ -1,5 +1,6 @@
 # backend/app/auth/middleware.py
 """FastAPI auth dependencies for role-based access control."""
+import hmac
 import logging
 import os
 
@@ -14,18 +15,49 @@ def _is_dev_mode() -> bool:
     return os.environ.get("WW_AUTH_DEV_MODE", "").lower() in ("1", "true", "yes")
 
 
-async def get_current_user(request: Request) -> dict:
-    """Extract and validate JWT from Authorization header. Returns claims dict.
+def _service_token() -> str:
+    """Shared secret for internal worker-to-api calls (Conductor task workers).
 
-    In development mode (WW_AUTH_DEV_MODE=true), returns a mock admin user
-    when no Authorization header is present. In production, always requires
-    a valid Bearer token.
+    Unset/empty means the service-token path is disabled entirely — it is
+    NOT a dev-mode fallback, so it stays usable with WW_AUTH_DEV_MODE=0.
     """
+    return os.environ.get("WW_INTERNAL_SERVICE_TOKEN", "")
+
+
+def _is_valid_service_token(presented: str) -> bool:
+    expected = _service_token()
+    if not expected or not presented:
+        return False
+    return hmac.compare_digest(presented, expected)
+
+
+async def get_current_user(request: Request) -> dict:
+    """Extract and validate the caller's identity. Returns a claims dict.
+
+    Three credential paths, checked in order:
+      1. X-Service-Token: shared secret for internal workers (Conductor
+         task workers calling e.g. /lpr/analyze, /reports/incident-narrative).
+         Independent of dev mode — works with WW_AUTH_DEV_MODE=0.
+      2. Authorization: Bearer <jwt>: user or integration token, validated
+         against Keycloak.
+      3. ww_access cookie: browser session from the branded login form.
+
+    In development mode (WW_AUTH_DEV_MODE=true) only, returns a mock admin
+    user when none of the above are present.
+    """
+    service_token = request.headers.get("X-Service-Token", "")
+    if _is_valid_service_token(service_token):
+        return {
+            "sub": "internal-service",
+            "preferred_username": "internal-service",
+            "realm_access": {"roles": ["admin", "viewer"]},
+        }
+
     auth_header = request.headers.get("Authorization", "")
     token = ""
 
     if auth_header.startswith("Bearer "):
-        # Service-to-service / integration callers.
+        # User or integration bearer token, validated against Keycloak below.
         token = auth_header[7:]
     else:
         # Browser session from the branded login form. The token lives in an

@@ -1,5 +1,6 @@
 """publish_event_record — persists final event for UI screens."""
 import httpx
+from workers.http_client import service_client
 import structlog
 from datetime import datetime, timezone
 from workers.config import settings
@@ -33,7 +34,7 @@ async def handle_publish_event(input_data: dict, task: dict) -> dict:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with service_client(timeout=30) as client:
             resp = await client.post(
                 f"{settings.analytics_service_url}/api/events/publish", json=payload
             )

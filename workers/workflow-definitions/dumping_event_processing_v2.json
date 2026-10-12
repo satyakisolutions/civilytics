@@ -58,18 +58,6 @@
             },
             "optional": true
           }
-        ],
-        [
-          {
-            "name": "vlm_describe",
-            "taskReferenceName": "vlm",
-            "type": "SIMPLE",
-            "inputParameters": {
-              "event": "${validate.output}",
-              "evidence_refs": "${evidence.output.evidence_refs}"
-            },
-            "optional": true
-          }
         ]
       ]
     },
@@ -77,7 +65,11 @@
       "name": "join_analysis",
       "taskReferenceName": "join_analysis",
       "type": "JOIN",
-      "joinOn": ["lpr", "cluster", "reid", "vlm"]
+      "joinOn": [
+        "lpr",
+        "cluster",
+        "reid"
+      ]
     },
     {
       "name": "update_analytics",
@@ -98,8 +90,7 @@
         "evidence_refs": "${evidence.output.evidence_refs}",
         "lpr_result": "${lpr.output}",
         "cluster_result": "${cluster.output}",
-        "reid_result": "${reid.output}",
-        "vlm_result": "${vlm.output}"
+        "reid_result": "${reid.output}"
       }
     },
     {
@@ -180,7 +171,13 @@
       "name": "join_dispatch",
       "taskReferenceName": "join_dispatch",
       "type": "JOIN",
-      "joinOn": ["tg", "email", "wa", "speaker", "sip"]
+      "joinOn": [
+        "tg",
+        "email",
+        "wa",
+        "speaker",
+        "sip"
+      ]
     }
   ],
   "failureWorkflow": "dumping_event_failure_handler",

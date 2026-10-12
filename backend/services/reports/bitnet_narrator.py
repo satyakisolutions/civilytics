@@ -240,6 +240,61 @@ Anomalies:"""
         return text  # OK to return empty — anomalies are optional
 
     # ------------------------------------------------------------------
+    # Per-incident narrative (one event, not an aggregate period)
+    # ------------------------------------------------------------------
+
+    def incident_narrative(self, facts: dict) -> str:
+        """Generate the prose narrative for one dumping-event incident.
+
+        `facts` holds ONLY code-derived values (detection, camera, timestamp,
+        severity, LPR plates, ReID repeat-offender match, cluster hotspot
+        info) — BitNet never sees raw evidence, so it cannot invent a plate
+        or identity. It writes prose around facts the caller already wrote.
+        """
+        data = self._build_incident_context(facts)
+        prompt = f"""You are a surveillance report writer for Civilytics, an AI-powered waste dumping detection system. Write a factual, neutral 2-3 sentence incident narrative using ONLY the facts given below. Do not invent any detail not listed. Do not speculate about identity, intent, or protected characteristics.
+
+Facts:
+{data}
+
+Narrative:"""
+
+        text = self._generate(prompt, max_tokens=150)
+        if not text:
+            return self._fallback_incident_narrative(facts)
+        return text
+
+    def _build_incident_context(self, facts: dict) -> str:
+        lines = [
+            f"Detection type: {facts.get('detection_type', 'unknown')}",
+            f"Camera: {facts.get('camera_id', 'unknown')}",
+            f"Timestamp: {facts.get('timestamp', 'unknown')}",
+            f"Severity: {facts.get('severity_level', 'unknown')}",
+        ]
+        plates = facts.get("plates") or []
+        if plates:
+            lines.append(f"Licence plate(s): {', '.join(plates)}")
+        if facts.get("is_repeat_offender"):
+            lines.append(f"Repeat match: {facts.get('repeat_match_count', 0)} prior sighting(s) at this location")
+        if facts.get("cluster_hotspot"):
+            lines.append("Location is a known dumping hotspot")
+        return "\n".join(lines)
+
+    def _fallback_incident_narrative(self, facts: dict) -> str:
+        detection = (facts.get("detection_type") or "incident").replace("_", " ")
+        camera = facts.get("camera_id", "unknown")
+        ts = facts.get("timestamp", "unknown time")
+        severity = facts.get("severity_level", "unknown")
+        parts = [f"A {detection} incident was detected by camera {camera} at {ts}."]
+        plates = facts.get("plates") or []
+        if plates:
+            parts.append(f"Licence plate(s) recorded: {', '.join(plates)}.")
+        if facts.get("is_repeat_offender"):
+            parts.append(f"This matches {facts.get('repeat_match_count', 0)} prior sighting(s) at this location.")
+        parts.append(f"Overall severity: {severity.upper() if isinstance(severity, str) else severity}.")
+        return " ".join(parts)
+
+    # ------------------------------------------------------------------
     # Full narrative generation
     # ------------------------------------------------------------------
 

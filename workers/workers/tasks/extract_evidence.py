@@ -1,5 +1,6 @@
 """extract_evidence — calls evidence service for frames and clips."""
 import httpx
+from workers.http_client import service_client
 import structlog
 from workers.config import settings
 
@@ -13,7 +14,7 @@ async def handle_extract_evidence(input_data: dict, task: dict) -> dict:
     log.info("evidence.extracting", event_id=event_id)
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with service_client(timeout=120) as client:
             resp = await client.post(
                 f"{settings.evidence_service_url}/api/evidence/extract",
                 json={

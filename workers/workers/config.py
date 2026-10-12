@@ -15,10 +15,21 @@ class WorkerSettings(BaseSettings):
     database_url: str = ""
     redis_url: str = "redis://localhost:6379/0"
     evidence_service_url: str = "http://api:8080"
-    lpr_service_url: str = "http://api:8080"
     clustering_service_url: str = "http://api:8080"
     analytics_service_url: str = "http://api:8080"
+    reports_service_url: str = "http://api:8080"
     alert_webhook_url: str = ""
+
+    # ReID (moved in-process here from backend/app/api/routes/reid.py —
+    # see workers/workers/tasks/run_reid.py).
+    qdrant_url: str = "http://qdrant:6333"
+    clip_reid_checkpoint: str = "/app/models/reid/clip_reid.pth"
+
+    # Shared secret for worker-to-api calls — see app/auth/middleware.py.
+    # Must be set (and match WW_INTERNAL_SERVICE_TOKEN on the api container)
+    # for admin-gated routes (/lpr/analyze, /reports/incident-narrative, ...)
+    # to work once WW_AUTH_DEV_MODE=0.
+    internal_service_token: str = ""
 
     worker_poll_interval_ms: int = 1000
     worker_batch_size: int = 1

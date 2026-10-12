@@ -1,5 +1,6 @@
 """cluster_subject_sightings — visual similarity clustering."""
 import httpx
+from workers.http_client import service_client
 import structlog
 from workers.config import settings
 
@@ -17,7 +18,7 @@ async def handle_cluster_sightings(input_data: dict, task: dict) -> dict:
     log.info("clustering.analyzing", event_id=event_id)
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with service_client(timeout=60) as client:
             resp = await client.post(
                 f"{settings.clustering_service_url}/api/clustering/analyze",
                 json={

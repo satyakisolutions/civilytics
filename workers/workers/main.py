@@ -9,6 +9,7 @@ from workers.conductor_poller import TaskPoller
 from workers.tasks.validate_event import handle_validate
 from workers.tasks.extract_evidence import handle_extract_evidence
 from workers.tasks.run_lpr import handle_run_lpr
+from workers.tasks.run_reid import handle_reid_analyze
 from workers.tasks.cluster_sightings import handle_cluster_sightings
 from workers.tasks.update_analytics import handle_update_analytics
 from workers.tasks.publish_event import handle_publish_event
@@ -37,6 +38,7 @@ TASK_HANDLERS = [
     ("validate_dumping_event", handle_validate),
     ("extract_evidence", handle_extract_evidence),
     ("run_lpr_analysis", handle_run_lpr),
+    ("reid_analyze", handle_reid_analyze),
     ("cluster_subject_sightings", handle_cluster_sightings),
     ("update_analytics", handle_update_analytics),
     ("publish_event_record", handle_publish_event),

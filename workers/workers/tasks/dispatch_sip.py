@@ -1,5 +1,5 @@
 """dispatch_sip — trigger SIP/IVR call for alert escalation."""
-import httpx
+from workers.http_client import service_client
 import structlog
 from workers.config import settings
 
@@ -10,7 +10,7 @@ async def handle_dispatch_sip(input_data: dict, task: dict) -> dict:
     event = input_data.get("event", {})
     event_id = event.get("event_id", "unknown")
 
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with service_client(timeout=10) as client:
         resp = await client.get(
             f"{settings.evidence_service_url}/api/config/delivery_channel_sip_phone"
         )
@@ -43,7 +43,7 @@ async def handle_dispatch_sip(input_data: dict, task: dict) -> dict:
     )
 
     results = []
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with service_client(timeout=60) as client:
         for contact in contacts:
             try:
                 resp = await client.post(

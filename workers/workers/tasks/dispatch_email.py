@@ -2,7 +2,7 @@
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import httpx
+from workers.http_client import service_client
 import structlog
 from workers.config import settings
 
@@ -13,7 +13,7 @@ async def handle_dispatch_email(input_data: dict, task: dict) -> dict:
     event = input_data.get("event", {})
     event_id = event.get("event_id", "unknown")
 
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with service_client(timeout=10) as client:
         resp = await client.get(
             f"{settings.evidence_service_url}/api/config/delivery_channel_email"
         )

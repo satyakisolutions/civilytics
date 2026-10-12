@@ -1,6 +1,7 @@
 """update_analytics — idempotent aggregate updates."""
 import json
 import httpx
+from workers.http_client import service_client
 import structlog
 from datetime import datetime, timezone
 from aiokafka import AIOKafkaProducer
@@ -42,7 +43,7 @@ async def handle_update_analytics(input_data: dict, task: dict) -> dict:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with service_client(timeout=30) as client:
             resp = await client.post(
                 f"{settings.analytics_service_url}/api/analytics/upsert",
                 json=analytics_payload,

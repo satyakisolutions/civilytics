@@ -1,5 +1,5 @@
 """dispatch_ip_speaker — send TTS alert to IP speaker via HTTP."""
-import httpx
+from workers.http_client import service_client
 import structlog
 from workers.config import settings
 
@@ -10,7 +10,7 @@ async def handle_dispatch_ip_speaker(input_data: dict, task: dict) -> dict:
     event = input_data.get("event", {})
     event_id = event.get("event_id", "unknown")
 
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with service_client(timeout=10) as client:
         resp = await client.get(
             f"{settings.evidence_service_url}/api/config/delivery_channel_ip_speaker"
         )
@@ -38,7 +38,7 @@ async def handle_dispatch_ip_speaker(input_data: dict, task: dict) -> dict:
 
     speaker_url = f"{protocol}://{host}:{port}/api/announce"
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with service_client(timeout=30) as client:
             resp = await client.post(
                 speaker_url,
                 json={"text": announcement, "priority": priority, "zone": zone},
