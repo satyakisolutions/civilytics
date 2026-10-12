@@ -122,6 +122,22 @@ class AlertConsumer:
             logger.debug("Failed to resolve camera info for %s", camera_id_or_name)
         return None
 
+    async def _send_tts(self, camera_id: str, track_id, text: str, priority: str):
+        try:
+            from aiokafka import AIOKafkaProducer
+            if self._tts_producer is None:
+                self._tts_producer = AIOKafkaProducer(
+                    bootstrap_servers=self._bootstrap_servers,
+                    value_serializer=lambda v: orjson.dumps(v),
+                )
+                await self._tts_producer.start()
+            await self._tts_producer.send_and_wait(
+                TOPIC_TTS,
+                value={"camera_id": camera_id, "track_id": track_id, "text": text, "priority": priority},
+            )
+        except Exception:
+            logger.exception("Failed to send TTS request (camera=%s)", camera_id)
+
     async def _handle_alert(self, payload: dict):
         camera_name = payload.get("camera_id", "")
         severity = payload.get("severity", "warning")
@@ -181,23 +197,7 @@ class AlertConsumer:
                 _shaped = _apply_tone(_tts_hash_source)
                 text_hash = hashlib.sha256(_shaped.encode()).hexdigest()[:16]
                 tts_audio_url = f"/tts/tts_{text_hash}.wav"
-                try:
-                    from aiokafka import AIOKafkaProducer
-                    if self._tts_producer is None:
-                        self._tts_producer = AIOKafkaProducer(
-                            bootstrap_servers=self._bootstrap_servers,
-                            value_serializer=lambda v: orjson.dumps(v),
-                        )
-                        await self._tts_producer.start()
-                    await self._tts_producer.send_and_wait(
-                        TOPIC_TTS,
-                        value={
-                            "camera_id": camera_name, "track_id": track_id,
-                            "text": _tts_hash_source, "priority": "high" if severity == "critical" else "normal",
-                        },
-                    )
-                except Exception:
-                    logger.exception("Failed to send TTS request for alert (camera=%s)", camera_name)
+                await self._send_tts(camera_name, track_id, _tts_hash_source, "high" if severity == "critical" else "normal")
 
         alert_id = str(uuid.uuid4())
         now = (
@@ -280,22 +280,7 @@ class AlertConsumer:
             if not speaker_text and person_desc:
                 speaker_text = f"{person_desc}. Illegal dumping detected. You are being recorded."
         if speaker_text:
-            speaker_hash = hashlib.sha256(speaker_text.encode()).hexdigest()[:16]
-            try:
-                from aiokafka import AIOKafkaProducer
-                if self._tts_producer is None:
-                    self._tts_producer = AIOKafkaProducer(
-                        bootstrap_servers=self._bootstrap_servers,
-                        value_serializer=lambda v: orjson.dumps(v),
-                    )
-                    await self._tts_producer.start()
-                await self._tts_producer.send_and_wait(
-                    TOPIC_TTS,
-                    value={"camera_id": camera_id, "track_id": track_id,
-                           "text": speaker_text, "priority": "high"},
-                )
-            except Exception:
-                logger.exception("Failed to send deterrent TTS")
+            await self._send_tts(camera_id, track_id, speaker_text, "high")
 
         # --- Operator notification (UI) ---
         # Show deterrent if available (aggressive scolding), otherwise person + reasoning.
