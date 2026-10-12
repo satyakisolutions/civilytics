@@ -290,10 +290,12 @@ async def set_enabled(user_id: str, enabled: bool) -> None:
 
 
 async def set_password(user_id: str, password: str, *, temporary: bool = True) -> None:
-    """Set a credential directly. Bootstrap-only -- normal onboarding (create_user)
-    never does this; it leaves the user with no credential and emails a setup link
-    instead. This exists solely so scripts/seed_owner.py can mint the very first
-    owner, who by definition has no admin yet to invite them.
+    """Set a credential directly. Used only for an already-authenticated admin
+    action (scripts/seed_owner.py's interactive password-reset path) -- normal
+    onboarding (create_user) never does this; it leaves the user with no
+    credential and emails a setup link instead, because that's what actually
+    satisfies Keycloak's required actions before this app's Direct Access
+    Grant login will accept a sign-in. Never used for first-activation.
     """
     await _request(
         "PUT",
@@ -308,14 +310,11 @@ async def users_with_role(role: str) -> list[dict]:
 
 
 async def clear_required_actions(user_id: str) -> None:
-    """Used only by scripts/seed_owner.py. create_user() sets requiredActions
-    (UPDATE_PASSWORD, VERIFY_EMAIL) for the normal email-invite onboarding
-    flow, but the bootstrap owner has no redirect-flow login to satisfy
-    them -- auth.py's login route is Direct Access Grant only, which
-    Keycloak refuses outright ("Account is not fully set up") for any user
-    with pending required actions or a temporary credential. Bootstrap
-    must clear this, and must set a non-temporary password, or it creates
-    an owner that can never sign in.
+    """Paired with set_password() for an admin-initiated password reset on an
+    already-active account. auth.py's login route is Direct Access Grant
+    only, which Keycloak refuses outright ("Account is not fully set up")
+    for any user with pending required actions -- a direct reset must clear
+    them itself since there's no email-link step to do it this time.
     """
     await _request("PUT", f"/users/{user_id}", json={"requiredActions": []})
 
