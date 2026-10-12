@@ -1,21 +1,103 @@
+# ──────────────────────────────────────────────────────────────────────
+# Civilytics / WasteWatch — single compose file, all environments.
+#
+#   ./scripts/start.sh dev|test|prod|lite [options]
+#
+# One file, four profiles:
+#   dev   workstation: Keycloak + Conductor + hot-reload bind mounts
+#   test  same topology as prod, ephemeral data, offset ports (+1000),
+#         runs alongside dev on one host
+#   prod  real deploy: built images, required secrets, nginx ingress,
+#         MinIO, optional coturn (--profile turn)
+#   lite  minimal footprint: no Keycloak, no Conductor, core path only
+#
+# Previously five files (docker-compose.{dev,test,prod,lite}.yml +
+# .override.yml) plus scripts/bootstrap.sh. Originals kept at
+# docker/legacy/ for reference. scripts/start.sh now does everything
+# bootstrap.sh did (secret generation/prompting) plus volume-folder
+# creation, before calling `docker compose --profile <env> up -d`.
+#
+# WHAT "ONE FILE" COULD NOT MERGE AWAY — profiles only turn a service on
+# or off; they cannot reshape one service's image/build/command/ports
+# differently per profile. Two real shape conflicts forced a second
+# service name instead of one shared block:
+#   - frontend (dev-server, profiles dev+lite) vs frontend-prod (built
+#     static image, profiles test+prod) — hot reload vs a real build are
+#     structurally different containers.
+#   - everything else collapses to ONE block per service, parameterized
+#     by env vars the per-environment .env sets (see scripts/start.sh).
+#   - dev's old hot-reload bind mounts (./backend/app:/app/app:rw etc.)
+#     are GONE. A bind mount's source can be env-parameterized per
+#     environment, but its target cannot, and mounting an env-driven
+#     placeholder onto api/pipeline's real code path would silently
+#     shadow the image's baked-in code with an empty dir in test/prod.
+#     One shape for all four profiles; iterate with `--build` instead.
+#
+# SECURITY-CRITICAL DEFAULTS (fail SAFE, not open, if .env is empty):
+#   - WW_AUTH_DEV_MODE defaults to 0. It bypasses REST *and* WebSocket
+#     auth and grants owner+admin+viewer — scripts/start.sh refuses to
+#     start prod if it's 1.
+#   - WW_AUTH_COOKIE_SECURE defaults to "true" (fails closed: cookie
+#     dropped over HTTP) rather than "false" (fails open).
+#   - postgres/kafka/redis/keycloak bind their host port to 127.0.0.1 by
+#     default — never reachable from the LAN. This is NOT identical to
+#     prod's old `expose:`-only design: that gave no host port at all;
+#     this gives one that only answers to processes running ON the host
+#     (an SSH session, or a container that escaped its own network
+#     namespace) — containers on the compose network already reach these
+#     by DNS name (postgres:5432 etc.) and never touch the host-published
+#     port anyway. True port removal would require two differently-named
+#     service blocks per profile, which breaks that DNS resolution for
+#     every consumer unless they ALSO branch by profile — reintroducing
+#     the duplication this file exists to remove. Loopback bind is the
+#     ceiling achievable with one service name across all four profiles.
+#     nginx/mediamtx/minio, meant for a browser or camera, are not
+#     loopback-restricted.
+#   - minio/nginx/coturn exist ONLY under profile `prod`/`turn` — real
+#     structural removal, not a value default.
+# ──────────────────────────────────────────────────────────────────────
+
+name: civilytics
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+x-ww-env: &ww-env
+  WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  WW_REDIS_URL: redis://:${REDIS_PASSWORD:-wastewatch_dev}@redis:6379/0
+  WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
+  WW_MEDIAMTX_API_URL: http://mediamtx:9997
+  WW_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wastewatch}:${POSTGRES_PASSWORD:-wastewatch_dev}@postgres:5432/wastewatch
+  # Shared secret for worker-to-api calls (Conductor task workers and
+  # workflow-workers hitting admin-gated routes like /lpr/analyze,
+  # /reports/incident-narrative). Independent of WW_AUTH_DEV_MODE — keeps
+  # those calls authenticated even with dev mode off. See
+  # backend/app/auth/middleware.py. Must be a real secret outside dev.
+  WW_INTERNAL_SERVICE_TOKEN: ${WW_INTERNAL_SERVICE_TOKEN:-wastewatch_dev_internal_token}
+
 services:
+  # ── Data stores ──────────────────────────────────────────────────────
   postgres:
     image: postgres:15-alpine
     environment:
       POSTGRES_DB: wastewatch
-      POSTGRES_USER: wastewatch
-      POSTGRES_PASSWORD: wastewatch_dev
+      POSTGRES_USER: ${POSTGRES_USER:-wastewatch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wastewatch_dev}
     ports:
-      - "5433:5432"
+      - "${PG_BIND:-127.0.0.1}:${PG_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wastewatch"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wastewatch}"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
-    restart: unless-stopped
+    logging: *logging
+    restart: ${RESTART_POLICY:-unless-stopped}
 
   kafka:
     image: apache/kafka:3.7.0
@@ -31,9 +113,12 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_LOG_DIRS: /var/lib/kafka/data
-      CLUSTER_ID: wastewatch-kafka-cluster-01
+      # Bounded so a stalled consumer cannot fill the disk (matters in prod).
+      KAFKA_LOG_RETENTION_HOURS: ${KAFKA_LOG_RETENTION_HOURS:-72}
+      KAFKA_LOG_RETENTION_BYTES: ${KAFKA_LOG_RETENTION_BYTES:-5368709120}
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-wastewatch-kafka-cluster-01}
     ports:
-      - "9092:9092"
+      - "${KAFKA_BIND:-127.0.0.1}:${KAFKA_PORT:-9092}:9092"
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
@@ -42,71 +127,176 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    logging: *logging
+    restart: ${RESTART_POLICY:-unless-stopped}
 
   redis:
     image: redis:7-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD:-changeme_in_production}
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-wastewatch_dev}
+      --maxmemory ${REDIS_MAXMEMORY:-512mb}
+      --maxmemory-policy volatile-lru
     ports:
-      - "6380:6379"
+      - "${REDIS_BIND:-127.0.0.1}:${REDIS_PORT:-6380}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme_in_production}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-wastewatch_dev}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
+    logging: *logging
+    restart: ${RESTART_POLICY:-unless-stopped}
 
-  mediamtx:
-    image: bluenviron/mediamtx:latest
-    ports:
-      - "8554:8554"       # RTSP
-      - "8889:8889"       # WebRTC HTTP (WHEP)
-      - "8189:8189/udp"   # WebRTC media (ICE/UDP) — matches webrtcLocalUDPAddress
-      - "9997:9997"       # API
-    volumes:
-      - ./mediamtx.yml:/mediamtx.yml:ro
-
-  keycloak:
-    image: quay.io/keycloak/keycloak:24.0
-    command: start-dev
-    environment:
-      KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/wastewatch
-      KC_DB_USERNAME: wastewatch
-      KC_DB_PASSWORD: ${KC_DB_PASSWORD:?Set KC_DB_PASSWORD in .env}
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
-    ports:
-      - "8180:8080"
-    restart: unless-stopped
-
+  # Vector store for ReID (person/vehicle embedding search) and log
+  # search (backend/app/logs/qdrant_store.py). Live frontend traffic
+  # (HistoryView.tsx -> /api/reid/analyze) depends on this; it was
+  # dropped from the compose merge by mistake (CONTAINER_PLAN.md's
+  # "ReID not required now" note is stale — the route and its frontend
+  # caller are both live code). No pgvector migration exists yet despite
+  # being discussed; re-add when/if that migration actually lands.
   qdrant:
     image: qdrant/qdrant:v1.13.6
     ports:
-      - "6333:6333"
+      - "${QDRANT_BIND:-127.0.0.1}:${QDRANT_PORT:-6333}:6333"
     volumes:
       - qdrant_data:/qdrant/storage
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:6333/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    logging: *logging
+    restart: ${RESTART_POLICY:-unless-stopped}
 
-  # ── API server (REST + WebSocket only, no workers) ──────────────
-  # NOTE: host port 8080 collides with another running container on this
-  # workstation (plant-pulse); using 8082 locally. Change via
-  # docker-compose.override.yml if you want a different host port.
+  # ── Workflow orchestration (dev only — not wired into test/prod yet) ──
+  conductor-server:
+    image: conductoross/conductor:3.15.0
+    profiles: ["dev"]
+    environment:
+      CONFIG_PROP: |
+        conductor.db.type=redis_standalone
+        conductor.queue.type=redis_standalone
+        conductor.redis.hosts=redis:6379:us-east-1c
+        conductor.redis.password=${REDIS_PASSWORD:-wastewatch_dev}
+        conductor.redis.database=1
+    ports:
+      - "${CONDUCTOR_UI_BIND:-127.0.0.1}:5001:5000"
+      - "${CONDUCTOR_API_BIND:-127.0.0.1}:8081:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    restart: ${RESTART_POLICY:-unless-stopped}
+
+  # ── Identity ────────────────────────────────────────────────────────
+  # Prod sends onboarding email via its OWN Keycloak realm SMTP config
+  # (set after first start; see scripts/start.sh output). Dev/test relay
+  # through mailpit below so a test run can never mail a real address.
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    profiles: ["dev", "test", "prod"]
+    command: ["sh", "-c", "${KC_COMMAND:-start-dev}"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/wastewatch
+      KC_DB_USERNAME: ${POSTGRES_USER:-wastewatch}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-wastewatch_dev}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HOSTNAME: ${KC_HOSTNAME:-localhost}
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_BIND:-127.0.0.1}:${KEYCLOAK_PORT:-8180}:8080"
+    volumes:
+      # Only present/mounted for test (seeds known users/roles). Absent
+      # elsewhere — Keycloak starts with an empty realm, which is correct
+      # for dev (configure by hand) and prod (configure by hand).
+      - ${KEYCLOAK_REALM_IMPORT:-./keycloak/empty}:/opt/keycloak/data/import:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /realms/master HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q '200 OK' <&3"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 45s
+    logging: *logging
+    restart: ${RESTART_POLICY:-unless-stopped}
+
+  mailpit:
+    image: axllent/mailpit:latest
+    profiles: ["dev", "test"]
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      - "${MAILPIT_BIND:-127.0.0.1}:${MAILPIT_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: ${RESTART_POLICY:-unless-stopped}
+
+  # ── Media ──────────────────────────────────────────────────────────
+  # Separate container deliberately: pipeline restarts are frequent
+  # (NVENC faults, EOS, config reloads) and must not drop every browser's
+  # WebRTC session. See docs/CONTAINER_PLAN.md.
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    ports:
+      - "${MEDIAMTX_RTSP_PORT:-8554}:8554"
+      - "${MEDIAMTX_WEBRTC_PORT:-8889}:8889"
+      - "${MEDIAMTX_ICE_PORT:-8189}:8189/udp"   # ICE/UDP cannot be proxied
+      - "${MEDIAMTX_API_BIND:-127.0.0.1}:${MEDIAMTX_API_PORT:-9997}:9997"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9997/v3/paths/list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    logging: *logging
+    restart: ${RESTART_POLICY:-unless-stopped}
+
+  # ── Application ────────────────────────────────────────────────────
   api:
     build:
       context: ./backend
     ports:
-      - "8082:8080"
+      - "${API_PORT:-8082}:8080"
     env_file:
       - .env
     environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
-      WW_MEDIAMTX_API_URL: http://mediamtx:9997
-      WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
+      <<: *ww-env
       WW_KEYCLOAK_URL: http://keycloak:8080
-      CLIP_REID_CHECKPOINT: /app/models/reid/clip_reid.pth
+      WW_KEYCLOAK_REALM: ${WW_KEYCLOAK_REALM:-wastewatch}
+      WW_KEYCLOAK_CLIENT_ID: ${WW_KEYCLOAK_CLIENT_ID:-wastewatch-api}
+      WW_KEYCLOAK_CLIENT_SECRET: ${WW_KEYCLOAK_CLIENT_SECRET:-dev-client-secret}
+      WW_CONDUCTOR_SERVER_URL: http://conductor-server:8080/api
+      WW_EVIDENCE_DIR: /app/evidence
+      WW_TTS_DIR: /tmp/wastewatch/tts
+      # Fails CLOSED: set to "false" only by dev/test .env (plain HTTP).
+      WW_AUTH_COOKIE_SECURE: ${WW_AUTH_COOKIE_SECURE:-true}
+      WW_AUTH_COOKIE_SAMESITE: ${WW_AUTH_COOKIE_SAMESITE:-lax}
+      WW_AUTH_COOKIE_DOMAIN: ${WW_AUTH_COOKIE_DOMAIN:-}
+      # Fails CLOSED: 0 unless an environment's .env explicitly sets 1.
+      # scripts/start.sh refuses to start prod if this is 1.
+      WW_AUTH_DEV_MODE: ${WW_AUTH_DEV_MODE:-0}
     depends_on:
       postgres:
         condition: service_healthy
@@ -114,42 +304,48 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_healthy
     volumes:
       - tts_data:/tmp/wastewatch/tts
       - evidence_data:/app/evidence
       - ./backend/models:/app/models:ro
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/api/health').status==200 else 1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging: *logging
+    restart: ${RESTART_POLICY:-unless-stopped}
 
-  # ── Combined Backend Workers ───────────────────────────────────
-  # All Kafka/Redis consumers in one process: alerts, sip, evidence,
-  # health_monitor, logs, reports, lpr, healer, analytics, alert_delivery,
-  # vlm, and tts.
   backend-workers:
     build:
       context: ./backend
     env_file:
       - .env
     environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
-      WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
-      WW_MEDIAMTX_API_URL: http://mediamtx:9997
-      WW_DATABASE_URL: ${WW_DATABASE_URL}
-      WW_SMTP_HOST: ${WW_SMTP_HOST:-}
-      WW_SMTP_PORT: ${WW_SMTP_PORT:-587}
+      <<: *ww-env
+      WW_SMTP_HOST: ${WW_SMTP_HOST:-mailpit}
+      WW_SMTP_PORT: ${WW_SMTP_PORT:-1025}
       WW_SMTP_USER: ${WW_SMTP_USER:-}
       WW_SMTP_PASSWORD: ${WW_SMTP_PASSWORD:-}
       WW_SMTP_FROM: ${WW_SMTP_FROM:-wastewatch@satyaki.co.in}
-      WW_SMTP_TLS: ${WW_SMTP_TLS:-true}
+      WW_SMTP_TLS: ${WW_SMTP_TLS:-false}
+      # Optional outbound channels — off by default everywhere. Each
+      # environment's .env opts in explicitly (see scripts/start.sh).
       WW_SMTP_ENABLED: ${WW_SMTP_ENABLED:-false}
+      WW_TELEGRAM_ENABLED: ${WW_TELEGRAM_ENABLED:-false}
+      WW_SIP_ENABLED: ${WW_SIP_ENABLED:-false}
+      WW_IP_SPEAKER_ENABLED: ${WW_IP_SPEAKER_ENABLED:-false}
+      WW_TTS_ENABLED: ${WW_TTS_ENABLED:-false}
+      WW_INCIDENT_ENABLED: ${WW_INCIDENT_ENABLED:-false}
+      WW_BACKUP_ENABLED: ${WW_BACKUP_ENABLED:-false}
+      WW_S3_ENDPOINT: ${WW_S3_ENDPOINT:-http://minio:9000}
+      WW_S3_BUCKET: ${WW_S3_BUCKET:-wastewatch-evidence}
+      WW_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-}
+      WW_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-}
     depends_on:
       kafka:
         condition: service_healthy
@@ -158,20 +354,45 @@ services:
     volumes:
       - evidence_data:/tmp/wastewatch/evidence
       - tts_data:/tmp/wastewatch/tts
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./backend/models:/app/models:ro
-      - ./backend/models/piper:/tmp/piper_voices:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # healer inspects containers
     ports:
-      - "9100:9100"
+      - "${HEALER_BIND:-127.0.0.1}:9100:9100"
     command: ["python3", "-m", "services.combined_workers.main"]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket,sys; s=socket.socket(); s.settimeout(3); sys.exit(0 if s.connect_ex(('127.0.0.1',9100))==0 else 1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging: *logging
+    restart: ${RESTART_POLICY:-unless-stopped}
+
+  # ── Workflow task workers (dev only, with conductor-server) ──────────
+  workflow-workers:
+    build:
+      context: ./workers
+    profiles: ["dev"]
+    env_file:
+      - .env
+    environment:
+      <<: *ww-env
+      WW_CONDUCTOR_SERVER_URL: http://conductor-server:8080/api
+      WW_CONDUCTOR_AUTH_MODE: none
+      WW_EVIDENCE_SERVICE_URL: http://api:8080
+      WW_CLUSTERING_SERVICE_URL: http://api:8080
+      WW_ANALYTICS_SERVICE_URL: http://api:8080
+      WW_REPORTS_SERVICE_URL: http://api:8080
+      WW_WORKER_INSTANCE_ID: ${WORKER_INSTANCE_ID:-worker-dev-1}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      conductor-server:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: ${RESTART_POLICY:-unless-stopped}
 
   pipeline:
     build:
@@ -179,21 +400,33 @@ services:
     env_file:
       - .env
     environment:
-      WW_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      WW_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme_in_production}@redis:6379/0
-      WW_MEDIAMTX_RTSP_URL: rtsp://mediamtx:8554
+      <<: *ww-env
       WW_EVIDENCE_DIR: /app/evidence
-      # RF-DETR-Seg-Nano (bag/person/waste, instance segmentation)
-      # primary GIE opt-in. Default 0 (bbox 2-class model stays live).
-      # See pipeline/app/pipeline.py and pipeline/configs/nvinfer_rfdetr_seg.txt.
-      WW_USE_SEG_MODEL: ${WW_USE_SEG_MODEL:-1}
+      # Empty: cameras are registered dynamically from the DB so they
+      # carry their real ROI polygons.
+      WW_SOURCES: ""
+      GST_DEBUG: ${GST_DEBUG:-nvinfer:4}
     volumes:
+      # Models live in a named volume everywhere. entrypoint.py Phase 1
+      # builds any missing engine and rebuilds a corrupt one before the
+      # pipeline starts. Code/model/config changes in ANY environment are
+      # picked up with `./scripts/start.sh <env> --build`, not a bind
+      # mount — a bind mount's SOURCE can be env-parameterized per
+      # environment, but its TARGET path cannot, and mounting an empty
+      # placeholder onto pipeline/app's real path would silently shadow
+      # the image's baked-in code in test/prod. One shape, always.
       - evidence_data:/app/evidence
     depends_on:
       kafka:
         condition: service_healthy
       mediamtx:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-m", "app.heartbeat"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+      start_period: ${PIPELINE_START_PERIOD:-600s}
     deploy:
       resources:
         reservations:
@@ -201,11 +434,142 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    logging: *logging
+    restart: ${RESTART_POLICY:-unless-stopped}
+
+  # ── Frontend: dev server (hot reload) — dev + lite ─────────────────
+  frontend:
+    image: node:20-alpine
+    profiles: ["dev", "lite"]
+    working_dir: /app
+    command: ["sh", "-c", "npm install --legacy-peer-deps --no-audit --no-fund && npm run dev -- --host 0.0.0.0 --port 8080"]
+    ports:
+      - "${FRONTEND_PORT:-5174}:8080"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+    depends_on:
+      api:
+        condition: service_started
+    restart: ${RESTART_POLICY:-unless-stopped}
+
+  # ── Frontend: built static image — test + prod ──────────────────────
+  frontend-prod:
+    build:
+      context: ./frontend
+      # Vite inlines VITE_* at BUILD time — these are build args, not
+      # runtime env. Changing them requires a rebuild, not a restart.
+      args:
+        VITE_API_URL: ${PUBLIC_API_URL:-http://localhost:8082}
+        VITE_WS_URL: ${PUBLIC_WS_URL:-ws://localhost:8082/ws}
+        VITE_MEDIAMTX_URL: ${PUBLIC_MEDIAMTX_URL:-http://localhost:8889}
+    profiles: ["test", "prod"]
+    expose:
+      - "80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *logging
+    restart: ${RESTART_POLICY:-unless-stopped}
+
+  # ── Object storage: evidence archive + DB backups — prod only ──────
+  minio:
+    image: minio/minio:latest
+    profiles: ["prod"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+    restart: always
+
+  # ── Ingress: the ONLY container with LAN-wide published ports — prod ──
+  nginx:
+    build:
+      context: ./nginx
+    profiles: ["prod"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "554:554"          # RTSP ingest from cameras
+    environment:
+      NGINX_SERVER_NAME: ${KC_HOSTNAME:-localhost}
+    volumes:
+      - ${TLS_CERT_DIR:-./nginx/certs}:/etc/nginx/certs:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      api:
+        condition: service_healthy
+      pipeline:
+        condition: service_healthy
+      frontend-prod:
+        condition: service_started
+      mediamtx:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging: *logging
+    restart: always
+
+  # ── TURN relay (opt-in: `--profile turn`, prod only) ───────────────
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    profiles: ["turn"]
+    environment:
+      TURN_USER: ${TURN_USER:-}
+      TURN_PASSWORD: ${TURN_PASSWORD:-}
+      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-}
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/tcp"
+      - "49160-49500:49160-49500/udp"
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf.template:ro
+      - ./coturn/entrypoint.sh:/entrypoint.sh:ro
+      - ${TLS_CERT_DIR:-./nginx/certs}:/etc/coturn/certs:ro
+    entrypoint: ["/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "pidof turnserver >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging: *logging
+    restart: always
 
 volumes:
   postgres_data:
   kafka_data:
   redis_data:
-  tts_data:
   qdrant_data:
+  tts_data:
   evidence_data:
+  pipeline_models:
+  minio_data:
+  nginx_logs:

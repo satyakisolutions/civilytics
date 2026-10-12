@@ -47,7 +47,7 @@ sample_videos/*.mp4
 sample_videos/*.MP4
 local-config/
 
-# LSG bring-up: TRT engines + onnx originals (rebuild via scripts/onnx_to_engine.py)
+# LSG bring-up: TRT engines + onnx originals (rebuilt by pipeline/entrypoint.py at startup)
 pipeline/models/**/*.engine
 pipeline/models/**/*.orig.onnx
 graphify-out/
