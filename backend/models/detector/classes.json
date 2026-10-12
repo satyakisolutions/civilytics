@@ -1,0 +1,9 @@
+{
+  "arch": "rf-detr-base",
+  "num_classes": 3,
+  "classes": {"0": "person", "1": "vehicle", "2": "bag"},
+  "input": "RGB image",
+  "val_mAP50": {"person": 0.91, "vehicle": 0.86, "bag": 0.92},
+  "val_mAP50_95": {"person": 0.65, "vehicle": 0.61, "bag": 0.75},
+  "notes": "bag = waste+bag merged; trained from COCO base on Roboflow 3-class set; best_ema epoch ~11-21 plateau"
+}
