@@ -489,7 +489,11 @@ services:
 
   # ── Object storage: evidence archive + DB backups — prod only ──────
   minio:
-    image: minio/minio:latest
+    # Upstream minio/minio's Docker distribution is dead -- repo archived,
+    # frozen at a build with an unpatched CVE (CVE-2025-62506), and both
+    # Docker Hub and quay.io now require auth for it. pgsty/minio is the
+    # actively maintained community fork that still publishes openly.
+    image: pgsty/minio:latest
     profiles: ["prod"]
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
