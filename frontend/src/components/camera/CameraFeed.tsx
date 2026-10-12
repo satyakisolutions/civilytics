@@ -6,8 +6,6 @@ import {
   MoreVertical,
   MapPin,
   AlertTriangle,
-  ScanSearch,
-  Loader2,
 } from 'lucide-react';
 import { Camera, CameraStatus } from '@/types/monitoring';
 import { useMonitoring } from '@/context/MonitoringContext';
@@ -30,7 +28,6 @@ import {
   type StreamQualitySelection,
 } from './StreamQualityToggle';
 import { useMediaMTXConfig } from '@/hooks/useMediaMTXConfig';
-import { useFrameAnalysis } from '@/hooks/useFrameAnalysis';
 import { useDetectionMetadata } from '@/hooks/useDetectionMetadata';
 import { useROIEditor } from '@/hooks/useROIEditor';
 import { useAutoStreamQuality } from '@/hooks/useAutoStreamQuality';
@@ -62,7 +59,6 @@ export function computeAlertBorderClass(
 export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
   const { setSelectedCamera, setGridLayout } = useMonitoring();
   const { serverUrl, autoReconnect } = useMediaMTXConfig();
-  const { analyzeFrame, isAnalyzing } = useFrameAnalysis();
   const playerRef = useRef<WebRTCPlayerHandle>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -130,14 +126,6 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
   const handleFullscreen = () => {
     setSelectedCamera(camera.id);
     setGridLayout('1x1');
-  };
-
-  const handleManualAnalysis = async () => {
-    if (!playerRef.current) return;
-    const frameData = playerRef.current.captureFrame();
-    if (!frameData) return;
-    const base64Data = frameData.replace(/^data:image\/\w+;base64,/, '');
-    await analyzeFrame(camera, base64Data);
   };
 
   const statusConfig: Record<CameraStatus, { color: string; label: string; dotClass: string }> = {
@@ -333,22 +321,6 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
           >
             <Maximize2 className="w-3.5 h-3.5" />
           </Button>
-          {isStreamActive && (
-            <Button
-              variant="secondary"
-              size="icon"
-              className="h-7 w-7 bg-background/70 hover:bg-background backdrop-blur-sm"
-              onClick={handleManualAnalysis}
-              disabled={isAnalyzing}
-              title="Analyse current frame"
-            >
-              {isAnalyzing ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <ScanSearch className="w-3.5 h-3.5" />
-              )}
-            </Button>
-          )}
         </div>
 
         {/* Quality chip (bottom-left) — shows the active transcoded tier */}
@@ -407,12 +379,6 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
               <Pin className="w-4 h-4 mr-2" />
               {camera.isPinned ? 'Unpin' : 'Pin Camera'}
             </DropdownMenuItem>
-            {isStreamActive && (
-              <DropdownMenuItem onClick={handleManualAnalysis} disabled={isAnalyzing}>
-                <ScanSearch className="w-4 h-4 mr-2" />
-                {isAnalyzing ? 'Analyzing...' : 'AI Analyze'}
-              </DropdownMenuItem>
-            )}
             <DropdownMenuItem onClick={() => roi.setIsEditing(!roi.isEditing)}>
               {roi.isEditing ? 'Cancel ROI' : 'Draw ROI'}
             </DropdownMenuItem>

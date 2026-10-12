@@ -138,12 +138,10 @@ async def speaker_health(_user: dict = Depends(require_admin)) -> dict[str, Any]
 
 @router.get("/health/models")
 async def model_health(_user: dict = Depends(require_admin)) -> dict[str, Any]:
-    """VLM, TTS, and LPR model status."""
-    vlm = await _read_health_key("vlm")
+    """TTS and LPR model status."""
     tts = await _read_health_key("tts")
     lpr = await _read_health_key("lpr")
     return {
-        "vlm": vlm or {"status": "unknown"},
         "tts": tts or {"status": "unknown"},
         "lpr": lpr or {"status": "unknown"},
     }

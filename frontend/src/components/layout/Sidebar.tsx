@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { HealthPanel } from './HealthPanel';
 import {
   Camera,
   Grid3X3,
@@ -80,11 +79,6 @@ export function Sidebar({ className, onNavigate }: SidebarProps) {
             <span className="text-[10px] text-muted-foreground" style={{ fontFamily: "'Poppins', sans-serif" }}>Satyaki Solutions Pvt Ltd</span>
           </div>
         </div>
-      </div>
-
-      {/* Live service health panel */}
-      <div className="p-3 border-b border-sidebar-border">
-        <HealthPanel />
       </div>
 
       {/* Navigation */}

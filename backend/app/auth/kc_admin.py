@@ -307,6 +307,19 @@ async def users_with_role(role: str) -> list[dict]:
     return resp.json()
 
 
+async def clear_required_actions(user_id: str) -> None:
+    """Used only by scripts/seed_owner.py. create_user() sets requiredActions
+    (UPDATE_PASSWORD, VERIFY_EMAIL) for the normal email-invite onboarding
+    flow, but the bootstrap owner has no redirect-flow login to satisfy
+    them -- auth.py's login route is Direct Access Grant only, which
+    Keycloak refuses outright ("Account is not fully set up") for any user
+    with pending required actions or a temporary credential. Bootstrap
+    must clear this, and must set a non-temporary password, or it creates
+    an owner that can never sign in.
+    """
+    await _request("PUT", f"/users/{user_id}", json={"requiredActions": []})
+
+
 async def delete_user(user_id: str) -> None:
     await _request("DELETE", f"/users/{user_id}")
 

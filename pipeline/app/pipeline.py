@@ -2186,12 +2186,11 @@ def extract_metadata(
                                 bbox=bbox_dict,
                                 detected_at=time.time(),
                             )
-                            _fsm_obj.vlm_fired = True
 
                             _ew = ctx.get("evidence_writer")
                             if _ew:
-                                # Use the same JPEG sent to VLM — it is the
-                                # red-bbox frame showing the correct target.
+                                # Use the same red-bbox JPEG built above,
+                                # showing the correct target.
                                 _ew.capture_violation_keyframe(
                                     camera_id, track_id,
                                     jpeg_bytes=_jpeg if _actionable else None,
@@ -2207,7 +2206,10 @@ def extract_metadata(
                                     class_name=class_name,
                                 )
                             elif (
-                                class_name == "waste"
+                                # class_name is the raw COCO label (e.g.
+                                # "bottle"), never the literal string "waste"
+                                # -- same fix as the exit-handler below.
+                                CLASS_CATEGORIES.get(class_name) == "waste_object"
                                 and not fsm_manager.is_escalated(camera_id, track_id)
                                 and ctx.get("waste_dumper_map", {}).get((camera_id, track_id)) is not None
                             ):

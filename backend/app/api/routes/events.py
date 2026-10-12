@@ -6,11 +6,11 @@ from datetime import datetime
 from pydantic import BaseModel as PydanticBaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_viewer, require_admin
-from app.db.models import ViolationEvent, TrackSession, EventFSMState
+from app.db.models import ViolationEvent, TrackSession
 from app.schemas.event import ViolationEventResponse, ViolationEventUpdate, TrackSessionResponse
 
 router = APIRouter(prefix="/events", tags=["events"])

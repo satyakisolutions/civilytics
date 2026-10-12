@@ -29,7 +29,6 @@ export const LSG_PORTS = {
   ws: 8082,        // WebSocket is served off the same API port
   mediamtxWeb: 8889, // MediaMTX WebRTC (WHEP) read port
   mediamtxRtsp: 8554, // MediaMTX RTSP read port
-  vlm: 8001,       // vLLM OpenAI-compatible chat completions (Qwen2.5-VL-7B)
 } as const;
 
 function hostFromBrowser(): string {
@@ -71,16 +70,8 @@ export function getMediaMtxBase(): string {
   return `${protocolFromBrowser(false)}//${hostFromBrowser()}:${LSG_PORTS.mediamtxWeb}`;
 }
 
-/** vLLM OpenAI-compatible base, e.g. "http://localhost:8001". */
-export function getVlmBase(): string {
-  const fromEnv = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_VLM_URL;
-  if (fromEnv) return fromEnv.replace(/\/+$/, "");
-  return `${protocolFromBrowser(false)}//${hostFromBrowser()}:${LSG_PORTS.vlm}`;
-}
-
 /** Evaluated once at module load so the app's first API calls don't
  * re-run the resolver on every render. */
 export const API_BASE = getApiBase();
 export const WS_BASE = getWsBase();
 export const MEDIAMTX_BASE = getMediaMtxBase();
-export const VLM_BASE = getVlmBase();

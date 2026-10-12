@@ -53,7 +53,6 @@ class TrackFSM:
     # One-shot guards: each trigger fires exactly once per track lifecycle
     observe_triggered: bool = False
     violation_triggered: bool = False
-    vlm_fired: bool = False
     # Sticky: once a carried item has overlapped this person at all, a
     # momentary occlusion/detector miss on later frames shouldn't drop
     # the bag-violation trigger -- see _bag_violation in update().

@@ -44,8 +44,13 @@ async def _create(username, email, first_name, last_name, tenant, customer, pass
         invited_by="bootstrap", tenant=tenant, customer=customer,
     )
     await kc_admin.assign_realm_role(user_id, "owner")
-    await kc_admin.set_password(user_id, password, temporary=True)
-    print(f"created owner '{username}' (id={user_id}), temporary password set")
+    # Non-temporary + required actions cleared: this app's login (auth.py)
+    # is Direct Access Grant only, with no redirect-flow step to satisfy
+    # UPDATE_PASSWORD/VERIFY_EMAIL or a temporary credential. Either one
+    # left in place makes Keycloak refuse the login outright.
+    await kc_admin.set_password(user_id, password, temporary=False)
+    await kc_admin.clear_required_actions(user_id)
+    print(f"created owner '{username}' (id={user_id})")
     return user_id
 
 
@@ -78,11 +83,12 @@ async def run_interactive(args) -> int:
         if len(existing) > 1:
             idx = int(_prompt("Which number", "1")) - 1
         target = existing[idx]
-        new_password = getpass.getpass(f"New temporary password for {target['username']}: ")
+        new_password = getpass.getpass(f"New password for {target['username']}: ")
         if not new_password:
             print("Empty password — aborted.")
             return 1
-        await kc_admin.set_password(target["id"], new_password, temporary=True)
+        await kc_admin.set_password(target["id"], new_password, temporary=False)
+        await kc_admin.clear_required_actions(target["id"])
         print(f"password reset for '{target['username']}'")
         return 0
 
@@ -92,7 +98,7 @@ async def run_interactive(args) -> int:
         first_name = _prompt("First name", args.first_name)
         last_name = _prompt("Last name", args.last_name)
         tenant = _prompt("Tenant", args.tenant)
-        password = getpass.getpass("Temporary password: ")
+        password = getpass.getpass("Password: ")
         if not password:
             print("Empty password — aborted.")
             return 1

@@ -13,7 +13,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_admin, require_viewer
-from app.db.models import EvidenceFile, ViolationEvent
+from app.db.models import EvidenceFile
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 
