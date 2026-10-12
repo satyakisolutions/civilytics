@@ -169,6 +169,9 @@ case "$ENVIRONMENT" in
     env_default KC_HOSTNAME localhost
     ensure_generated POSTGRES_PASSWORD
     ensure_generated REDIS_PASSWORD
+    env_default WW_SEED_OWNER_USERNAME admin
+    env_default WW_SEED_OWNER_EMAIL admin@civilytics.local
+    ensure_generated WW_SEED_OWNER_PASSWORD
     ;;
 
   # ── test: same topology as prod, ephemeral, offset ports ───────────
@@ -193,6 +196,9 @@ case "$ENVIRONMENT" in
     env_default RESTART_POLICY no
     ensure_generated POSTGRES_PASSWORD
     ensure_generated REDIS_PASSWORD
+    env_default WW_SEED_OWNER_USERNAME admin
+    env_default WW_SEED_OWNER_EMAIL admin@civilytics.local
+    ensure_generated WW_SEED_OWNER_PASSWORD
     [ -f keycloak/realm-test.json ] || c_ylw "keycloak/realm-test.json missing — Keycloak will start with an empty realm and auth tests will fail loudly (correct, not a silent pass)."
     ;;
 
@@ -233,6 +239,9 @@ case "$ENVIRONMENT" in
     ensure_prompted WW_INTERNAL_SERVICE_TOKEN \
       "Shared secret for worker-to-api calls (leave empty to auto-generate)." 1 1
     [ -z "$(env_get WW_INTERNAL_SERVICE_TOKEN)" ] && env_set WW_INTERNAL_SERVICE_TOKEN "$(gen_password)"
+    env_default WW_SEED_OWNER_USERNAME admin
+    env_default WW_SEED_OWNER_EMAIL admin@civilytics.local
+    ensure_generated WW_SEED_OWNER_PASSWORD
 
     c_dim "Optional outbound channels — press Enter to leave disabled ..."
     ensure_prompted WW_SMTP_PASSWORD "SMTP password for report email." 1 1
@@ -327,6 +336,23 @@ while :; do
     sleep 5
 done
 
+# ── Seed the first owner (no-op if one already exists) ─────────────────
+# Requires Keycloak's confidential client + realm roles to already exist
+# (manual setup for dev/prod per the comments above; test imports its own
+# realm). Best-effort: a fresh dev/prod realm that hasn't been configured
+# yet will fail this and the operator falls back to the admin console.
+if [ "$ENVIRONMENT" != "lite" ]; then
+    if [ -t 0 ] && [ -t 1 ]; then
+        c_dim "Owner account:"
+        "${DC[@]}" exec -it api python scripts/seed_owner.py --interactive \
+            || c_ylw "owner seed skipped — Keycloak realm/client not set up yet (see start.sh comments for $ENVIRONMENT), or re-run: ${DC[*]} exec -it api python scripts/seed_owner.py --interactive"
+    else
+        c_dim "Seeding owner account (no-op if one already exists) ..."
+        "${DC[@]}" exec -T api python scripts/seed_owner.py \
+            || c_ylw "owner seed skipped — Keycloak realm/client not set up yet (see start.sh comments for $ENVIRONMENT), or re-run: ${DC[*]} exec -it api python scripts/seed_owner.py --interactive"
+    fi
+fi
+
 echo
 "${DC[@]}" ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
 echo
@@ -337,12 +363,14 @@ case "$ENVIRONMENT" in
         echo  "API       : http://localhost:8082/api/health"
         echo  "Keycloak  : http://localhost:8180  (admin/admin by default)"
         echo  "Conductor : http://localhost:5001"
+        c_dim "Owner login: see 'Owner account' output above, or re-run: ${DC[*]} exec -it api python scripts/seed_owner.py --interactive"
         ;;
     test)
         c_grn "Dashboard : http://localhost:6174"
         echo  "API       : http://localhost:9082/api/health"
         echo  "Keycloak  : http://localhost:9180"
         c_dim "Host ports are offset +1000 so this can run alongside dev."
+        c_dim "Owner login: see 'Owner account' output above, or re-run: ${DC[*]} exec -it api python scripts/seed_owner.py --interactive"
         ;;
     prod)
         host="${KC_HOSTNAME:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
@@ -351,6 +379,7 @@ case "$ENVIRONMENT" in
         echo  "Storage   : https://${host}/storage/   (MinIO console)"
         echo  "RTSP in   : rtsp://${host}:554/<path>  (cameras publish here)"
         c_dim "Start coturn (--turn) if viewers are off the camera LAN."
+        c_ylw "Owner login: see 'Owner account' output above, or re-run: ${DC[*]} exec -it api python scripts/seed_owner.py --interactive"
         ;;
     lite)
         c_grn "Dashboard : http://localhost:5174"

@@ -289,6 +289,24 @@ async def set_enabled(user_id: str, enabled: bool) -> None:
     await _request("PUT", f"/users/{user_id}", json={"enabled": enabled})
 
 
+async def set_password(user_id: str, password: str, *, temporary: bool = True) -> None:
+    """Set a credential directly. Bootstrap-only -- normal onboarding (create_user)
+    never does this; it leaves the user with no credential and emails a setup link
+    instead. This exists solely so scripts/seed_owner.py can mint the very first
+    owner, who by definition has no admin yet to invite them.
+    """
+    await _request(
+        "PUT",
+        f"/users/{user_id}/reset-password",
+        json={"type": "password", "value": password, "temporary": temporary},
+    )
+
+
+async def users_with_role(role: str) -> list[dict]:
+    resp = await _request("GET", f"/roles/{role}/users")
+    return resp.json()
+
+
 async def delete_user(user_id: str) -> None:
     await _request("DELETE", f"/users/{user_id}")
 
