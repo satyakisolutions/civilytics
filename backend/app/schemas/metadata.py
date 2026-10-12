@@ -10,6 +10,7 @@ class Detection(BaseModel):
     dwell_time_s: float | None = None
     in_roi: bool | None = None
     fsm_state: str | None = None
+    is_moving: bool | None = None
 
 
 class FrameMetadata(BaseModel):

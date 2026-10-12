@@ -114,6 +114,7 @@ export interface BBoxDetection {
   dwell_time_s?: number;
   in_roi?: boolean;
   fsm_state?: EventFSMState;
+  is_moving?: boolean;
   // Action classification (from SGIE)
   action_label?: string;
   action_confidence?: number;

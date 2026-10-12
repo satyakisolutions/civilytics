@@ -2345,6 +2345,17 @@ def extract_metadata(
                     # Enrich detection with tracking data
                     detection_dict["dwell_time_s"] = round(track_info.dwell_time_s, 1)
                     detection_dict["in_roi"] = in_roi
+                    # track_info.speed_px_s is bbox-center speed, uncalibrated
+                    # (px/s, not m/s -- no camera calibration exists to convert
+                    # it). Reusing the same thresholds the FSM already applies
+                    # for loitering/vehicle-stop detection (event_fsm.py) keeps
+                    # "moving" consistent with what actually drives alerting,
+                    # rather than inventing a second, different speed cutoff.
+                    _stop_thresh = (
+                        fsm_manager._vehicle_stop_speed_px_s if class_name in VEHICLE_CLASSES
+                        else fsm_manager._suspicious_speed_px_s
+                    )
+                    detection_dict["is_moving"] = track_info.speed_px_s > _stop_thresh
                     _current_fsm = fsm_manager.get_fsm_state(camera_id, track_id)
                     detection_dict["fsm_state"] = _current_fsm
                     # Suspect flag — persists after leaving ROI until track lost
