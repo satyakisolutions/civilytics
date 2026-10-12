@@ -29,8 +29,13 @@ dependencies = [
     "Pillow>=10.0.0",
     "fast-plate-ocr[onnx]>=0.3.0",
     "python-multipart>=0.0.9",
-    "moondream>=2.6.0",
     "num2words>=0.5.0",
+    "llama-cpp-python>=0.3.0",
+    # ReID (app/api/routes/reid.py) — previously relied on moondream's
+    # transitive torch pull (gone) and never declared clip at all, so
+    # _get_clip() silently degraded to "model_not_available" always.
+    "torch>=2.0",
+    "clip @ git+https://github.com/openai/CLIP.git",
 ]
 
 [project.optional-dependencies]

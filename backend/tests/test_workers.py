@@ -36,27 +36,6 @@ async def test_event_consumer_start_stop():
         mock_consumer.stop.assert_called_once()
 
 
-# ── VLM Worker ──────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_vlm_worker_start_stop():
-    from app.vlm.worker import VLMWorker
-    with patch("app.vlm.worker.AIOKafkaConsumer") as MockKafkaC, \
-         patch("app.vlm.worker.AIOKafkaProducer") as MockKafkaP, \
-         patch("app.vlm.worker.VLMClient") as MockClient:
-        MockClient.return_value = AsyncMock()
-        mock_consumer = AsyncMock()
-        mock_consumer.__aiter__ = MagicMock(return_value=iter([]))
-        MockKafkaC.return_value = mock_consumer
-        mock_producer = AsyncMock()
-        MockKafkaP.return_value = mock_producer
-
-        w = VLMWorker("localhost:9092")
-        await w.start()
-        await w.stop()
-        mock_consumer.stop.assert_called_once()
-
-
 # ── TTS Worker ──────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
