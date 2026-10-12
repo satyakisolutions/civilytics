@@ -34,19 +34,23 @@ router = APIRouter(tags=["system"])
 
 REDIS_HEALTH_PREFIX = "ww:health"
 
+_redis_client = None
 
-async def _get_redis():
-    """Lazy-init an async Redis client."""
-    import redis.asyncio as aioredis
-    return aioredis.from_url(settings.redis_url, decode_responses=True)
+
+def _get_redis():
+    """Return the shared async Redis client, creating it on first use."""
+    global _redis_client
+    if _redis_client is None:
+        import redis.asyncio as aioredis
+        _redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    return _redis_client
 
 
 async def _read_health_key(key_suffix: str) -> dict[str, Any] | list | None:
     """Read a single health key from Redis, return parsed JSON or None."""
     try:
-        r = await _get_redis()
+        r = _get_redis()
         raw = await r.get(f"{REDIS_HEALTH_PREFIX}:{key_suffix}")
-        await r.aclose()
         if raw:
             return json.loads(raw)
     except Exception:
@@ -58,7 +62,7 @@ async def _read_all_health() -> dict[str, Any]:
     """Read all ww:health:* keys from Redis and assemble a full status dict."""
     result: dict[str, Any] = {}
     try:
-        r = await _get_redis()
+        r = _get_redis()
         keys = []
         async for key in r.scan_iter(match=f"{REDIS_HEALTH_PREFIX}:*"):
             keys.append(key)
@@ -71,7 +75,6 @@ async def _read_all_health() -> dict[str, Any]:
                         result[component] = json.loads(val)
                     except json.JSONDecodeError:
                         result[component] = val
-        await r.aclose()
     except Exception:
         logger.debug("Failed to read health keys from Redis", exc_info=True)
     return result
