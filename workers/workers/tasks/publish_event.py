@@ -36,7 +36,7 @@ async def handle_publish_event(input_data: dict, task: dict) -> dict:
     try:
         async with service_client(timeout=30) as client:
             resp = await client.post(
-                f"{settings.analytics_service_url}/api/events/publish", json=payload
+                f"{settings.api_base_url}/api/events/publish", json=payload
             )
             resp.raise_for_status()
             result = resp.json()

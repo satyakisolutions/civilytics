@@ -12,7 +12,7 @@ async def handle_dispatch_telegram(input_data: dict, task: dict) -> dict:
 
     async with service_client(timeout=10) as client:
         resp = await client.get(
-            f"{settings.evidence_service_url}/api/config/delivery_channel_telegram"
+            f"{settings.api_base_url}/api/config/delivery_channel_telegram"
         )
         if resp.status_code != 200:
             return {"status": "SKIPPED", "reason": "telegram_not_configured"}

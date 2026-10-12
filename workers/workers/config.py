@@ -14,10 +14,8 @@ class WorkerSettings(BaseSettings):
 
     database_url: str = ""
     redis_url: str = "redis://localhost:6379/0"
-    evidence_service_url: str = "http://api:8080"
-    clustering_service_url: str = "http://api:8080"
-    analytics_service_url: str = "http://api:8080"
-    reports_service_url: str = "http://api:8080"
+    # Evidence/clustering/analytics/reports all live in the same api monolith today.
+    api_base_url: str = "http://api:8080"
     alert_webhook_url: str = ""
 
     # ReID (moved in-process here from backend/app/api/routes/reid.py —

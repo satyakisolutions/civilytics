@@ -20,7 +20,7 @@ async def handle_cluster_sightings(input_data: dict, task: dict) -> dict:
     try:
         async with service_client(timeout=60) as client:
             resp = await client.post(
-                f"{settings.clustering_service_url}/api/clustering/analyze",
+                f"{settings.api_base_url}/api/clustering/analyze",
                 json={
                     "event_id": event_id,
                     "evidence_refs": evidence_refs,

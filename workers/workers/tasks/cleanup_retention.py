@@ -10,7 +10,7 @@ log = structlog.get_logger()
 async def handle_cleanup_retention(input_data: dict, task: dict) -> dict:
     async with service_client(timeout=10) as client:
         resp = await client.get(
-            f"{settings.evidence_service_url}/api/config/evidence_retention"
+            f"{settings.api_base_url}/api/config/evidence_retention"
         )
         if resp.status_code == 200:
             config = resp.json().get("value", {})
@@ -32,7 +32,7 @@ async def handle_cleanup_retention(input_data: dict, task: dict) -> dict:
         try:
             resp = await client.request(
                 "DELETE",
-                f"{settings.evidence_service_url}/api/evidence/cleanup",
+                f"{settings.api_base_url}/api/evidence/cleanup",
                 json={"before": cutoff, "dry_run": False},
             )
             resp.raise_for_status()
@@ -44,7 +44,7 @@ async def handle_cleanup_retention(input_data: dict, task: dict) -> dict:
             try:
                 resp = await client.request(
                     "DELETE",
-                    f"{settings.evidence_service_url}/api/reid/cleanup",
+                    f"{settings.api_base_url}/api/reid/cleanup",
                     json={"before": cutoff},
                 )
                 resp.raise_for_status()
@@ -56,7 +56,7 @@ async def handle_cleanup_retention(input_data: dict, task: dict) -> dict:
             try:
                 resp = await client.request(
                     "DELETE",
-                    f"{settings.evidence_service_url}/api/system/logs/cleanup",
+                    f"{settings.api_base_url}/api/system/logs/cleanup",
                     json={"before": cutoff},
                 )
                 resp.raise_for_status()

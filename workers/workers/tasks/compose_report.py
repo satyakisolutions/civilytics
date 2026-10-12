@@ -128,7 +128,7 @@ async def _compose_narrative(event: dict, evidence_summary: str, severity_level:
     try:
         async with service_client(timeout=30) as client:
             resp = await client.post(
-                f"{settings.reports_service_url}/reports/incident-narrative",
+                f"{settings.api_base_url}/reports/incident-narrative",
                 json=facts,
             )
             resp.raise_for_status()

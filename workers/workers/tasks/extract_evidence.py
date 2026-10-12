@@ -16,7 +16,7 @@ async def handle_extract_evidence(input_data: dict, task: dict) -> dict:
     try:
         async with service_client(timeout=120) as client:
             resp = await client.post(
-                f"{settings.evidence_service_url}/api/evidence/extract",
+                f"{settings.api_base_url}/api/evidence/extract",
                 json={
                     "event_id": event_id,
                     "video_ref": event.get("source_video_ref", ""),
