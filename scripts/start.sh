@@ -114,7 +114,14 @@ env_set() {
 # Set only if absent — never overwrite an operator's existing value.
 env_default() {
     local key="$1" val="$2"
-    [ -z "$(env_get "$key")" ] && env_set "$key" "$val"
+    # Must not return nonzero when the var already exists (the normal
+    # case on any re-run) -- under `set -e`, a bare `cond && cmd` whose
+    # cond is false makes the whole statement (and this function) exit
+    # nonzero, silently killing the script. Only ever caught on a
+    # brand-new .env, where every call takes the true branch.
+    if [ -z "$(env_get "$key")" ]; then
+        env_set "$key" "$val"
+    fi
 }
 
 gen_password() {
@@ -238,7 +245,9 @@ case "$ENVIRONMENT" in
   copy Credentials > Client secret." 1 0
     ensure_prompted WW_INTERNAL_SERVICE_TOKEN \
       "Shared secret for worker-to-api calls (leave empty to auto-generate)." 1 1
-    [ -z "$(env_get WW_INTERNAL_SERVICE_TOKEN)" ] && env_set WW_INTERNAL_SERVICE_TOKEN "$(gen_password)"
+    if [ -z "$(env_get WW_INTERNAL_SERVICE_TOKEN)" ]; then
+        env_set WW_INTERNAL_SERVICE_TOKEN "$(gen_password)"
+    fi
     env_default WW_SEED_OWNER_USERNAME admin
     env_default WW_SEED_OWNER_EMAIL admin@civilytics.local
     ensure_generated WW_SEED_OWNER_PASSWORD
@@ -277,7 +286,10 @@ esac
 c_dim "Validating compose config (profile=$ENVIRONMENT) ..."
 "${DC[@]}" config >/dev/null || die "compose validation failed"
 
-[ -n "$PULL" ] && { c_dim "Pulling base images ..."; "${DC[@]}" pull --ignore-buildable || true; }
+if [ -n "$PULL" ]; then
+    c_dim "Pulling base images ..."
+    "${DC[@]}" pull --ignore-buildable || true
+fi
 
 c_grn "Starting $ENVIRONMENT stack"
 "${DC[@]}" up -d ${BUILD:+$BUILD}
