@@ -24,7 +24,7 @@ trtexec \
     --minShapes=input:1x3x640x640 \
     --optShapes=input:4x3x640x640 \
     --maxShapes=input:8x3x640x640 \
-    --workspace=4096 \
+    --memPoolSize=workspace:4096 \
     --verbose
 
 echo "TensorRT engine saved to: $ENGINE_FILE"

@@ -167,7 +167,7 @@ def _build_engine(
         f"--onnx={onnx_path}",
         f"--saveEngine={engine_path}",
         "--fp16",
-        f"--workspace={workspace}",
+        f"--memPoolSize=workspace:{workspace}",
         f"--minShapes={min_shapes}",
         f"--optShapes={opt_shapes}",
         f"--maxShapes={max_shapes}",

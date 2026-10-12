@@ -214,7 +214,11 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
     profiles: ["dev", "test", "prod"]
-    command: ["sh", "-c", "${KC_COMMAND:-start-dev}"]
+    # The image's own ENTRYPOINT is /opt/keycloak/bin/kc.sh (not a shell),
+    # so wrapping this in ["sh", "-c", ...] passed "sh" as kc.sh's own
+    # first argument ("Unknown option: 'sh'") instead of running a shell.
+    # A plain string lets Compose word-split it into kc.sh's real args.
+    command: ${KC_COMMAND:-start-dev}
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/wastewatch
@@ -488,7 +492,11 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1"]
+      # "localhost" resolves ::1 first here, but nginx's listen 80 is
+      # IPv4-only -- wget hit "Connection refused" every time despite
+      # nginx actually serving fine on 127.0.0.1. Same class of bug as
+      # qdrant/mediamtx's healthchecks; same fix, be explicit about IPv4.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

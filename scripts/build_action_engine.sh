@@ -26,7 +26,7 @@ trtexec \
     --minShapes=input:1x3x224x224 \
     --optShapes=input:16x3x224x224 \
     --maxShapes=input:32x3x224x224 \
-    --workspace=2048 \
+    --memPoolSize=workspace:2048 \
     --verbose
 
 echo

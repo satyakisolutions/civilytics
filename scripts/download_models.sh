@@ -43,7 +43,7 @@ if command -v trtexec &>/dev/null; then
                 --onnx="$RFDETR_DIR/rfdetr.onnx" \
                 --saveEngine="$RFDETR_DIR/rfdetr_fp16.engine" \
                 --fp16 \
-                --workspace=4096 \
+                --memPoolSize=workspace:4096 \
                 --minShapes=input:1x3x640x640 \
                 --optShapes=input:4x3x640x640 \
                 --maxShapes=input:8x3x640x640
@@ -86,7 +86,7 @@ if command -v trtexec &>/dev/null; then
                 --onnx="$ACTION_DIR/action_classifier.onnx" \
                 --saveEngine="$ACTION_DIR/action_classifier_fp16.engine" \
                 --fp16 \
-                --workspace=2048 \
+                --memPoolSize=workspace:2048 \
                 --minShapes=input:1x3x224x224 \
                 --optShapes=input:16x3x224x224 \
                 --maxShapes=input:32x3x224x224

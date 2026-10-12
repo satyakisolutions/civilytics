@@ -174,7 +174,12 @@ def _build_engine(spec: EngineSpec) -> bool:
         f"--minShapes={spec.min_shapes}",
         f"--optShapes={spec.opt_shapes}",
         f"--maxShapes={spec.max_shapes}",
-        f"--workspace={spec.workspace_mb}",
+        # --workspace was removed from trtexec; this TensorRT build
+        # (10.16) only accepts --memPoolSize=workspace:<MiB> (confirmed
+        # via trtexec --help -- the old flag made it print usage and
+        # exit 1, which looked like a build failure but was really an
+        # unrecognized-argument error).
+        f"--memPoolSize=workspace:{spec.workspace_mb}",
     ]
     if spec.fp16:
         cmd.append("--fp16")
