@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, createContext, useContext, ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext, ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { GridLayout, Alert } from '@/types/monitoring';
 import { API_BASE } from '@/lib/api-base';
@@ -204,7 +204,7 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
     navigate(viewToPath(view));
   }, [navigate]);
 
-  const acknowledgeAlert = async (id: string) => {
+  const acknowledgeAlert = useCallback(async (id: string) => {
     // Update locally first (instant UI feedback)
     setAlerts(prev =>
       prev.map(alert =>
@@ -221,9 +221,9 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ status: 'acknowledged' }),
       });
     } catch { /* best effort */ }
-  };
+  }, []);
 
-  const clearAlerts = () => {
+  const clearAlerts = useCallback(() => {
     clearedAtRef.current = new Date();
     // Also reset the dedup set + cooldown so subsequent NEW alerts still
     // beep/blink/push. Without this, every alert id seen before clear
@@ -231,26 +231,32 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
     knownAlertIds.current = new Set();
     lastNotifyTime.current = 0;
     setAlerts([]);
-  };
+  }, []);
+
+  // Memoized so consumers that only read e.g. gridLayout don't re-render on
+  // every alert-poll tick (alerts/isSoundEnabled/etc change every 5s).
+  const value = useMemo(
+    () => ({
+      gridLayout,
+      setGridLayout,
+      selectedCamera,
+      setSelectedCamera,
+      alerts,
+      acknowledgeAlert,
+      clearAlerts,
+      isAlertPanelOpen,
+      setIsAlertPanelOpen,
+      isSoundEnabled,
+      setIsSoundEnabled,
+      currentView,
+      setCurrentView,
+    }),
+    [gridLayout, selectedCamera, alerts, acknowledgeAlert, clearAlerts,
+     isAlertPanelOpen, isSoundEnabled, currentView, setCurrentView]
+  );
 
   return (
-    <MonitoringContext.Provider
-      value={{
-        gridLayout,
-        setGridLayout,
-        selectedCamera,
-        setSelectedCamera,
-        alerts,
-        acknowledgeAlert,
-        clearAlerts,
-        isAlertPanelOpen,
-        setIsAlertPanelOpen,
-        isSoundEnabled,
-        setIsSoundEnabled,
-        currentView,
-        setCurrentView,
-      }}
-    >
+    <MonitoringContext.Provider value={value}>
       {children}
     </MonitoringContext.Provider>
   );

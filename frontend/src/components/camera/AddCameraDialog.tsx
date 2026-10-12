@@ -86,7 +86,12 @@ function MapPicker({ lat, lng, onSelect, onAddress }: {
   const searchAddress = useCallback((q: string) => {
     if (q.length < 3) { setResults([]); return; }
     setSearching(true);
-    fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}&email=neeraj.sj@satyaki.co.in`)
+    // Nominatim usage policy asks for a contact email on every request.
+    // Configurable so this doesn't hardcode one person's address into
+    // code shipped to every browser.
+    const contactEmail = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_NOMINATIM_EMAIL ?? '';
+    const emailParam = contactEmail ? `&email=${encodeURIComponent(contactEmail)}` : '';
+    fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}${emailParam}`)
       .then(r => r.json())
       .then(setResults)
       .catch(() => setResults([]))
@@ -237,6 +242,8 @@ export function AddCameraDialog({ open, onOpenChange, onAdd }: Props) {
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 autoFocus
+                required
+                aria-required="true"
               />
             </div>
 
@@ -249,6 +256,8 @@ export function AddCameraDialog({ open, onOpenChange, onAdd }: Props) {
                 placeholder="e.g. Zone A"
                 value={form.zone}
                 onChange={(e) => setForm({ ...form, zone: e.target.value })}
+                required
+                aria-required="true"
               />
             </div>
 

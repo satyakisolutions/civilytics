@@ -28,6 +28,7 @@ import {
   type StreamQualitySelection,
 } from './StreamQualityToggle';
 import { useMediaMTXConfig } from '@/hooks/useMediaMTXConfig';
+import { useCameras } from '@/hooks/useCameras';
 import { useDetectionMetadata } from '@/hooks/useDetectionMetadata';
 import { useROIEditor } from '@/hooks/useROIEditor';
 import { useAutoStreamQuality } from '@/hooks/useAutoStreamQuality';
@@ -59,6 +60,7 @@ export function computeAlertBorderClass(
 export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
   const { setSelectedCamera, setGridLayout } = useMonitoring();
   const { serverUrl, autoReconnect } = useMediaMTXConfig();
+  const { togglePin } = useCameras();
   const playerRef = useRef<WebRTCPlayerHandle>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -310,7 +312,13 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
             the LSG live streams are video-only (no audio track). */}
         <div className={cn(
           'absolute top-12 right-2 flex items-center gap-1 z-20 transition-opacity duration-150',
-          isHovered ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          // focus-within so a keyboard user tabbing onto the button reveals
+          // it too -- isHovered alone made it unreachable without a mouse.
+          // pointer-events only re-enabled once actually visible, so an
+          // invisible button can't eat clicks meant for the video below it.
+          isHovered
+            ? 'opacity-100'
+            : 'opacity-0 pointer-events-none focus-within:opacity-100 focus-within:pointer-events-auto'
         )}>
           <Button
             variant="secondary"
@@ -375,7 +383,7 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
               <Maximize2 className="w-4 h-4 mr-2" />
               Fullscreen
             </DropdownMenuItem>
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => togglePin(camera.id)}>
               <Pin className="w-4 h-4 mr-2" />
               {camera.isPinned ? 'Unpin' : 'Pin Camera'}
             </DropdownMenuItem>

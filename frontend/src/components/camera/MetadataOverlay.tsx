@@ -362,6 +362,8 @@ function CameraAlertBanner({ alert, width }: { alert: CameraAlertFlag; width: nu
         animation: style.pulse ? "violationPulse 1s ease-in-out infinite alternate" : undefined,
         zIndex: 10,
       }}
+      role="status"
+      aria-live="assertive"
     >
       <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
         <span
@@ -477,7 +479,11 @@ export function MetadataOverlay({ metadata, width, height }: MetadataOverlayProp
       >
         <span>{totalObjects} detections | {inRoi.length} in ROI</span>
         {violations.length > 0 && (
-          <span style={{ color: "#ef4444", fontWeight: 700, animation: "violationPulse 1s ease-in-out infinite alternate" }}>
+          <span
+            role="status"
+            aria-live="assertive"
+            style={{ color: "#ef4444", fontWeight: 700, animation: "violationPulse 1s ease-in-out infinite alternate" }}
+          >
             {violations.length} VIOLATION{violations.length > 1 ? "S" : ""}
           </span>
         )}
