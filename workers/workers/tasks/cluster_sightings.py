@@ -31,7 +31,7 @@ async def handle_cluster_sightings(input_data: dict, task: dict) -> dict:
             resp.raise_for_status()
             result = resp.json()
     except httpx.HTTPError as e:
-        raise Exception(f"Clustering failed: {e}")
+        raise RuntimeError(f"Clustering failed: {e}") from e
 
     groups = result.get("match_groups", [])
     log.info("clustering.completed", event_id=event_id, group_count=len(groups))
