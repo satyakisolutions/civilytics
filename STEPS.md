@@ -87,6 +87,7 @@ docker compose -p civilytics-prod --profile prod exec api \
 - `--status`      show container health and exit
 - `--no-wait`     return immediately instead of waiting for health
 - `--seed-owner`  create the first owner account (prompts; needs SMTP for the email)
+- `--e2e`         after health, run the `tests/e2e` suite against the started stack
 - `--turn`        (prod) also start the coturn TURN relay for off-LAN WebRTC viewers
 - `--rotate`      (prod) regenerate generated passwords in `.env`
 

@@ -28,7 +28,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 ENV_FILE=".env"
 ENVIRONMENT=""
-BUILD="" PULL="" EXTRA_PROFILES=() WAIT=1 TIMEOUT=900 ACTION="up" ROTATE=0 SEED_OWNER=0
+BUILD="" PULL="" EXTRA_PROFILES=() WAIT=1 TIMEOUT=900 ACTION="up" ROTATE=0 SEED_OWNER=0 RUN_E2E=0
 
 c_red() { printf '\033[31m%s\033[0m\n' "$*"; }
 c_grn() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -53,6 +53,7 @@ while [ $# -gt 0 ]; do
         --timeout)  TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
         --rotate)   ROTATE=1; shift ;;
         --seed-owner) SEED_OWNER=1; shift ;;
+        --e2e)      RUN_E2E=1; shift ;;
         --down)     ACTION="down"; shift ;;
         --status)   ACTION="status"; shift ;;
         *) die "unknown option: $1" ;;
@@ -532,3 +533,24 @@ case "$ENVIRONMENT" in
         c_ylw "No auth — do not expose this host beyond localhost."
         ;;
 esac
+
+# ── Optional: run the E2E suite against the stack we just started ─────
+if [ "${RUN_E2E:-0}" -eq 1 ]; then
+    if [ ! -d tests/e2e ]; then
+        c_ylw "--e2e: tests/e2e/ not present yet — skipping."
+    else
+        case "$ENVIRONMENT" in
+            prod) e2e_base="https://${KC_HOSTNAME:-localhost}" ;;
+            test) e2e_base="http://localhost:9082" ;;
+            *)    e2e_base="http://localhost:8082" ;;
+        esac
+        echo
+        c_grn "Running E2E suite against ${e2e_base} ..."
+        if [ -f tests/e2e/requirements.txt ]; then
+            python3 -m pip install -q --user -r tests/e2e/requirements.txt 2>/dev/null \
+                || c_ylw "Could not install tests/e2e/requirements.txt — run it manually."
+        fi
+        CIVILYTICS_BASE_URL="${e2e_base}" python3 -m pytest tests/e2e -m e2e -q \
+            || c_ylw "E2E suite reported failures (see output above)."
+    fi
+fi
