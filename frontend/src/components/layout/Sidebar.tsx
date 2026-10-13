@@ -43,6 +43,20 @@ const navigationItems = [
   { id: 'settings', label: 'Settings', icon: Settings },
 ] as const;
 
+// Per-view visibility by exact top role. A view absent here is visible to
+// everyone. topRole is exact (owner holds admin/viewer as composite roles, so
+// can('admin') would wrongly pass an owner) — list each role that may see it.
+//   billing  — only a paying customer (admin). Not the platform owner, not a viewer.
+//   cameras  — admin + owner manage cameras; a viewer (operator) only watches.
+//   settings — admin + owner only; a viewer has nothing to configure.
+export const VIEW_ROLES: Record<string, readonly string[]> = {
+  billing: ['admin'],
+  cameras: ['admin', 'owner'],
+  settings: ['admin', 'owner'],
+};
+export const canSeeView = (id: string, role: string | null): boolean =>
+  !VIEW_ROLES[id] || (role != null && VIEW_ROLES[id].includes(role));
+
 export function Sidebar({ className, onNavigate }: SidebarProps) {
   const { 
     currentView, 
@@ -83,7 +97,7 @@ export function Sidebar({ className, onNavigate }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 p-2 space-y-1 overflow-y-auto custom-scrollbar">
-        {navigationItems.map((item) => {
+        {navigationItems.filter((item) => canSeeView(item.id, role)).map((item) => {
           const Icon = item.icon;
           const isActive = currentView === item.id;
 
