@@ -24,7 +24,7 @@ net-scale-factor=0.00392156862745
 
 infer-dims=3;384;384
 
-model-engine-file=/app/models/rfdetr/rfdetr_fp32.engine
+model-engine-file=/app/models/engine_cache/rfdetr_fp32.engine
 onnx-file=/app/models/rfdetr/rfdetr.onnx
 labelfile-path=/app/configs/labels.txt
 

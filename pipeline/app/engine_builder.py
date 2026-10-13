@@ -31,6 +31,7 @@ Startup flow:
 
 import logging
 import os
+import hashlib
 import subprocess
 import sys
 import time
@@ -41,7 +42,44 @@ logger = logging.getLogger(__name__)
 
 # Base paths (relative to pipeline working directory)
 MODELS_DIR = Path("models")
+# Built engines live here, on a persistent named volume, so they survive
+# container recreates (an engine takes minutes to build). The ONNX stays in
+# the image under models/<model>/. Invalidation is keyed on the ONNX hash
+# (see _onnx_sha / the .onnxsha sidecar): swap the ONNX and the engine
+# rebuilds; otherwise it's reused.
+CACHE_DIR = MODELS_DIR / "engine_cache"
 SCRIPTS_DIR = Path("/app/scripts") if Path("/app/scripts").exists() else Path("../scripts")
+
+
+def _onnx_sha(onnx_path: Path) -> str | None:
+    """SHA-256 of the ONNX, or None if it can't be read."""
+    try:
+        h = hashlib.sha256()
+        with open(onnx_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _sha_sidecar(spec: "EngineSpec") -> Path:
+    """Path of the file recording the ONNX hash the engine was built from."""
+    return spec.engine_path.with_suffix(spec.engine_path.suffix + ".onnxsha")
+
+
+def _cached_sha(spec: "EngineSpec") -> str | None:
+    try:
+        return _sha_sidecar(spec).read_text().strip() or None
+    except OSError:
+        return None
+
+
+def _write_sha(spec: "EngineSpec", sha: str) -> None:
+    try:
+        _sha_sidecar(spec).write_text(sha)
+    except OSError as exc:
+        logger.warning("Could not write engine sha sidecar for %s: %s", spec.name, exc)
 
 
 @dataclass
@@ -67,7 +105,7 @@ ENGINES: list[EngineSpec] = [
         # FP32 produces correct scores (0.3-0.8 on real targets).
         name="RF-DETR (PGIE)",
         onnx_path=MODELS_DIR / "rfdetr" / "rfdetr.onnx",
-        engine_path=MODELS_DIR / "rfdetr" / "rfdetr_fp32.engine",
+        engine_path=CACHE_DIR / "rfdetr_fp32.engine",
         export_script="export_rfdetr_onnx.py",
         min_shapes="input:1x3x560x560",
         opt_shapes="input:1x3x560x560",
@@ -78,7 +116,7 @@ ENGINES: list[EngineSpec] = [
     EngineSpec(
         name="Action Classifier (SGIE)",
         onnx_path=MODELS_DIR / "action_classifier" / "action_classifier.onnx",
-        engine_path=MODELS_DIR / "action_classifier" / "action_classifier_fp16.engine",
+        engine_path=CACHE_DIR / "action_classifier_fp16.engine",
         export_script="export_action_classifier_onnx.py",
         min_shapes="input:1x3x224x224",
         opt_shapes="input:16x3x224x224",
@@ -327,13 +365,27 @@ def ensure_engines(skip_missing_onnx: bool = False) -> dict[str, str]:
         if spec.engine_path.exists() and spec.engine_path.stat().st_size > 0:
             size_mb = spec.engine_path.stat().st_size / (1024 * 1024)
             if _engine_is_loadable(spec.engine_path):
-                logger.info("Engine exists: %s (%.1f MB) — skipping", spec.engine_path, size_mb)
-                results[spec.name] = "ready"
-                continue
-            logger.warning(
-                "Engine present but NOT loadable: %s (%.1f MB) — rebuilding",
-                spec.engine_path, size_mb,
-            )
+                # Validate the engine was built from the CURRENT ONNX. If the
+                # recorded hash differs, the model was swapped — the cached
+                # engine is stale and must be rebuilt.
+                cur_sha = _onnx_sha(spec.onnx_path) if spec.onnx_path.exists() else None
+                cached = _cached_sha(spec)
+                if cur_sha and cached and cur_sha != cached:
+                    logger.warning(
+                        "ONNX changed for %s (sha %s != cached %s) — rebuilding",
+                        spec.name, cur_sha[:12], cached[:12],
+                    )
+                    # fall through: the shared quarantine block below moves the
+                    # stale engine aside, then it gets rebuilt.
+                else:
+                    logger.info("Engine exists: %s (%.1f MB) — skipping", spec.engine_path, size_mb)
+                    results[spec.name] = "ready"
+                    continue
+            else:
+                logger.warning(
+                    "Engine present but NOT loadable: %s (%.1f MB) — rebuilding",
+                    spec.engine_path, size_mb,
+                )
             try:
                 # Move aside rather than delete, so a failed rebuild leaves
                 # evidence of what was there for debugging.
@@ -372,6 +424,12 @@ def ensure_engines(skip_missing_onnx: bool = False) -> dict[str, str]:
         # 4. Build engine
         built = _build_engine(spec)
         results[spec.name] = "built" if built else "build_failed"
+        if built:
+            # Record the ONNX hash this engine was built from, so a later
+            # start can tell a fresh model from an unchanged one.
+            sha = _onnx_sha(spec.onnx_path)
+            if sha:
+                _write_sha(spec, sha)
 
     # Summary
     logger.info("")

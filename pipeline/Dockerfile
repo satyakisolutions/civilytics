@@ -136,8 +136,12 @@ RUN make -C nvdsinfer_custom_impl_Seg CUDA_VER=13.2 \
 # TensorRT engines (e.g. action_classifier.onnx_b16_gpu0_fp16.engine) back
 # next to the source .onnx on first run against a new TensorRT version.
 RUN useradd --no-create-home --shell /bin/false appuser \
- && mkdir -p /app/evidence /tmp/wastewatch /tmp/wastewatch/.cache \
+ && mkdir -p /app/evidence /tmp/wastewatch /tmp/wastewatch/.cache /app/models/engine_cache \
  && chown -R appuser:appuser /app/evidence /tmp/wastewatch /app/models
+# NOTE: /app/models/engine_cache is a named-volume mountpoint (persisted TRT
+# engines). It must exist and be appuser-owned in the image so a FRESH volume
+# inherits that ownership — otherwise Docker creates it root-owned and the
+# appuser trtexec build can't write there.
 USER appuser
 # --no-create-home leaves $HOME unset/pointing at a nonexistent
 # /home/appuser — GLib (used by GStreamer plugins) falls back to

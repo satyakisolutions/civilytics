@@ -356,7 +356,30 @@ case "$ENVIRONMENT" in
     ;;
 esac
 
+# ── Validate the detector model is really present ────────────────────
+# A fresh clone without `git lfs pull` leaves ~130-byte pointer stubs in
+# place of the model weights; the stack would then start and only fail at
+# inference. Catch it here. Skipped for 'lite' (no detector).
+validate_models() {
+    local dir="backend/models/detector"
+    local onnx="$dir/civilytics_det_3class.onnx"
+    local classes="$dir/classes.json"
+    [ -f "$onnx" ]    || die "detector ONNX missing: $onnx (run: git lfs pull)"
+    [ -f "$classes" ] || die "detector classes.json missing: $classes (run: git lfs pull)"
+    # LFS pointer stubs begin with this line and are tiny.
+    if head -c 64 "$onnx" | grep -q "git-lfs.github.com"; then
+        die "detector ONNX is an unresolved git-LFS pointer — run: git lfs pull"
+    fi
+    local sz; sz=$(stat -c%s "$onnx" 2>/dev/null || echo 0)
+    [ "$sz" -gt 1000000 ] || die "detector ONNX too small (${sz} bytes) — likely corrupt or an LFS stub; run: git lfs pull"
+    python3 -c "import json,sys; json.load(open('$classes'))" 2>/dev/null \
+        || die "detector classes.json is not valid JSON: $classes"
+    c_dim "Detector model OK ($(( sz / 1024 / 1024 )) MB ONNX, classes.json valid)."
+}
+
 # ── Validate, then up ────────────────────────────────────────────────
+[ "$ENVIRONMENT" = "lite" ] || validate_models
+
 c_dim "Validating compose config (profile=$ENVIRONMENT) ..."
 "${DC[@]}" config >/dev/null || die "compose validation failed"
 

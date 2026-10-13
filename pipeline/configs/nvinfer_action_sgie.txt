@@ -8,7 +8,7 @@
 gpu-id=0
 net-scale-factor=0.00784313725
 offsets=127.5;127.5;127.5
-model-engine-file=/app/models/action_classifier/action_classifier_fp16.engine
+model-engine-file=/app/models/engine_cache/action_classifier_fp16.engine
 onnx-file=/app/models/action_classifier/action_classifier.onnx
 labelfile-path=/app/configs/action_labels.txt
 # The exported action_classifier.onnx has a static batch=1 input axis
