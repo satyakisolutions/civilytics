@@ -56,6 +56,7 @@ while [ $# -gt 0 ]; do
         --e2e)      RUN_E2E=1; shift ;;
         --down)     ACTION="down"; shift ;;
         --status)   ACTION="status"; shift ;;
+        --clean-volumes) ACTION="clean-volumes"; shift ;;
         *) die "unknown option: $1" ;;
     esac
 done
@@ -85,6 +86,27 @@ fi
 
 if [ "$ACTION" = "status" ]; then
     "${DC[@]}" ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+    exit 0
+fi
+
+# ── clean-volumes — wipe ONLY this env's data volumes ──────────────────
+# Stops the stack and deletes its named volumes (postgres, kafka, redis,
+# qdrant, minio, evidence, tts, engine cache, …). Images, networks and the
+# repo are untouched. DESTRUCTIVE and irreversible — all DB rows, evidence,
+# object storage and the built TRT engines for this environment are gone.
+if [ "$ACTION" = "clean-volumes" ]; then
+    c_red "This DELETES all '${ENVIRONMENT}' data volumes: Postgres, Kafka, Redis,"
+    c_red "Qdrant, MinIO, evidence, TTS cache, and the built TensorRT engines."
+    c_red "Containers stop; images and the repo are kept. This cannot be undone."
+    if [ -t 0 ]; then
+        printf 'Type the environment name (%s) to confirm: ' "$ENVIRONMENT"
+        read -r reply
+        [ "$reply" = "$ENVIRONMENT" ] || die "Confirmation did not match — aborted."
+    else
+        die "Refusing to wipe volumes without an interactive confirmation (no TTY)."
+    fi
+    "${DC[@]}" down --volumes --remove-orphans
+    c_grn "All '${ENVIRONMENT}' volumes removed. Next start rebuilds DB schema + TRT engines."
     exit 0
 fi
 
