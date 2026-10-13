@@ -1,7 +1,8 @@
 {
   "realm": "wastewatch",
   "enabled": true,
-  "displayName": "Civilytics WasteWatch (test)",
+  "displayName": "Civilytics",
+  "displayNameHtml": "<b>Civilytics</b>",
   "roles": {
     "realm": [
       {
