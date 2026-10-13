@@ -13,7 +13,7 @@
 #   --seed-owner   create the first owner account (no-op if one exists) --
 #                  NOT run by default, see scripts/seed_owner.py
 #   --smtp         prod only: prompt for SMTP host/account/password again
-#   --down         stop the stack (test also removes its volumes)
+#   --down         stop the tunnel, stop the stack, and remove its volumes
 #   --status       show health of every container and exit
 #
 # This script now does everything the old scripts/bootstrap.sh did
@@ -91,35 +91,36 @@ fi
 DC=(docker compose -f docker-compose.yml -p "civilytics-${ENVIRONMENT}" --profile "$ENVIRONMENT" "${EXTRA_PROFILES[@]+"${EXTRA_PROFILES[@]}"}")
 
 stop_ngrok_tunnel() {
-    # ngrok is a host process, not a Compose service. Limit cleanup to the
-    # reserved domain this project started so unrelated tunnels keep running.
-    local ngrok_domain="${1:-}" ngrok_domain_pattern
-    if [ -z "$ngrok_domain" ] && [ -f "$ENV_FILE" ]; then
-        ngrok_domain="$(sed -n 's/^NGROK_DOMAIN=//p' "$ENV_FILE" | tail -1)"
+    # The tunnel is deliberately outside Compose so it can use host networking
+    # to reach nginx on port 80. Its fixed name keeps cleanup project-scoped.
+    if docker container inspect civilytics-prod-ngrok >/dev/null 2>&1; then
+        docker rm -f civilytics-prod-ngrok >/dev/null
+        c_grn "Stopped ngrok tunnel."
     fi
-    [ -n "$ngrok_domain" ] || return 0
+}
 
-    # Escape the domain before handing it to pkill's regular-expression
-    # matcher. This is both safer for a manually edited .env and prevents
-    # dots in a hostname from matching arbitrary characters.
-    ngrok_domain_pattern="$(printf '%s' "$ngrok_domain" | sed 's/[][\\.^$*+?{}|()]/\\&/g')"
+start_ngrok_tunnel() {
+    local ngrok_domain ngrok_token
+    ngrok_domain="$(env_get NGROK_DOMAIN)"
+    ngrok_token="$(env_get NGROK_AUTHTOKEN)"
+    [ -n "$ngrok_domain" ] || die "NGROK_DOMAIN is required for the production tunnel."
+    [ -n "$ngrok_token" ] || die "NGROK_AUTHTOKEN is required for the production tunnel."
 
-    if pkill -f "ngrok .*--url[[:space:]]https://${ngrok_domain_pattern}([[:space:]]|$)" >/dev/null 2>&1; then
-        c_grn "Stopped ngrok tunnel for https://${ngrok_domain}/"
-    fi
+    # Replace a stale project tunnel before creating this one. `-d` is needed
+    # here so the script can continue immediately to bring up the app.
+    stop_ngrok_tunnel
+    c_grn "Starting ngrok tunnel for https://${ngrok_domain}/"
+    docker run --net=host -d --name civilytics-prod-ngrok \
+        -e "NGROK_AUTHTOKEN=${ngrok_token}" \
+        ngrok/ngrok:latest http 80 --url "https://${ngrok_domain}" >/dev/null
 }
 
 # ── down / status — no secret handling needed ──────────────────────────
 if [ "$ACTION" = "down" ]; then
-    # The production public tunnel is started outside Docker, so Compose
-    # cannot stop it for us.
+    # Stop the public endpoint first so it cannot point to a shutting-down app.
     [ "$ENVIRONMENT" != "prod" ] || stop_ngrok_tunnel
-    if [ "$ENVIRONMENT" = "test" ]; then
-        c_ylw "Stopping test stack and REMOVING its volumes (test state is disposable)"
-        "${DC[@]}" down -v
-    else
-        "${DC[@]}" down
-    fi
+    c_ylw "Stopping ${ENVIRONMENT} stack and removing its volumes"
+    "${DC[@]}" down --volumes --remove-orphans
     exit 0
 fi
 
@@ -229,12 +230,13 @@ validate_url() {
 }
 validate_https() { validate_url https "$1"; }
 validate_wss()   { validate_url wss "$1"; }
-# nginx path-routes on these exact suffixes (nginx/nginx.conf's
-# location /api/, /ws/, /webrtc/ blocks) -- a URL missing the suffix
-# silently hits the dashboard's own "/" instead of the real backend.
-validate_api_url()      {
-    validate_url https "$1" && [[ "$1" == */api ]] || validate_hostname "$1"
-}
+# The frontend's API client (frontend/src/lib/api-base.ts) treats the API
+# base as an ORIGIN and appends "/api/..." itself, so PUBLIC_API_URL must be
+# scheme://host[:port] with NO /api suffix -- a trailing /api double-prefixes
+# into /api/api/... and 404s. WS and MediaMTX are used as-is, so they DO carry
+# their /ws and /webrtc suffix. Accept an origin or a bare host for the API
+# (the /api, if the user types one, is stripped at expansion below).
+validate_api_url()      { validate_url https "$1" || validate_hostname "$1"; }
 validate_ws_url()       { { validate_url wss "$1" && [[ "$1" == */ws ]]; } || validate_hostname "$1"; }
 validate_mediamtx_url() { validate_url https "$1" && [[ "$1" == */webrtc ]]; }
 
@@ -353,14 +355,11 @@ case "$ENVIRONMENT" in
     c_dim "Values that must come from outside this script ..."
     ensure_prompted KEYCLOAK_ADMIN "Keycloak admin username." 0 0
 
-    # Do not ship a project's reserved tunnel name as a default.  That made
-    # a fresh deployment look configured while ngrok actually pointed to a
-    # different host (or was not available at all).  Ask for the endpoint
-    # once, persist it, and use it as Keycloak's public hostname by default.
-    ensure_prompted NGROK_DOMAIN \
-      "Optional stable ngrok public domain, e.g. my-site.ngrok-free.app.
-  Press Enter to use a normal DNS/LAN hostname instead. The ngrok agent must
-  be authenticated on this machine and authorized for the domain." 0 1 validate_ngrok_domain
+    # The production endpoint is intentionally fixed; it is created before
+    # Compose so the public URL is already reserved while the app boots.
+    env_set NGROK_DOMAIN related-elsewhere-undertook.ngrok-free.dev
+    ensure_prompted NGROK_AUTHTOKEN \
+      "ngrok authtoken for the configured reserved domain." 1 0
     if [ -n "$(env_get NGROK_DOMAIN)" ]; then
         ngrok_host="$(env_get NGROK_DOMAIN)"
         current_kc_host="$(env_get KC_HOSTNAME)"
@@ -403,12 +402,15 @@ case "$ENVIRONMENT" in
     #   1. Blank (Enter to skip)  → same-origin via nginx. Works on BOTH the
     #      LAN IP and the ngrok domain. Recommended.
     #   2. Type your own absolute URLs at the prompts.
-    ensure_prompted PUBLIC_API_URL "Browser-facing API URL — blank for same-origin via nginx (recommended). A bare host (e.g. example.ngrok-free.dev) is expanded to https://host/api." 0 1 validate_api_url
+    ensure_prompted PUBLIC_API_URL "Browser-facing API URL — blank for same-origin via nginx (recommended). A bare host (e.g. example.ngrok-free.dev) is expanded to https://host. Do NOT add /api; the client appends it." 0 1 validate_api_url
     public_api="$(env_get PUBLIC_API_URL)"
-    if [ -n "$public_api" ] && [[ "$public_api" != *://* ]]; then
-        env_set PUBLIC_API_URL "https://$public_api/api"
-    elif [ -n "$public_api" ] && [[ "$public_api" =~ ^https://[^/]+/?$ ]]; then
-        env_set PUBLIC_API_URL "${public_api%/}/api"
+    if [ -n "$public_api" ]; then
+        # The client appends /api itself, so store the ORIGIN only. Add the
+        # scheme to a bare host and strip any trailing slash or /api the user
+        # typed (either would double-prefix into /api/api/... and 404).
+        [[ "$public_api" == *://* ]] || public_api="https://$public_api"
+        public_api="${public_api%/}"; public_api="${public_api%/api}"
+        env_set PUBLIC_API_URL "$public_api"
     fi
     ensure_prompted PUBLIC_WS_URL "Browser-facing WebSocket URL — blank for same-origin wss via nginx. A bare host (e.g. example.ngrok-free.dev) is expanded to wss://host/ws." 0 1 validate_ws_url
     public_ws="$(env_get PUBLIC_WS_URL)"
@@ -568,6 +570,10 @@ if [ -n "$PULL" ]; then
 fi
 
 c_grn "Starting $ENVIRONMENT stack"
+# Start the public endpoint before Compose. It runs in Docker with host
+# networking, exactly like `docker run --net=host ... ngrok/ngrok:latest
+# http 80 --url https://<domain>`, but detached so startup can continue.
+[ "$ENVIRONMENT" != "prod" ] || start_ngrok_tunnel
 "${DC[@]}" up -d ${BUILD:+$BUILD}
 
 [ "$WAIT" -eq 1 ] || { c_grn "Started (not waiting for health)"; exit 0; }
@@ -700,34 +706,7 @@ case "$ENVIRONMENT" in
         [ "$SEED_OWNER" -eq 1 ] && c_ylw "Owner login: see 'Owner account' output above." \
             || c_ylw "No owner yet — run: ./scripts/start.sh $ENVIRONMENT --seed-owner"
 
-        # Public tunnel: ngrok terminates public HTTPS and forwards to nginx's
-        # local HTTP redirect/listener.  This deliberately avoids making the
-        # ngrok agent trust a local/self-signed nginx certificate.  The same
-        # public hostname is used by Keycloak above, so login redirects work
-        # from any device rather than only on the server's own DNS setup.
-        ngrok_domain="$(env_get NGROK_DOMAIN)"
-        if [ -n "$ngrok_domain" ] && command -v ngrok >/dev/null 2>&1; then
-            NGROK_TARGET="${NGROK_TARGET:-http://localhost:80}"
-            NGROK_LOG="${NGROK_LOG:-/tmp/wastewatch/ngrok.log}"
-            ngrok_cfg=()
-            # Let ngrok use its normal per-user configuration.  Old servers
-            # may have the two project-specific paths, so retain them only
-            # when they actually exist; forcing absent paths broke new hosts.
-            [ -f /var/lib/ngrok/ngrok.yml ] && ngrok_cfg+=(--config=/var/lib/ngrok/ngrok.yml)
-            [ -f /var/lib/ngrok/auth-config.yml ] && ngrok_cfg+=(--config=/var/lib/ngrok/auth-config.yml)
-            # Stop any tunnel already holding the reserved domain (one agent
-            # per domain; a stale one would make the new start fail).
-            stop_ngrok_tunnel "$ngrok_domain"
-            mkdir -p "$(dirname "$NGROK_LOG")"
-            nohup ngrok "${ngrok_cfg[@]}" http "$NGROK_TARGET" \
-                --url "https://${ngrok_domain}" >"$NGROK_LOG" 2>&1 &
-            disown || true
-            c_grn "Public    : https://${ngrok_domain}/  (ngrok → ${NGROK_TARGET}, log: ${NGROK_LOG})"
-        elif [ -n "$ngrok_domain" ]; then
-            c_ylw "NGROK_DOMAIN is set but ngrok is not installed — tunnel not started."
-        else
-            c_dim "No NGROK_DOMAIN configured — public tunnel skipped."
-        fi
+        c_grn "Public    : https://$(env_get NGROK_DOMAIN)/  (ngrok container → host port 80)"
         ;;
     lite)
         c_grn "Dashboard : http://localhost:5174"
