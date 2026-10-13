@@ -91,11 +91,9 @@ async def _provision(user_id: str, username: str, email: str) -> None:
     await kc_admin.set_password(user_id, temp, temporary=False)
     await kc_admin.clear_required_actions(user_id)
     sent = await _send_welcome(email, username, temp)
-    # Keycloak's own activation link too, best-effort (often not delivered).
-    try:
-        await kc_admin.send_setup_email(user_id)
-    except Exception:  # noqa: BLE001
-        pass
+    # NOTE: Keycloak's own execute-actions-email (the activation link) is NOT
+    # used here — it sends multipart/HTML mail that this deployment's mail host
+    # silently drops. The plain-text app email above carries working access.
     if sent:
         print(f"owner '{username}' <{email}> ready — account email sent")
     else:

@@ -9,8 +9,7 @@ uses, which delivers, so owner seeding can hand the new owner working access
 import logging
 import smtplib
 import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+from email.message import EmailMessage
 from pathlib import Path
 
 from app.config.settings import settings
@@ -37,12 +36,15 @@ def send_owner_welcome(
     if not settings.smtp_host:
         raise RuntimeError("SMTP not configured (smtp_host empty)")
 
-    msg = MIMEMultipart("alternative")
+    # Plain text ONLY. The multipart/HTML variant is silently dropped by the
+    # mail host / Gmail on this deployment (the plain text reliably delivers),
+    # so correctness beats the fancier template. The .html template is kept
+    # for when the domain gets SPF/DKIM and HTML mail can be trusted again.
+    msg = EmailMessage()
     msg["Subject"] = "Your Civilytics account is ready"
     msg["From"] = settings.smtp_from
     msg["To"] = to_email
-    msg.attach(MIMEText(_render("account_ready.txt", app_url, username, temp_password), "plain"))
-    msg.attach(MIMEText(_render("account_ready.html", app_url, username, temp_password), "html"))
+    msg.set_content(_render("account_ready.txt", app_url, username, temp_password))
 
     # Port 587 is STARTTLS (not implicit TLS). The cert on mail hosts is often
     # self-signed, so don't hard-fail verification here.

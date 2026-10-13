@@ -15,13 +15,8 @@ Open Civilytics:
 __APP_URL__
 
 SECURITY
-Your password is temporary. After signing in, go to Account -> Security to
-change it.
-
-ACTIVATION
-An account activation link from Keycloak has also been sent to your email.
-If you cannot find it in your inbox, check your Spam or Promotions folder.
-Email subject: Update Your Account
+This password is temporary. Sign in with it, then change it immediately in
+Account -> Security.
 
 --
 Civilytics / Satyaki Solutions
