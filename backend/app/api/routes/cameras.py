@@ -1,7 +1,10 @@
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +24,33 @@ router = APIRouter(prefix="/cameras", tags=["cameras"])
 # Module-level singleton — reused across all requests.
 _notifier = PipelineNotifier(settings.redis_url)
 
-_ALLOWED_UPDATE_FIELDS = {"name", "zone", "status", "stream_url", "is_pinned", "location", "gps_lat", "gps_lng", "roi_polygons", "recording_config"}
+_ALLOWED_UPDATE_FIELDS = {"name", "zone", "status", "stream_url", "is_pinned", "location", "gps_lat", "gps_lng", "roi_polygons", "recording_config", "detection_config"}
+
+_GOOGLE_MAPS_HOSTS = {"google.com", "www.google.com", "maps.google.com", "share.google"}
+_GOOGLE_CENTER_RE = re.compile(
+    r"center(?:\\u003d|=)(-?\d{1,2}(?:\.\d+)?)(?:%2[Cc]|,)(-?\d{1,3}(?:\.\d+)?)"
+)
+
+
+@router.get("/resolve-google-link")
+async def resolve_google_link(url: str, _user: dict = Depends(require_admin)):
+    """Resolve a pasted Google Maps place link without exposing an open proxy."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in _GOOGLE_MAPS_HOSTS:
+        raise HTTPException(status_code=422, detail="Only HTTPS Google Maps links are supported")
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            response = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Could not retrieve the Google Maps link") from exc
+    match = _GOOGLE_CENTER_RE.search(response.text)
+    if not match:
+        raise HTTPException(status_code=422, detail="Google did not provide coordinates for this place")
+    lat, lng = float(match.group(1)), float(match.group(2))
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        raise HTTPException(status_code=422, detail="Google returned invalid coordinates")
+    return {"lat": lat, "lng": lng}
 
 
 async def _resolve_zone(db: AsyncSession, name: str, tenant: str | None) -> Zone:

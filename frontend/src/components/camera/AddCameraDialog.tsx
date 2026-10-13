@@ -12,7 +12,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { CameraCreateInput } from '@/hooks/useCameras';
 import { useToast } from '@/hooks/use-toast';
-import { parseGoogleMapsLatLng, isGoogleMapsShortLink } from '@/lib/google-maps-link';
+import { parseGoogleMapsLatLng } from '@/lib/google-maps-link';
+import { API_BASE } from '@/lib/api-base';
 
 // ---------------------------------------------------------------------------
 // Lightweight map picker — click on the map to set GPS coordinates.
@@ -35,13 +36,17 @@ function MapPicker({ lat, lng, onSelect, onAddress }: {
   const [gmapError, setGmapError] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  const useGmapLink = () => {
-    if (isGoogleMapsShortLink(gmapLink)) {
-      setGmapError("Short links can't be read — open it, then paste the full URL from the address bar.");
-      return;
+  const useGmapLink = async () => {
+    let coords = parseGoogleMapsLatLng(gmapLink);
+    if (!coords) {
+      const response = await fetch(`${API_BASE}/api/cameras/resolve-google-link?url=${encodeURIComponent(gmapLink)}`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        setGmapError(body.detail || "Couldn't find coordinates in that link.");
+        return;
+      }
+      coords = await response.json();
     }
-    const coords = parseGoogleMapsLatLng(gmapLink);
-    if (!coords) { setGmapError("Couldn't find coordinates in that link."); return; }
     const rLat = parseFloat(coords.lat.toFixed(6));
     const rLng = parseFloat(coords.lng.toFixed(6));
     setGmapError('');
@@ -196,6 +201,11 @@ export function AddCameraDialog({ open, onOpenChange, onAdd }: Props) {
   const [form, setForm] = useState<CameraCreateInput>(EMPTY);
   const [gpsLat, setGpsLat] = useState('');
   const [gpsLng, setGpsLng] = useState('');
+  // Per-camera detection thresholds. Defaults mirror the pipeline's own
+  // (dwell 15s, proximity window 300s, proximity 120px); edit to override.
+  const [dwell, setDwell] = useState('15');
+  const [proxWin, setProxWin] = useState('300');
+  const [proxPx, setProxPx] = useState('120');
   const [submitting, setSubmitting] = useState(false);
   const { toast } = useToast();
 
@@ -203,6 +213,9 @@ export function AddCameraDialog({ open, onOpenChange, onAdd }: Props) {
     setForm(EMPTY);
     setGpsLat('');
     setGpsLng('');
+    setDwell('15');
+    setProxWin('300');
+    setProxPx('120');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -227,6 +240,11 @@ export function AddCameraDialog({ open, onOpenChange, onAdd }: Props) {
     const lng = parseFloat(gpsLng);
     if (!Number.isNaN(lat)) payload.gps_lat = lat;
     if (!Number.isNaN(lng)) payload.gps_lng = lng;
+    payload.detection_config = {
+      dwell_violation_threshold_s: Number(dwell),
+      waste_proximity_alert_window_s: Number(proxWin),
+      waste_proximity_px: Number(proxPx),
+    };
 
     setSubmitting(true);
     try {
@@ -314,6 +332,24 @@ export function AddCameraDialog({ open, onOpenChange, onAdd }: Props) {
                   {gpsLat}, {gpsLng}
                 </p>
               )}
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Detection thresholds <span className="text-muted-foreground text-xs">(override workspace defaults)</span></Label>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="grid gap-1">
+                  <Input type="number" min={0} step="any" value={dwell} onChange={(e) => setDwell(e.target.value)} aria-label="Dwell threshold (seconds)" />
+                  <span className="text-[10px] text-muted-foreground">Dwell (s)</span>
+                </div>
+                <div className="grid gap-1">
+                  <Input type="number" min={0} step="any" value={proxWin} onChange={(e) => setProxWin(e.target.value)} aria-label="Proximity window (seconds)" />
+                  <span className="text-[10px] text-muted-foreground">Proximity window (s)</span>
+                </div>
+                <div className="grid gap-1">
+                  <Input type="number" min={0} step="any" value={proxPx} onChange={(e) => setProxPx(e.target.value)} aria-label="Proximity (pixels)" />
+                  <span className="text-[10px] text-muted-foreground">Proximity (px)</span>
+                </div>
+              </div>
             </div>
           </div>
 

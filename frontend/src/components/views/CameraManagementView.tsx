@@ -292,6 +292,13 @@ function EditCameraDialog({ camera, onClose, onSave }: { camera: Camera; onClose
   const [streamUrl, setStreamUrl] = useState(camera.streamUrl ?? '');
   const [gpsLat, setGpsLat] = useState(camera.gps?.lat != null ? String(camera.gps.lat) : '');
   const [gpsLng, setGpsLng] = useState(camera.gps?.lng != null ? String(camera.gps.lng) : '');
+  // Per-camera detection thresholds (cameras.detection_config). Blank/absent
+  // means fall back to the workspace/pipeline default. Defaults mirror the
+  // pipeline's own (dwell 15s, proximity window 300s, proximity 120px).
+  const dc = camera.detectionConfig;
+  const [dwell, setDwell] = useState(dc?.dwell_violation_threshold_s != null ? String(dc.dwell_violation_threshold_s) : '15');
+  const [proxWin, setProxWin] = useState(dc?.waste_proximity_alert_window_s != null ? String(dc.waste_proximity_alert_window_s) : '300');
+  const [proxPx, setProxPx] = useState(dc?.waste_proximity_px != null ? String(dc.waste_proximity_px) : '120');
   const [saving, setSaving] = useState(false);
   const [mapQuery, setMapQuery] = useState('');
   const [mapResults, setMapResults] = useState<{ display_name: string; lat: string; lon: string }[]>([]);
@@ -365,7 +372,7 @@ function EditCameraDialog({ camera, onClose, onSave }: { camera: Camera; onClose
 
   const useGmapLink = () => {
     if (isGoogleMapsShortLink(gmapLink)) {
-      setGmapError("Short links can't be read — open it, then paste the full URL from the address bar.");
+      setGmapError("Short links can't be read here — open it in Google Maps, then paste the full URL from the address bar.");
       return;
     }
     const coords = parseGoogleMapsLatLng(gmapLink);
@@ -384,6 +391,11 @@ function EditCameraDialog({ camera, onClose, onSave }: { camera: Camera; onClose
       const lat = parseFloat(gpsLat); const lng = parseFloat(gpsLng);
       if (!Number.isNaN(lat)) data.gps_lat = lat;
       if (!Number.isNaN(lng)) data.gps_lng = lng;
+      data.detectionConfig = {
+        dwell_violation_threshold_s: Number(dwell),
+        waste_proximity_alert_window_s: Number(proxWin),
+        waste_proximity_px: Number(proxPx),
+      };
       await onSave(camera.id, data);
     } finally { setSaving(false); }
   };
@@ -426,6 +438,23 @@ function EditCameraDialog({ camera, onClose, onSave }: { camera: Camera; onClose
             <div ref={mapRef} className="mt-2" style={{ width: '100%', height: 180, borderRadius: 6, border: `1px solid ${CV_COLORS.border}`, cursor: 'crosshair' }} />
             {gpsLat && gpsLng && <p className="text-[11px] text-cv-muted mt-1">{gpsLat}, {gpsLng}</p>}
           </div>
+          <div className="pt-1">
+            <label className="text-xs text-cv-fg2 block mb-1">Detection thresholds <span className="text-cv-muted">(override workspace defaults)</span></label>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <input type="number" min={0} step="any" value={dwell} onChange={e => setDwell(e.target.value)} className="w-full h-9 px-2 rounded-md text-sm bg-cv-bg border border-cv-border text-cv-fg focus:outline-none focus:border-cv-cyan" />
+                <span className="text-[10px] text-cv-muted">Dwell (s)</span>
+              </div>
+              <div>
+                <input type="number" min={0} step="any" value={proxWin} onChange={e => setProxWin(e.target.value)} className="w-full h-9 px-2 rounded-md text-sm bg-cv-bg border border-cv-border text-cv-fg focus:outline-none focus:border-cv-cyan" />
+                <span className="text-[10px] text-cv-muted">Proximity window (s)</span>
+              </div>
+              <div>
+                <input type="number" min={0} step="any" value={proxPx} onChange={e => setProxPx(e.target.value)} className="w-full h-9 px-2 rounded-md text-sm bg-cv-bg border border-cv-border text-cv-fg focus:outline-none focus:border-cv-cyan" />
+                <span className="text-[10px] text-cv-muted">Proximity (px)</span>
+              </div>
+            </div>
+          </div>
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="px-3 py-1.5 rounded-md text-sm text-cv-fg2 border border-cv-border hover:bg-white/5">Cancel</button>
@@ -438,6 +467,7 @@ function EditCameraDialog({ camera, onClose, onSave }: { camera: Camera; onClose
 
 function ActionMenu({ cam, open, onToggle, onView, onEdit, onDelete }: { cam: Camera; open: boolean; onToggle: () => void; onView: () => void; onEdit: () => void; onDelete: () => void }) {
   const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
 
   useEffect(() => {
@@ -453,7 +483,13 @@ function ActionMenu({ cam, open, onToggle, onView, onEdit, onDelete }: { cam: Ca
 
   useEffect(() => {
     if (!open) return;
-    const close = (e: MouseEvent) => { if (btnRef.current && !btnRef.current.contains(e.target as Node)) onToggle(); };
+    // The menu is portaled/fixed but still part of this component. Treat both
+    // the trigger and its menu as inside; otherwise mousedown unmounts the
+    // menu before a View/Edit/Delete click can reach its button.
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (!btnRef.current?.contains(target) && !menuRef.current?.contains(target)) onToggle();
+    };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [open, onToggle]);
@@ -464,7 +500,7 @@ function ActionMenu({ cam, open, onToggle, onView, onEdit, onDelete }: { cam: Ca
         <MoreVertical className="w-4 h-4" />
       </button>
       {open && (
-        <div className="fixed z-[9999] w-36 rounded-md border border-cv-border bg-cv-panel shadow-lg py-1" style={{ top: pos.top, left: pos.left }}>
+        <div ref={menuRef} className="fixed z-[9999] w-36 rounded-md border border-cv-border bg-cv-panel shadow-lg py-1" style={{ top: pos.top, left: pos.left }}>
           <button onClick={onView} className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-cv-fg hover:bg-white/5"><Eye className="w-3.5 h-3.5" />View</button>
           <button onClick={onEdit} className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-cv-fg hover:bg-white/5"><Pencil className="w-3.5 h-3.5" />Edit</button>
           <button onClick={onDelete} className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[#FF6B6B] hover:bg-white/5"><Trash2 className="w-3.5 h-3.5" />Delete</button>

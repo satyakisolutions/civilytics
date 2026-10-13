@@ -28,6 +28,7 @@ export type CameraCreateInput = {
   source_type?: string;
   gps_lat?: number;
   gps_lng?: number;
+  detection_config?: Record<string, number>;
 };
 
 function mapCamera(c: BackendCamera): Camera {

@@ -11,6 +11,7 @@ class CameraCreate(BaseModel):
     gps_lng: float | None = None
     stream_url: str | None = None
     source_type: str = "rtsp"
+    detection_config: dict | None = None
 
 class CameraUpdate(BaseModel):
     name: str | None = None
