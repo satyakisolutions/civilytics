@@ -17,6 +17,7 @@ from app.api.routes import clustering, reid
 from app.api.routes import logs as log_routes
 from app.api.routes import operations
 from app.config.settings import settings
+from app.config.logging import setup_logging
 from app.ws import metadata as ws_metadata
 from app.ws import events as ws_events
 from app.ws import alerts as ws_alerts
@@ -73,6 +74,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    setup_logging(settings.log_level)
     app = FastAPI(title="WasteWatch API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,

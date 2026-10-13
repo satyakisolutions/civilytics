@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     mediamtx_rtsp_url: str = "rtsp://localhost:8554"
     api_host: str = "0.0.0.0"
     api_port: int = 8080
+    log_level: str = "INFO"  # boot level; override live via PUT /api/system/log-level
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:8080"]
 
     telegram_bot_token: str = ""
