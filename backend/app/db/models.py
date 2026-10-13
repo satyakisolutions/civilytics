@@ -273,6 +273,11 @@ class ViolationEvent(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Tenancy (T1). Nullable: worker inserts land NULL until the worker layer
+    # stamps them. See app/auth/tenancy.py for the request-side scoping.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True
+    )
     camera_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("cameras.id"), nullable=False
     )
@@ -339,6 +344,10 @@ class Alert(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Tenancy (T1). Nullable: worker inserts land NULL until stamped.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True
+    )
     event_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("violation_events.id"), nullable=True
     )
@@ -422,6 +431,10 @@ class TrackSession(Base):
         Index("ix_track_sessions_camera_id", "camera_id"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Tenancy (T1). Nullable: worker inserts land NULL until stamped.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True
+    )
     camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id"))
     track_id: Mapped[int] = mapped_column(Integer)
     fsm_state: Mapped[EventFSMState] = mapped_column(Enum(EventFSMState, name="event_fsm_state", create_type=False), default=EventFSMState.enter)
@@ -471,6 +484,10 @@ class PlateRead(Base):
         Index("ix_plate_reads_normalised", "plate_normalised"),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Tenancy (T1). Nullable: worker inserts land NULL until stamped.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True
+    )
     camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id"))
     track_session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("track_sessions.id"))
     # As read, verbatim. Kept raw because it is evidence.
@@ -509,6 +526,10 @@ class EvidenceFile(Base):
         ),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Tenancy (T1). Nullable: worker inserts land NULL until stamped.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True
+    )
     event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("violation_events.id"))
     # snapshot / video_clip / annotated_snapshot / metadata_json.
     # annotated_snapshot MUST stay distinct from snapshot: "no bbox on the
@@ -547,6 +568,10 @@ class LogEntry(Base):
         ),
     )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Tenancy (T1). Nullable: worker/service inserts land NULL until stamped.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True
+    )
     service: Mapped[str] = mapped_column(String(100))
     level: Mapped[str] = mapped_column(String(20))
     message: Mapped[str] = mapped_column(Text)
