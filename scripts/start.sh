@@ -23,6 +23,9 @@
 # Previous 5 compose files + bootstrap.sh kept at docker/legacy/.
 # ──────────────────────────────────────────────────────────────────────
 set -euo pipefail
+# Make Ctrl-C actually abort — without this, an interrupt during a `read`
+# prompt just returns to the prompt loop and the script can't be killed.
+trap 'printf "\nAborted.\n" >&2; exit 130' INT
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -211,7 +214,13 @@ ensure_prompted() {
         printf '\n  %s\n' "$desc"
         if [ "$optional" = "1" ]; then printf '  %s (optional, Enter to skip): ' "$key"
         else printf '  %s: ' "$key"; fi
-        if [ "$secret" = "1" ]; then read -rs val; printf '\n'; else read -r val; fi
+        # Exit on interrupt/EOF rather than looping forever on empty input.
+        if [ "$secret" = "1" ]; then
+            read -rs val || { printf '\n'; exit 130; }
+            printf '\n'
+        else
+            read -r val || { printf '\n'; exit 130; }
+        fi
         if [ -z "$val" ]; then
             [ "$optional" = "1" ] && break
             c_red "  $key is required"
@@ -301,9 +310,29 @@ case "$ENVIRONMENT" in
   Keycloak builds its issuer/redirect URLs from this; a wrong value makes
   tokens fail audience validation." 0 0 validate_hostname
     ensure_prompted MINIO_ROOT_USER "MinIO root access key (evidence + backup object store)." 0 0
-    ensure_prompted PUBLIC_API_URL "Browser-facing API URL, e.g. https://civilytics.example/api" 0 0 validate_api_url
-    ensure_prompted PUBLIC_WS_URL "Browser-facing WebSocket URL, e.g. wss://civilytics.example/ws" 0 0 validate_ws_url
-    ensure_prompted PUBLIC_MEDIAMTX_URL "Browser-facing MediaMTX WebRTC URL, e.g. https://civilytics.example/webrtc" 0 0 validate_mediamtx_url
+    # Browser-facing URLs are OPTIONAL. The frontend resolves the API and
+    # WebSocket same-origin through nginx, so one build works at every host
+    # it's reached by (LAN IP, ngrok domain, …). Three ways to set them:
+    #   1. Blank (Enter to skip)  → same-origin via nginx. Works on BOTH the
+    #      LAN IP and the ngrok domain. Recommended.
+    #   2. Use the ngrok domain   → bakes absolute https://<ngrok>/... URLs.
+    #      Reachable ONLY via ngrok then (LAN-IP access breaks on CORS).
+    #   3. Type your own absolute URLs at the prompts.
+    NGROK_DOMAIN="${NGROK_DOMAIN:-related-elsewhere-undertook.ngrok-free.dev}"
+    if [ -z "$(env_get PUBLIC_API_URL)" ] && [ -t 0 ]; then
+        printf '\n  Bake the ngrok domain (%s) into the browser-facing URLs?\n' "$NGROK_DOMAIN"
+        printf '  (N = same-origin via nginx, works on LAN IP + ngrok — recommended) [y/N]: '
+        read -r _ngrok_ans || { printf '\n'; exit 130; }
+        if [[ "$_ngrok_ans" =~ ^[Yy] ]]; then
+            env_set PUBLIC_API_URL      "https://${NGROK_DOMAIN}/api"
+            env_set PUBLIC_WS_URL       "wss://${NGROK_DOMAIN}/ws"
+            env_set PUBLIC_MEDIAMTX_URL "https://${NGROK_DOMAIN}/webrtc"
+            c_dim "Public URLs pinned to https://${NGROK_DOMAIN}"
+        fi
+    fi
+    ensure_prompted PUBLIC_API_URL "Browser-facing API URL — blank for same-origin via nginx (recommended). Only set to pin an absolute https://host/api." 0 1 validate_api_url
+    ensure_prompted PUBLIC_WS_URL "Browser-facing WebSocket URL — blank for same-origin wss via nginx. Only set to pin an absolute wss://host/ws." 0 1 validate_ws_url
+    ensure_prompted PUBLIC_MEDIAMTX_URL "Browser-facing MediaMTX WebRTC URL (e.g. http://<LAN-IP>:8889) — blank to skip until cameras need live video." 0 1
     ensure_prompted WW_KEYCLOAK_CLIENT_SECRET \
       "Keycloak confidential-client secret for the branded login.
   Create the client in the realm, enable 'Direct access grants', then
