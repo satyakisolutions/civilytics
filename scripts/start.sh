@@ -253,7 +253,11 @@ case "$ENVIRONMENT" in
     fi
     env_set WW_AUTH_DEV_MODE 0
     env_default WW_AUTH_COOKIE_SECURE true
-    env_default KC_COMMAND "start --optimized"
+    # Plain `start` (not `start --optimized`): the stock keycloak image has
+    # no pre-built postgres config, so --optimized falls back to the h2
+    # default and crashes against the postgres KC_DB_URL. `start` augments
+    # the config for postgres at boot (~11s) and runs in production mode.
+    env_default KC_COMMAND "start"
     env_default RESTART_POLICY always
     env_default PG_BIND 127.0.0.1
     env_default KAFKA_BIND 127.0.0.1
