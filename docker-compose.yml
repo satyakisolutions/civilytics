@@ -440,6 +440,11 @@ services:
       # placeholder onto pipeline/app's real path would silently shadow
       # the image's baked-in code in test/prod. One shape, always.
       - evidence_data:/app/evidence
+      # Persist the built TensorRT engine across recreates. The ONNX stays in
+      # the image at /app/models/rfdetr/; nvinfer builds the engine here once
+      # per GPU/TRT version instead of every container start. Wipe this volume
+      # when swapping the ONNX or upgrading TensorRT/GPU.
+      - pipeline_engine:/app/models/engine_cache
     depends_on:
       kafka:
         condition: service_healthy
@@ -611,5 +616,6 @@ volumes:
   tts_data:
   evidence_data:
   pipeline_models:
+  pipeline_engine:
   minio_data:
   nginx_logs:
