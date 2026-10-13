@@ -257,7 +257,8 @@ case "$ENVIRONMENT" in
     # no pre-built postgres config, so --optimized falls back to the h2
     # default and crashes against the postgres KC_DB_URL. `start` augments
     # the config for postgres at boot (~11s) and runs in production mode.
-    env_default KC_COMMAND "start"
+    # --import-realm loads the wastewatch realm generated below.
+    env_default KC_COMMAND "start --import-realm"
     env_default RESTART_POLICY always
     env_default PG_BIND 127.0.0.1
     env_default KAFKA_BIND 127.0.0.1
@@ -290,6 +291,20 @@ case "$ENVIRONMENT" in
         env_set WW_INTERNAL_SERVICE_TOKEN "$(gen_password)"
     fi
 
+    # Generate the prod Keycloak realm from the committed template, with the
+    # real client secret substituted in (the template ships a ${…}
+    # placeholder, never a real secret). Keycloak --import-realm loads it on
+    # first boot, so the wastewatch realm + wastewatch-api service-account
+    # client exist and owner seeding works — no manual realm creation.
+    if [ -f keycloak/realm-prod.json ]; then
+        mkdir -p keycloak/prod-import
+        WW_KEYCLOAK_CLIENT_SECRET="$(env_get WW_KEYCLOAK_CLIENT_SECRET)" \
+            envsubst '${WW_KEYCLOAK_CLIENT_SECRET}' \
+            < keycloak/realm-prod.json > keycloak/prod-import/wastewatch-realm.json
+        env_default KEYCLOAK_REALM_IMPORT ./keycloak/prod-import
+        c_dim "Keycloak realm written to keycloak/prod-import/ (imported on boot)."
+    fi
+
     c_dim "Optional outbound channels — press Enter to leave disabled ..."
     ensure_prompted WW_SMTP_PASSWORD "SMTP password for report email." 1 1
     ensure_prompted WW_TELEGRAM_BOT_TOKEN "Telegram bot token for alert messages." 1 1
@@ -302,10 +317,10 @@ case "$ENVIRONMENT" in
         c_ylw "nginx will generate a SELF-SIGNED one and browsers will warn."
         c_ylw "Run ./scripts/make-certs.sh first for a proper certificate."
     fi
-    c_dim "Manual steps this script cannot do: create the Keycloak realm +"
-    c_dim "confidential client (enable Direct access grants), define composite"
-    c_dim "roles owner->admin->viewer, create the MinIO bucket + retention"
-    c_dim "policy, and back up $ENV_FILE somewhere safe."
+    c_dim "Manual steps this script cannot do: create the MinIO bucket +"
+    c_dim "retention policy, and back up $ENV_FILE somewhere safe."
+    c_dim "(The Keycloak realm + confidential client + owner->admin->viewer"
+    c_dim "roles are now imported automatically from keycloak/realm-prod.json.)"
     ;;
 
   # ── lite: minimal footprint, no Keycloak at all ─────────────────────

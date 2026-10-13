@@ -76,3 +76,6 @@ pipeline/models/**/v1*_backup/
 # Ralph (autonomous loop tool, local automation state/logs, not project code)
 .ralph/
 .ralphrc
+
+# Generated prod realm (contains real client secret) — never commit
+keycloak/prod-import/
