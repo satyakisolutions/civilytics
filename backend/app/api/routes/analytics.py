@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_viewer, require_admin
+from app.auth.tenancy import get_tenant
 from app.analytics.aggregator import get_summary, get_hourly_stats, get_daily_trend, get_by_zone, get_by_camera, get_heatmap, get_daily_by_category
 from app.config.settings import settings as app_settings
 
@@ -55,29 +56,29 @@ async def upsert_analytics(
     return {"version": version}
 
 @router.get("/summary")
-async def analytics_summary(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
-    return await get_summary(db)
+async def analytics_summary(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
+    return await get_summary(db, tenant)
 
 @router.get("/hourly")
-async def analytics_hourly(hours: int = Query(default=24, le=168), db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
-    return await get_hourly_stats(db, hours)
+async def analytics_hourly(hours: int = Query(default=24, le=168), db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
+    return await get_hourly_stats(db, hours, tenant)
 
 @router.get("/daily")
-async def analytics_daily(days: int = Query(default=7, le=90), db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
-    return await get_daily_trend(db, days)
+async def analytics_daily(days: int = Query(default=7, le=90), db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
+    return await get_daily_trend(db, days, tenant)
 
 @router.get("/by-zone")
-async def analytics_by_zone(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
-    return await get_by_zone(db)
+async def analytics_by_zone(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
+    return await get_by_zone(db, tenant)
 
 @router.get("/daily-by-category")
-async def analytics_daily_by_category(days: int = Query(default=7, le=90), db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
-    return await get_daily_by_category(db, days)
+async def analytics_daily_by_category(days: int = Query(default=7, le=90), db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
+    return await get_daily_by_category(db, days, tenant)
 
 @router.get("/heatmap")
-async def analytics_heatmap(days: int = Query(default=7, le=90), db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
-    return await get_heatmap(db, days)
+async def analytics_heatmap(days: int = Query(default=7, le=90), db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
+    return await get_heatmap(db, days, tenant)
 
 @router.get("/by-camera")
-async def analytics_by_camera(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
-    return await get_by_camera(db)
+async def analytics_by_camera(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
+    return await get_by_camera(db, tenant)

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_viewer, require_admin
+from app.auth.tenancy import get_tenant, scope
 from app.db.models import ViolationEvent, TrackSession
 from app.schemas.event import ViolationEventResponse, ViolationEventUpdate, TrackSessionResponse
 
@@ -37,11 +38,12 @@ async def publish_event(
     body: EventPublishRequest,
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_admin),
+    tenant: str | None = Depends(get_tenant),
 ):
     try:
         event_uuid = uuid.UUID(body.event_id)
         result = await db.execute(
-            select(ViolationEvent).where(ViolationEvent.id == event_uuid)
+            scope(select(ViolationEvent).where(ViolationEvent.id == event_uuid), ViolationEvent, tenant)
         )
         event = result.scalar_one_or_none()
         if event:
@@ -83,8 +85,9 @@ async def list_events(
     limit: int = Query(default=50, le=200),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_viewer),
+    tenant: str | None = Depends(get_tenant),
 ):
-    stmt = select(ViolationEvent).order_by(ViolationEvent.timestamp.desc())
+    stmt = scope(select(ViolationEvent).order_by(ViolationEvent.timestamp.desc()), ViolationEvent, tenant)
     if camera_id is not None:
         stmt = stmt.where(ViolationEvent.camera_id == camera_id)
     if status is not None:
@@ -113,9 +116,10 @@ async def export_events_csv(
     limit: int = Query(default=1000, le=5000),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_viewer),
+    tenant: str | None = Depends(get_tenant),
 ):
     """Export events as CSV for download."""
-    stmt = select(ViolationEvent).order_by(ViolationEvent.timestamp.desc()).limit(limit)
+    stmt = scope(select(ViolationEvent).order_by(ViolationEvent.timestamp.desc()).limit(limit), ViolationEvent, tenant)
     if camera_id is not None:
         stmt = stmt.where(ViolationEvent.camera_id == camera_id)
     if status is not None:
@@ -148,19 +152,24 @@ async def list_active_tracks(
     limit: int = Query(default=1000, le=5000),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_viewer),
+    tenant: str | None = Depends(get_tenant),
 ):
     result = await db.execute(
-        select(TrackSession)
-        .where(TrackSession.exited_at.is_(None))
-        .order_by(TrackSession.entered_at.desc())
-        .limit(limit)
+        scope(
+            select(TrackSession)
+            .where(TrackSession.exited_at.is_(None))
+            .order_by(TrackSession.entered_at.desc())
+            .limit(limit),
+            TrackSession,
+            tenant,
+        )
     )
     return result.scalars().all()
 
 
 @router.get("/{event_id}", response_model=ViolationEventResponse)
-async def get_event(event_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
-    result = await db.execute(select(ViolationEvent).where(ViolationEvent.id == event_id))
+async def get_event(event_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
+    result = await db.execute(scope(select(ViolationEvent).where(ViolationEvent.id == event_id), ViolationEvent, tenant))
     event = result.scalar_one_or_none()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -176,8 +185,9 @@ async def update_event(
     # "detection to first operator review" metric measures. Gating it on
     # `admin` meant no operator could mark anything reviewed.
     _user: dict = Depends(require_viewer),
+    tenant: str | None = Depends(get_tenant),
 ):
-    result = await db.execute(select(ViolationEvent).where(ViolationEvent.id == event_id))
+    result = await db.execute(scope(select(ViolationEvent).where(ViolationEvent.id == event_id), ViolationEvent, tenant))
     event = result.scalar_one_or_none()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")

@@ -13,6 +13,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_admin, require_viewer
+from app.auth.tenancy import get_tenant, scope, tenant_for_write
 from app.db.models import EvidenceFile
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
@@ -33,6 +34,7 @@ async def extract_evidence(
     body: EvidenceExtractRequest,
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_admin),
+    tenant: str | None = Depends(get_tenant),
 ):
     evidence_refs: list[str] = []
     timestamps: list[str] = []
@@ -51,7 +53,7 @@ async def extract_evidence(
             if path.suffix not in (".jpg", ".jpeg", ".png", ".mp4", ".json"):
                 continue
             existing = await db.execute(
-                select(EvidenceFile).where(EvidenceFile.local_path == str(path))
+                scope(select(EvidenceFile).where(EvidenceFile.local_path == str(path)), EvidenceFile, tenant)
             )
             if existing.scalar_one_or_none():
                 evidence_refs.append(str(path))
@@ -59,6 +61,7 @@ async def extract_evidence(
             file_type = "video_clip" if path.suffix == ".mp4" else "metadata_json" if path.suffix == ".json" else "snapshot"
             ef = EvidenceFile(
                 event_id=event_uuid,
+                tenant_id=tenant_for_write(tenant),
                 file_type=file_type,
                 local_path=str(path),
                 checksum=hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -85,10 +88,11 @@ async def cleanup_evidence(
     body: EvidenceCleanupRequest,
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_admin),
+    tenant: str | None = Depends(get_tenant),
 ):
     cutoff = datetime.fromisoformat(body.before)
     result = await db.execute(
-        select(EvidenceFile).where(EvidenceFile.created_at < cutoff)
+        scope(select(EvidenceFile).where(EvidenceFile.created_at < cutoff), EvidenceFile, tenant)
     )
     files = result.scalars().all()
     count = len(files)
@@ -112,8 +116,9 @@ async def list_evidence(
     limit: int = Query(default=50, le=200),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_viewer),
+    tenant: str | None = Depends(get_tenant),
 ):
-    query = select(EvidenceFile).order_by(desc(EvidenceFile.created_at)).limit(limit)
+    query = scope(select(EvidenceFile).order_by(desc(EvidenceFile.created_at)).limit(limit), EvidenceFile, tenant)
     if event_id:
         query = query.where(EvidenceFile.event_id == event_id)
     result = await db.execute(query)
@@ -130,6 +135,7 @@ async def list_evidence(
 async def list_evidence_files(
     limit: int = Query(default=100, le=500),
     _user: dict = Depends(require_viewer),
+    tenant: str | None = Depends(get_tenant),
 ):
     """Scan evidence dir for JSON sidecar files produced by pipeline evidence_writer.
 
@@ -149,7 +155,7 @@ async def list_evidence_files(
     name_to_uuid: dict[str, str] = {}
     try:
         async with async_session() as session:
-            result = await session.execute(select(Camera.id, Camera.name))
+            result = await session.execute(scope(select(Camera.id, Camera.name), Camera, tenant))
             for row in result.all():
                 name_to_uuid[row.name] = str(row.id)
         print(f"[evidence/files] name_to_uuid={name_to_uuid}", file=_sys.stderr, flush=True)

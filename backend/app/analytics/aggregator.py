@@ -7,6 +7,7 @@ import redis.asyncio as redis
 from sqlalchemy import String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.tenancy import scope
 from app.config.settings import settings
 from app.db.models import ViolationEvent, Camera, AlertSeverity, AlertStatus, Zone
 
@@ -31,12 +32,18 @@ async def _redis_int(key: str) -> int | None:
         return None
 
 
-async def get_summary(db: AsyncSession) -> dict:
-    """Overall analytics summary. Redis first, DB fallback."""
+async def get_summary(db: AsyncSession, tenant: str | None = None) -> dict:
+    """Overall analytics summary. Redis first, DB fallback.
+
+    The Redis cache is NOT tenant-aware, so a scoped tenant always goes to the
+    tenant-filtered DB path. A tenantless owner may use the global Redis cache.
+    """
     r = _get_redis()
 
-    # Try Redis
+    # Try Redis (owner/global only -- the cache has no per-tenant keys).
     try:
+        if tenant is not None:
+            raise RuntimeError("tenant-scoped: skip global redis cache")
         pipe = r.pipeline()
         pipe.get("analytics:total")
         pipe.get("analytics:events_today")
@@ -91,54 +98,54 @@ async def get_summary(db: AsyncSession) -> dict:
         logger.debug("Redis unavailable, falling back to DB", exc_info=True)
 
     # DB fallback (original implementation)
-    return await _get_summary_from_db(db)
+    return await _get_summary_from_db(db, tenant)
 
 
-async def _get_summary_from_db(db: AsyncSession) -> dict:
+async def _get_summary_from_db(db: AsyncSession, tenant: str | None = None) -> dict:
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_ago = now - timedelta(days=7)
 
-    total = await db.scalar(select(func.count(ViolationEvent.id)))
+    total = await db.scalar(scope(select(func.count(ViolationEvent.id)), ViolationEvent, tenant))
     today = await db.scalar(
-        select(func.count(ViolationEvent.id)).where(ViolationEvent.timestamp >= today_start)
+        scope(select(func.count(ViolationEvent.id)).where(ViolationEvent.timestamp >= today_start), ViolationEvent, tenant)
     )
     this_week = await db.scalar(
-        select(func.count(ViolationEvent.id)).where(ViolationEvent.timestamp >= week_ago)
+        scope(select(func.count(ViolationEvent.id)).where(ViolationEvent.timestamp >= week_ago), ViolationEvent, tenant)
     )
     cameras_online = await db.scalar(
-        select(func.count(Camera.id)).where(Camera.status == "online")
+        scope(select(func.count(Camera.id)).where(Camera.status == "online"), Camera, tenant)
     )
-    cameras_total = await db.scalar(select(func.count(Camera.id)))
+    cameras_total = await db.scalar(scope(select(func.count(Camera.id)), Camera, tenant))
     critical_today = await db.scalar(
-        select(func.count(ViolationEvent.id)).where(
+        scope(select(func.count(ViolationEvent.id)).where(
             ViolationEvent.timestamp >= today_start,
             ViolationEvent.severity == AlertSeverity.critical,
-        )
+        ), ViolationEvent, tenant)
     )
     resolved = await db.scalar(
-        select(func.count(ViolationEvent.id)).where(ViolationEvent.status == AlertStatus.resolved)
+        scope(select(func.count(ViolationEvent.id)).where(ViolationEvent.status == AlertStatus.resolved), ViolationEvent, tenant)
     )
     pending = await db.scalar(
-        select(func.count(ViolationEvent.id)).where(
+        scope(select(func.count(ViolationEvent.id)).where(
             ViolationEvent.status.in_([AlertStatus.active, AlertStatus.acknowledged])
-        )
+        ), ViolationEvent, tenant)
     )
 
     repeat_offenders_subq = (
-        select(ViolationEvent.person_id)
-        .where(ViolationEvent.person_id.is_not(None))
+        scope(select(ViolationEvent.person_id)
+        .where(ViolationEvent.person_id.is_not(None)), ViolationEvent, tenant)
         .group_by(ViolationEvent.person_id)
         .having(func.count(ViolationEvent.id) > 1)
     ).subquery()
     repeat_offenders = await db.scalar(select(func.count()).select_from(repeat_offenders_subq))
 
     avg_response_seconds = await db.scalar(
-        select(
+        scope(select(
             func.avg(
                 func.extract("epoch", ViolationEvent.acknowledged_at - ViolationEvent.timestamp)
             )
-        ).where(ViolationEvent.acknowledged_at.is_not(None))
+        ).where(ViolationEvent.acknowledged_at.is_not(None)), ViolationEvent, tenant)
     )
     avg_response_minutes = round(avg_response_seconds / 60, 1) if avg_response_seconds is not None else None
 
@@ -156,9 +163,11 @@ async def _get_summary_from_db(db: AsyncSession) -> dict:
     }
 
 
-async def get_daily_trend(db: AsyncSession, days: int = 7) -> list[dict]:
-    """Daily event counts — Redis first, DB fallback."""
+async def get_daily_trend(db: AsyncSession, days: int = 7, tenant: str | None = None) -> list[dict]:
+    """Daily event counts — Redis first (global only), DB fallback."""
     try:
+        if tenant is not None:
+            raise RuntimeError("tenant-scoped: skip global redis cache")
         r = _get_redis()
         now = datetime.now(timezone.utc)
         results = []
@@ -176,20 +185,22 @@ async def get_daily_trend(db: AsyncSession, days: int = 7) -> list[dict]:
     # DB fallback
     since = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
-        select(
+        scope(select(
             func.date_trunc("day", ViolationEvent.timestamp).label("day"),
             func.count(ViolationEvent.id).label("count"),
         )
-        .where(ViolationEvent.timestamp >= since)
+        .where(ViolationEvent.timestamp >= since), ViolationEvent, tenant)
         .group_by("day")
         .order_by("day")
     )
     return [{"date": row.day.date().isoformat(), "count": row.count} for row in result]
 
 
-async def get_hourly_stats(db: AsyncSession, hours: int = 24) -> list[dict]:
-    """Hourly event counts — Redis first, DB fallback."""
+async def get_hourly_stats(db: AsyncSession, hours: int = 24, tenant: str | None = None) -> list[dict]:
+    """Hourly event counts — Redis first (global only), DB fallback."""
     try:
+        if tenant is not None:
+            raise RuntimeError("tenant-scoped: skip global redis cache")
         r = _get_redis()
         now = datetime.now(timezone.utc)
         results = []
@@ -207,20 +218,22 @@ async def get_hourly_stats(db: AsyncSession, hours: int = 24) -> list[dict]:
     # DB fallback
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     result = await db.execute(
-        select(
+        scope(select(
             func.date_trunc("hour", ViolationEvent.timestamp).label("hour"),
             func.count(ViolationEvent.id).label("count"),
         )
-        .where(ViolationEvent.timestamp >= since)
+        .where(ViolationEvent.timestamp >= since), ViolationEvent, tenant)
         .group_by("hour")
         .order_by("hour")
     )
     return [{"hour": row.hour.isoformat(), "count": row.count} for row in result]
 
 
-async def get_by_zone(db: AsyncSession) -> list[dict]:
-    """Zone event counts — Redis first, DB fallback."""
+async def get_by_zone(db: AsyncSession, tenant: str | None = None) -> list[dict]:
+    """Zone event counts — Redis first (global only), DB fallback."""
     try:
+        if tenant is not None:
+            raise RuntimeError("tenant-scoped: skip global redis cache")
         r = _get_redis()
         zones = await r.zrevrangebyscore("analytics:zones", "+inf", "-inf", withscores=True)
         if zones:
@@ -230,28 +243,28 @@ async def get_by_zone(db: AsyncSession) -> list[dict]:
 
     # DB fallback
     result = await db.execute(
-        select(
+        scope(select(
             Zone.name.label("zone"),
             func.count(ViolationEvent.id).label("event_count"),
         )
         .join(Camera, ViolationEvent.camera_id == Camera.id)
-        .join(Zone, Camera.zone_id == Zone.id)
+        .join(Zone, Camera.zone_id == Zone.id), ViolationEvent, tenant)
         .group_by(Zone.id, Zone.name)
         .order_by(func.count(ViolationEvent.id).desc())
     )
     return [{"zone": row.zone, "event_count": row.event_count} for row in result]
 
 
-async def get_daily_by_category(db: AsyncSession, days: int = 7) -> dict:
+async def get_daily_by_category(db: AsyncSession, days: int = 7, tenant: str | None = None) -> dict:
     """Daily event counts broken down by category."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
-        select(
+        scope(select(
             func.date_trunc("day", ViolationEvent.timestamp).label("day"),
             func.coalesce(ViolationEvent.category, ViolationEvent.event_type.cast(String)).label("cat"),
             func.count(ViolationEvent.id).label("count"),
         )
-        .where(ViolationEvent.timestamp >= since)
+        .where(ViolationEvent.timestamp >= since), ViolationEvent, tenant)
         .group_by("day", "cat")
         .order_by("day")
     )
@@ -274,16 +287,16 @@ async def get_daily_by_category(db: AsyncSession, days: int = 7) -> dict:
     return {"categories": cats, "data": data}
 
 
-async def get_heatmap(db: AsyncSession, days: int = 7) -> dict:
+async def get_heatmap(db: AsyncSession, days: int = 7, tenant: str | None = None) -> dict:
     """Hour-of-day × category heatmap for the last N days."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
-        select(
+        scope(select(
             func.extract("hour", ViolationEvent.timestamp).label("hour"),
             func.coalesce(ViolationEvent.category, ViolationEvent.event_type.cast(String)).label("cat"),
             func.count(ViolationEvent.id).label("count"),
         )
-        .where(ViolationEvent.timestamp >= since)
+        .where(ViolationEvent.timestamp >= since), ViolationEvent, tenant)
         .group_by("hour", "cat")
     )
     categories: set[str] = set()
@@ -304,17 +317,17 @@ async def get_heatmap(db: AsyncSession, days: int = 7) -> dict:
     return {"categories": cats, "data": data}
 
 
-async def get_by_camera(db: AsyncSession) -> list[dict]:
+async def get_by_camera(db: AsyncSession, tenant: str | None = None) -> list[dict]:
     """Event counts by camera — always DB (not high-frequency enough to cache)."""
     result = await db.execute(
-        select(
+        scope(select(
             Camera.id,
             Camera.name,
             Zone.name.label("zone"),
             func.count(ViolationEvent.id).label("event_count"),
         )
         .join(Camera, ViolationEvent.camera_id == Camera.id)
-        .join(Zone, Camera.zone_id == Zone.id)
+        .join(Zone, Camera.zone_id == Zone.id), ViolationEvent, tenant)
         .group_by(Camera.id, Camera.name, Zone.name)
         .order_by(func.count(ViolationEvent.id).desc())
     )

@@ -6,6 +6,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_viewer, require_admin
+from app.auth.tenancy import get_tenant, scope
 from app.db.models import PlateRead, ViolationEvent, TrackSession
 
 router = APIRouter(prefix="/lpr", tags=["lpr"])
@@ -22,6 +23,7 @@ async def analyze_lpr(
     body: LPRAnalyzeRequest,
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_admin),
+    tenant: str | None = Depends(get_tenant),
 ):
     if not body.evidence_refs:
         return {"plates": []}
@@ -30,20 +32,20 @@ async def analyze_lpr(
     try:
         event_uuid = uuid.UUID(body.event_id)
         evt_result = await db.execute(
-            select(ViolationEvent).where(ViolationEvent.id == event_uuid)
+            scope(select(ViolationEvent).where(ViolationEvent.id == event_uuid), ViolationEvent, tenant)
         )
         event = evt_result.scalar_one_or_none()
         if event and event.track_id:
             ts_result = await db.execute(
-                select(TrackSession).where(
+                scope(select(TrackSession).where(
                     TrackSession.camera_id == event.camera_id,
                     TrackSession.track_id == event.track_id,
-                )
+                ), TrackSession, tenant)
             )
             track = ts_result.scalar_one_or_none()
             if track:
                 plate_result = await db.execute(
-                    select(PlateRead).where(PlateRead.track_session_id == track.id)
+                    scope(select(PlateRead).where(PlateRead.track_session_id == track.id), PlateRead, tenant)
                 )
                 for p in plate_result.scalars().all():
                     plates.append({
@@ -64,8 +66,9 @@ async def list_plates(
     limit: int = Query(default=50, le=200),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_viewer),
+    tenant: str | None = Depends(get_tenant),
 ):
-    query = select(PlateRead).order_by(desc(PlateRead.timestamp)).limit(limit)
+    query = scope(select(PlateRead).order_by(desc(PlateRead.timestamp)).limit(limit), PlateRead, tenant)
     if camera_id:
         query = query.where(PlateRead.camera_id == camera_id)
     if plate_number:

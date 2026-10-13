@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.db.models import Camera
 from app.auth.middleware import require_viewer, require_admin
+from app.auth.tenancy import get_tenant, scope
 from app.schemas.roi import ROIPolygonCreate, CameraROIResponse, ROIPolygonResponse, ROIPoint, compute_bounding_rect
 
 router = APIRouter(prefix="/cameras", tags=["roi"])
@@ -29,8 +30,8 @@ def _build_roi_response(camera_id: str, raw_polygons: list[dict]) -> CameraROIRe
 
 
 @router.get("/{camera_id}/roi", response_model=CameraROIResponse)
-async def get_roi(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer)):
-    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+async def get_roi(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
+    result = await db.execute(scope(select(Camera).where(Camera.id == camera_id), Camera, tenant))
     camera = result.scalar_one_or_none()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -44,8 +45,9 @@ async def replace_roi(
     polygons: list[ROIPolygonCreate],
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_admin),
+    tenant: str | None = Depends(get_tenant),
 ):
-    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    result = await db.execute(scope(select(Camera).where(Camera.id == camera_id), Camera, tenant))
     camera = result.scalar_one_or_none()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -56,8 +58,8 @@ async def replace_roi(
 
 
 @router.delete("/{camera_id}/roi", status_code=204)
-async def clear_roi(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_admin)):
-    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+async def clear_roi(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_admin), tenant: str | None = Depends(get_tenant)):
+    result = await db.execute(scope(select(Camera).where(Camera.id == camera_id), Camera, tenant))
     camera = result.scalar_one_or_none()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")

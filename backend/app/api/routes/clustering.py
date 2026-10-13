@@ -8,6 +8,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_admin
+from app.auth.tenancy import get_tenant, scope
 from app.db.models import ViolationEvent
 
 router = APIRouter(prefix="/clustering", tags=["clustering"])
@@ -25,6 +26,7 @@ async def analyze_clusters(
     body: ClusterAnalyzeRequest,
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_admin),
+    tenant: str | None = Depends(get_tenant),
 ):
     # ponytail: temporal proximity only; CLIP+Qdrant when ReID service lands
     match_groups = []
@@ -36,19 +38,19 @@ async def analyze_clusters(
     try:
         event_uuid = uuid.UUID(body.event_id)
         result = await db.execute(
-            select(ViolationEvent).where(ViolationEvent.id == event_uuid)
+            scope(select(ViolationEvent).where(ViolationEvent.id == event_uuid), ViolationEvent, tenant)
         )
         current = result.scalar_one_or_none()
         if current:
             window_start = current.timestamp - timedelta(hours=24)
             similar = await db.execute(
-                select(ViolationEvent).where(
+                scope(select(ViolationEvent).where(
                     and_(
                         ViolationEvent.camera_id == current.camera_id,
                         ViolationEvent.timestamp >= window_start,
                         ViolationEvent.id != event_uuid,
                     )
-                ).limit(20)
+                ).limit(20), ViolationEvent, tenant)
             )
             rows = similar.scalars().all()
             if rows:

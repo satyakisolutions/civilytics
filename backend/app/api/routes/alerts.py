@@ -4,6 +4,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.auth.middleware import require_viewer, require_admin
+from app.auth.tenancy import get_tenant, scope
 from app.db.models import Alert, AlertStatus
 from app.schemas.alert import AlertResponse, AlertAcknowledge
 
@@ -17,8 +18,9 @@ async def list_alerts(
     limit: int = Query(default=50, le=200),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(require_viewer),
+    tenant: str | None = Depends(get_tenant),
 ):
-    stmt = select(Alert).order_by(Alert.timestamp.desc()).limit(limit)
+    stmt = scope(select(Alert).order_by(Alert.timestamp.desc()).limit(limit), Alert, tenant)
     if camera_id is not None:
         stmt = stmt.where(Alert.camera_id == camera_id)
     if status is not None:
@@ -36,8 +38,9 @@ async def acknowledge_alert(
     # Gating it on `admin` left a viewer able to watch their queue fill but
     # not clear it. Bulk POST /clear stays admin -- that one is destructive.
     _user: dict = Depends(require_viewer),
+    tenant: str | None = Depends(get_tenant),
 ):
-    result = await db.execute(select(Alert).where(Alert.id == alert_id))
+    result = await db.execute(scope(select(Alert).where(Alert.id == alert_id), Alert, tenant))
     alert = result.scalar_one_or_none()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -55,10 +58,12 @@ async def clear_all_alerts(
     # `require_viewer` while acknowledging a SINGLE alert required `admin` --
     # exactly backwards. Destructive bulk action stays admin-only.
     _user: dict = Depends(require_admin),
+    tenant: str | None = Depends(get_tenant),
 ):
-    """Resolve all active alerts in one bulk UPDATE."""
+    """Resolve all active alerts in one bulk UPDATE (caller's tenant only;
+    the tenantless owner clears across tenants)."""
     result = await db.execute(
-        update(Alert).where(Alert.status == "active").values(status="resolved")
+        scope(update(Alert).where(Alert.status == "active"), Alert, tenant).values(status="resolved")
     )
     await db.commit()
     return {"cleared": result.rowcount}
