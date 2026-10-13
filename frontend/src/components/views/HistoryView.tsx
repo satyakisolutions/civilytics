@@ -23,6 +23,7 @@ import {
 import { cn } from '@/lib/utils';
 import { CV_COLORS } from '@/lib/cv-colors';
 import { API_BASE } from '@/lib/api-base';
+import { logUiEvent } from '@/lib/client-log-capture';
 import { useCameras } from '@/hooks/useCameras';
 
 type SeverityKey = 'critical' | 'warning' | 'info';
@@ -60,6 +61,7 @@ export function HistoryView() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const openEvent = (id: string) => { setSelectedId(id); logUiEvent('event.open', { id }); };
   const { cameras } = useCameras();
 
   const zones = useMemo(() => {
@@ -226,7 +228,7 @@ export function HistoryView() {
                     </thead>
                     <tbody>
                       {paged.map(ev => (
-                        <tr key={ev.id} onClick={() => setSelectedId(ev.id)} className={cn(
+                        <tr key={ev.id} onClick={() => openEvent(ev.id)} className={cn(
                           'border-b border-cv-border last:border-b-0 hover:bg-white/[0.02] transition-colors group cursor-pointer',
                           selectedId === ev.id && 'bg-white/[0.03] border-l-[3px] border-l-cv-cyan'
                         )}>
@@ -277,7 +279,7 @@ export function HistoryView() {
                 {/* Mobile Cards */}
                 <div className="sm:hidden divide-y divide-cv-border">
                   {paged.map(ev => (
-                    <div key={ev.id} onClick={() => setSelectedId(ev.id)} className={cn('p-4 space-y-2 cursor-pointer', selectedId === ev.id && 'bg-white/[0.03] border-l-[3px] border-l-cv-cyan')}>
+                    <div key={ev.id} onClick={() => openEvent(ev.id)} className={cn('p-4 space-y-2 cursor-pointer', selectedId === ev.id && 'bg-white/[0.03] border-l-[3px] border-l-cv-cyan')}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <SeverityIcon severity={ev.severity} />

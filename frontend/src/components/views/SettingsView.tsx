@@ -7,6 +7,7 @@ import {
 import { CV_COLORS } from '@/lib/cv-colors';
 import { cn } from '@/lib/utils';
 import { API_BASE } from '@/lib/api-base';
+import { logUiEvent } from '@/lib/client-log-capture';
 import { useMonitoring } from '@/context/MonitoringContext';
 import { OperationsView } from './OperationsView';
 
@@ -174,6 +175,7 @@ function GeneralSection({ onSave }: { onSave: () => void }) {
         body: JSON.stringify({ value: { workspace_name: ws, org_name: org, timezone: tz, date_format: df, language: lang } }),
       });
       setDirty(false);
+      logUiEvent('settings.saved', { section: 'general' });
       onSave();
     } finally { setSaving(false); }
   };
@@ -334,6 +336,7 @@ function CamerasSection({ onSave }: { onSave: () => void }) {
         body: JSON.stringify({ value: { person_dump: personDump, vehicle_dump: vehicleDump, person_match: personMatch, vehicle_plate: vehiclePlate, auto_mark: autoMark, req_confirm: reqConfirm, escalate } }),
       });
       setDirty(false);
+      logUiEvent('settings.saved', { section: 'cameras' });
       onSave();
     } finally { setSaving(false); }
   };
@@ -505,6 +508,7 @@ function EvidenceSection({ onSave }: { onSave: () => void }) {
         body: JSON.stringify({ value: { metadata_retention: meta, frame_retention: frames, clip_retention: clips, storage_used_gb: storageGb } }),
       });
       setDirty(false);
+      logUiEvent('settings.saved', { section: 'evidence' });
       onSave();
     } finally { setSaving(false); }
   };

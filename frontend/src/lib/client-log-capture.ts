@@ -22,6 +22,8 @@ export interface LogRecord {
   ts: number;
   stack?: string;
   url?: string;
+  /** Structured tags (e.g. UI event summaries carry {kind:"event", event}). */
+  meta?: Record<string, unknown>;
 }
 
 export interface Envelope {
@@ -134,6 +136,17 @@ export class ClientLogCapture {
       return;
     }
     this.buffer.push({ level, message, ts: Date.now(), stack, url });
+    if (this.buffer.length >= FLUSH_SIZE) void this.flush();
+  }
+
+  /** Add a record carrying structured `meta`; same dormant gate + caps as push(). */
+  pushMeta(level: Level, message: string, meta: Record<string, unknown>): void {
+    if (!this.enabled) return;
+    if (this.buffer.length >= BUFFER_CAP) {
+      this.dropped++;
+      return;
+    }
+    this.buffer.push({ level, message, ts: Date.now(), meta });
     if (this.buffer.length >= FLUSH_SIZE) void this.flush();
   }
 
@@ -287,6 +300,36 @@ export function installClientLogCapture(opts: CaptureOptions = {}): ClientLogCap
 
   cap.start();
   return cap;
+}
+
+/** Max chars of the JSON-stringified detail appended to an event message. */
+export const MAX_EVENT_DETAIL = 1000;
+
+/**
+ * Log a structured UI "event summary" at a key user action.
+ *
+ * Always console.info's `[event] <event> <compact-json-of-detail>` so it shows
+ * in devtools, and ALSO pushes an info-level record (meta.kind="event") into the
+ * capture buffer so summaries are captured even though console.info isn't patched
+ * by default. No-op-safe: if the shim isn't installed, or capture is dormant, the
+ * buffer push is simply skipped -- console.info still happens. Never throws.
+ */
+export function logUiEvent(event: string, detail?: Record<string, unknown>): void {
+  let detailStr = "";
+  if (detail !== undefined) {
+    detailStr = " " + safeStringify(detail).slice(0, MAX_EVENT_DETAIL);
+  }
+  const message = `[event] ${event}${detailStr}`;
+  try {
+    console.info(message);
+  } catch {
+    /* fail silent */
+  }
+  try {
+    installed?.pushMeta("info", message, { kind: "event", event });
+  } catch {
+    /* fail silent */
+  }
 }
 
 function safeStringify(v: unknown): string {

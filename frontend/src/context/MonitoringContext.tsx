@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, createContext, useCo
 import { useNavigate, useLocation } from 'react-router-dom';
 import { GridLayout, Alert } from '@/types/monitoring';
 import { API_BASE } from '@/lib/api-base';
+import { logUiEvent } from '@/lib/client-log-capture';
 
 type ViewId = 'monitoring' | 'analytics' | 'history' | 'cameras' | 'settings' | 'map' | 'timeline' | 'billing';
 
@@ -202,6 +203,7 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
   const setCurrentView = useCallback((view: ViewId) => {
     setCurrentViewRaw(view);
     navigate(viewToPath(view));
+    logUiEvent('view.change', { view });
   }, [navigate]);
 
   const acknowledgeAlert = useCallback(async (id: string) => {
@@ -221,10 +223,12 @@ export function MonitoringProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ status: 'acknowledged' }),
       });
     } catch { /* best effort */ }
+    logUiEvent('alert.ack', { id });
   }, []);
 
   const clearAlerts = useCallback(() => {
     clearedAtRef.current = new Date();
+    logUiEvent('alert.clear');
     // Also reset the dedup set + cooldown so subsequent NEW alerts still
     // beep/blink/push. Without this, every alert id seen before clear
     // stays in `knownAlertIds` and the notification path early-returns.

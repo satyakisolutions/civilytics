@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { API_BASE } from '@/lib/api-base';
 import { AUTH_FAILED_EVENT } from '@/lib/api-client';
+import { logUiEvent } from '@/lib/client-log-capture';
 
 export type Role = 'owner' | 'admin' | 'viewer';
 
@@ -92,7 +93,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const detail = await resp.json().catch(() => null);
       throw new Error(detail?.detail ?? 'Sign-in failed');
     }
-    setUser(await resp.json());
+    const u = await resp.json();
+    setUser(u);
+    logUiEvent('auth.login', { username: u?.username });
   }, []);
 
   const logout = useCallback(async () => {
@@ -101,6 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       // Clear locally regardless — the cookies are gone either way.
       setUser(null);
+      logUiEvent('auth.logout');
     }
   }, []);
 

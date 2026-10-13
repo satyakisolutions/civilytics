@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Camera, CameraDetectionConfig } from '@/types/monitoring';
 import { useToast } from '@/hooks/use-toast';
 import { API_BASE } from '@/lib/api-base';
+import { logUiEvent } from '@/lib/client-log-capture';
 
 type BackendCamera = {
   id: string;
@@ -92,6 +93,7 @@ export function useCameras() {
     }
     const created: BackendCamera = await resp.json();
     toast({ title: 'Camera Added', description: `${created.name} has been added` });
+    logUiEvent('camera.created', { id: created.id, name: created.name });
     await fetchCameras();
     return mapCamera(created);
   };
@@ -119,6 +121,7 @@ export function useCameras() {
       throw new Error(`${resp.status} ${resp.statusText}`);
     }
     toast({ title: 'Camera Updated', description: 'Camera settings saved' });
+    logUiEvent('camera.updated', { id, fields: Object.keys(body) });
     await fetchCameras();
   };
 
@@ -129,6 +132,7 @@ export function useCameras() {
       throw new Error(`${resp.status} ${resp.statusText}`);
     }
     toast({ title: 'Camera Removed', description: 'Camera removed from the system' });
+    logUiEvent('camera.deleted', { id });
     await fetchCameras();
   };
 

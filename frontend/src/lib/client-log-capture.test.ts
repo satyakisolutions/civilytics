@@ -1,11 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   buildEnvelope,
   redact,
   mapConsoleLevel,
   ClientLogCapture,
+  installClientLogCapture,
+  logUiEvent,
   MAX_RECORDS,
   MAX_MESSAGE,
+  MAX_EVENT_DETAIL,
   type LogRecord,
 } from "./client-log-capture";
 
@@ -111,5 +114,59 @@ describe("dormancy (capture disabled by default)", () => {
   it("flush is a no-op while dormant (no WebSocket/fetch needed)", async () => {
     const cap = new ClientLogCapture();
     await expect(cap.flush()).resolves.toBeUndefined();
+  });
+});
+
+describe("logUiEvent", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("console.info's a [event] message with compact detail JSON", () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
+    logUiEvent("camera.created", { name: "Gate 1" });
+    expect(spy).toHaveBeenCalledWith('[event] camera.created {"name":"Gate 1"}');
+  });
+
+  it("omits the detail segment when none is given", () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
+    logUiEvent("auth.logout");
+    expect(spy).toHaveBeenCalledWith("[event] auth.logout");
+  });
+
+  it("pushes an info record with meta.kind/event when capture is enabled", () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const cap = installClientLogCapture();
+    expect(cap).not.toBeNull();
+    cap!.handleControl({ type: "capture", enabled: true });
+    const before = cap!.bufferLength();
+    logUiEvent("alert.ack", { id: "a1" });
+    expect(cap!.bufferLength()).toBe(before + 1);
+    const rec = (cap as unknown as { buffer: LogRecord[] }).buffer.at(-1)!;
+    expect(rec.level).toBe("info");
+    expect(rec.meta).toEqual({ kind: "event", event: "alert.ack" });
+    expect(rec.message).toBe('[event] alert.ack {"id":"a1"}');
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it("only console.info's (no buffer push) when capture is disabled", () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const cap = installClientLogCapture()!; // same singleton as above
+    cap.handleControl({ type: "capture", enabled: false });
+    const before = cap.bufferLength();
+    logUiEvent("view.change", { view: "map" });
+    expect(cap.bufferLength()).toBe(before); // nothing buffered
+    expect(spy).toHaveBeenCalledWith('[event] view.change {"view":"map"}');
+  });
+
+  it("caps detail length and never throws on circular detail", () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() => logUiEvent("x.circular", circular)).not.toThrow();
+
+    const big = { s: "a".repeat(MAX_EVENT_DETAIL * 2) };
+    logUiEvent("x.big", big);
+    const msg = spy.mock.calls.at(-1)![0] as string;
+    // "[event] x.big " + detail sliced to MAX_EVENT_DETAIL
+    expect(msg.length).toBeLessThanOrEqual("[event] x.big ".length + MAX_EVENT_DETAIL);
   });
 });

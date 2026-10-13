@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import type { ROIPoint, ROIPolygon } from "@/types/monitoring";
 import { API_BASE } from "@/lib/api-base";
 import { toast } from "@/hooks/use-toast";
+import { logUiEvent } from "@/lib/client-log-capture";
 
 interface UseROIEditorOptions {
   cameraId: string;
@@ -34,6 +35,7 @@ export function useROIEditor({ cameraId }: UseROIEditorOptions) {
       if (resp.ok) {
         const data = await resp.json();
         setPolygons(data.polygons || []);
+        logUiEvent("roi.saved", { camera: cameraId, count: newPolygons.length });
       } else {
         // Roll back the optimistic update — an unconfirmed failed save
         // must not leave the UI showing changes that never persisted.
