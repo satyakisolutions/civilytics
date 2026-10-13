@@ -89,3 +89,9 @@ nginx/certs/
 # Local scratch
 commit_history.txt
 activity_logs/
+
+# Built TensorRT engines + their ONNX-hash sidecars live in a Docker volume,
+# never in git. Ignore them in case a build ever writes into the work tree.
+*.engine
+*.onnxsha
+engine_cache/
