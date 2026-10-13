@@ -1,0 +1,9 @@
+# Civilytics E2E suite deps (NOT part of any prod image).
+# Install: pip install --user -r tests/e2e/requirements.txt
+pytest>=8.3.0
+pytest-asyncio>=0.25.0
+httpx>=0.28.0
+aiokafka>=0.12.0          # matches backend/workers (app uses aiokafka)
+websockets>=13.0          # /ws/alerts + /ws/events subprotocol client
+playwright>=1.48.0        # browser tests (ROI canvas, dashboard latency)
+testcontainers>=4.8.0     # non-live mode bring-up (postgres/kafka/redis/keycloak/minio)
