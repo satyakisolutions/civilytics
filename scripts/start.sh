@@ -465,7 +465,7 @@ case "$ENVIRONMENT" in
         WW_SMTP_USER="$(env_get WW_SMTP_USER)" \
         WW_SMTP_PASSWORD="$(env_get WW_SMTP_PASSWORD)" \
             envsubst '${WW_KEYCLOAK_CLIENT_SECRET} ${WW_SMTP_HOST} ${WW_SMTP_PORT} ${WW_SMTP_FROM} ${WW_SMTP_USER} ${WW_SMTP_PASSWORD}' \
-            < keycloak/realm-prod.json > keycloak/prod-import/wastewatch-realm.json
+            < keycloak/realm-prod.json > keycloak/prod-import/civilytics-realm.json
         env_default KEYCLOAK_REALM_IMPORT ./keycloak/prod-import
         c_dim "Keycloak realm written to keycloak/prod-import/ (imported on boot)."
     fi

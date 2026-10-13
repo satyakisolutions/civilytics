@@ -306,7 +306,7 @@ services:
     environment:
       <<: *ww-env
       WW_KEYCLOAK_URL: http://keycloak:8080
-      WW_KEYCLOAK_REALM: ${WW_KEYCLOAK_REALM:-wastewatch}
+      WW_KEYCLOAK_REALM: ${WW_KEYCLOAK_REALM:-civilytics}
       WW_KEYCLOAK_CLIENT_ID: ${WW_KEYCLOAK_CLIENT_ID:-wastewatch-api}
       WW_KEYCLOAK_CLIENT_SECRET: ${WW_KEYCLOAK_CLIENT_SECRET:-dev-client-secret}
       WW_CONDUCTOR_SERVER_URL: http://conductor-server:8080/api
@@ -332,7 +332,12 @@ services:
       - tts_data:/tmp/wastewatch/tts
       - evidence_data:/app/evidence
       - ./backend/models:/app/models:ro
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    # The API must not become ready against an empty Postgres volume.  Keep
+    # the schema upgrade in the container startup path (rather than only in
+    # scripts/start.sh) so `docker compose up` and platform deployments are
+    # safe as well. Alembic upgrades are idempotent when the schema is
+    # already current.
+    command: ["/bin/sh", "-ec", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8080"]
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/api/health').status==200 else 1)\""]
       interval: 15s

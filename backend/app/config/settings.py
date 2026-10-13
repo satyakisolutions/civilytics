@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     # Keycloak
     keycloak_url: str = "http://localhost:8180"
-    keycloak_realm: str = "wastewatch"
+    keycloak_realm: str = "civilytics"
     keycloak_client_id: str = "wastewatch-api"
     keycloak_client_secret: str = ""
     # Cookie-based session for the branded login form (see api/routes/auth.py).
