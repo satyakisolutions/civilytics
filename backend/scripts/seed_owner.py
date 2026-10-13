@@ -44,6 +44,7 @@ import argparse
 import asyncio
 import getpass
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -56,14 +57,59 @@ def _describe(u: dict) -> str:
     return f"{u.get('username')} <{u.get('email') or 'no email'}> (id={u['id']})"
 
 
+def _gen_password() -> str:
+    """A fresh random temporary password. Only its PBKDF2 hash is stored
+    (Keycloak hashes server-side); the plaintext is emailed once and never
+    written to disk or logged unless delivery fails."""
+    return secrets.token_urlsafe(12)
+
+
+def _app_url() -> str:
+    host = os.environ.get("KC_HOSTNAME") or "localhost"
+    return f"https://{host}/"
+
+
+async def _send_welcome(email: str, username: str, temp_password: str) -> bool:
+    """Send the account-ready email via the app SMTP path (delivers reliably,
+    unlike Keycloak's activation mail on this deployment). Returns success."""
+    from app.auth.owner_email import send_owner_welcome
+    try:
+        await asyncio.to_thread(
+            send_owner_welcome,
+            to_email=email, app_url=_app_url(), username=username, temp_password=temp_password,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — report, don't crash seeding
+        print(f"  welcome email send FAILED: {exc}")
+        return False
+
+
+async def _provision(user_id: str, username: str, email: str) -> None:
+    """Give a (new or existing) owner immediate branded-login access + email
+    them the account details."""
+    temp = _gen_password()
+    await kc_admin.set_password(user_id, temp, temporary=False)
+    await kc_admin.clear_required_actions(user_id)
+    sent = await _send_welcome(email, username, temp)
+    # Keycloak's own activation link too, best-effort (often not delivered).
+    try:
+        await kc_admin.send_setup_email(user_id)
+    except Exception:  # noqa: BLE001
+        pass
+    if sent:
+        print(f"owner '{username}' <{email}> ready — account email sent")
+    else:
+        # Mail didn't go — surface the password so the operator isn't locked out.
+        print(f"owner '{username}' <{email}> ready — EMAIL FAILED, temporary password: {temp}")
+
+
 async def _invite(username, email, first_name, last_name, tenant, customer) -> str:
     user_id = await kc_admin.create_user(
         username=username, email=email, first_name=first_name, last_name=last_name,
         invited_by="bootstrap", tenant=tenant, customer=customer,
     )
     await kc_admin.assign_realm_role(user_id, "owner")
-    await kc_admin.send_setup_email(user_id)
-    print(f"invited owner '{username}' <{email}> (id={user_id}) -- activation email sent")
+    await _provision(user_id, username, email)
     return user_id
 
 
@@ -123,8 +169,7 @@ async def run_noninteractive(args) -> int:
     if existing:
         if args.resend:
             target = next((u for u in existing if u.get("username") == args.username), existing[0])
-            await kc_admin.send_setup_email(target["id"])
-            print(f"resent activation email to '{target['username']}'")
+            await _provision(target["id"], target["username"], target.get("email") or args.email)
             return 0
         print(f"owner already exists ({existing[0].get('username')}) -- skipping")
         return 0

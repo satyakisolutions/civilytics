@@ -235,6 +235,28 @@ async def send_setup_email(user_id: str) -> None:
     )
 
 
+async def set_password(user_id: str, password: str, *, temporary: bool = False) -> None:
+    """Set a user's password. temporary=True forces a change at next login
+    (adds an UPDATE_PASSWORD required action, which the Direct Access Grant
+    login cannot satisfy — so for immediate branded-login access pass
+    temporary=False and tell the user to rotate it)."""
+    await _request(
+        "PUT",
+        f"/users/{user_id}/reset-password",
+        json={"type": "password", "value": password, "temporary": temporary},
+    )
+
+
+async def clear_required_actions(user_id: str) -> None:
+    """Mark email verified and drop required actions so the owner can sign in
+    through the branded (Direct Access Grant) login immediately."""
+    await _request(
+        "PUT",
+        f"/users/{user_id}",
+        json={"emailVerified": True, "requiredActions": []},
+    )
+
+
 async def get_user(user_id: str) -> dict:
     resp = await _request("GET", f"/users/{user_id}")
     return resp.json()

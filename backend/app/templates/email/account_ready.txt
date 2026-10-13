@@ -1,0 +1,28 @@
+Civilytics — by Satyaki Solutions
+
+YOUR CIVILYTICS ACCOUNT IS READY
+
+Your owner account has been created successfully. You can now sign in to
+access your Civilytics workspace.
+
+ACCOUNT ACCESS
+--------------
+Application:         __APP_URL__
+Username:            __USERNAME__
+Temporary password:  __TEMP_PASSWORD__
+
+Open Civilytics:
+__APP_URL__
+
+SECURITY
+Your password is temporary. After signing in, go to Account -> Security to
+change it.
+
+ACTIVATION
+An account activation link from Keycloak has also been sent to your email.
+If you cannot find it in your inbox, check your Spam or Promotions folder.
+Email subject: Update Your Account
+
+--
+Civilytics / Satyaki Solutions
+Technology for a better tomorrow.
