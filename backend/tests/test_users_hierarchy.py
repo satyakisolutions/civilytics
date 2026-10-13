@@ -83,6 +83,9 @@ def fake_kc(monkeypatch):
     async def send_setup_email(uid):
         state["emails"].append(uid)
 
+    async def provision_and_email(uid, username, email):
+        state["emails"].append(uid)
+
     async def get_user(uid):
         if uid not in state["users"]:
             raise mod.KeycloakAdminError("User not found", status_code=404)
@@ -105,6 +108,7 @@ def fake_kc(monkeypatch):
         ("delete_user", delete_user),
     ]:
         monkeypatch.setattr(mod.kc_admin, name, fn)
+    monkeypatch.setattr(mod, "_provision_and_email", provision_and_email)
     return state
 
 
@@ -187,7 +191,8 @@ async def test_unknown_role_rejected(fake_kc):
 
 
 async def test_grantable_roles(fake_kc):
-    assert (await mod.grantable_roles(actor=OWNER))["roles"] == ["admin", "viewer"]
+    # Owner grants admin ONLY now (exactly one rank below) -- not viewer.
+    assert (await mod.grantable_roles(actor=OWNER))["roles"] == ["admin"]
     assert (await mod.grantable_roles(actor=ADMIN))["roles"] == ["viewer"]
     assert (await mod.grantable_roles(actor=VIEWER))["roles"] == []
 
@@ -237,9 +242,9 @@ async def test_nobody_manages_their_own_account(fake_kc, actor):
 
 async def test_account_survives_a_failed_setup_email(fake_kc, monkeypatch):
     """SMTP down must not make a created user look like a failed request."""
-    async def boom(uid):
-        raise mod.KeycloakAdminError("mail failed", status_code=502)
-    monkeypatch.setattr(mod.kc_admin, "send_setup_email", boom)
+    async def boom(uid, username, email):
+        raise RuntimeError("mail failed")
+    monkeypatch.setattr(mod, "_provision_and_email", boom)
     out = await mod.create_managed_user(_req("viewer"), actor=ADMIN)
     assert out.username == "newuser"
     assert fake_kc["roles_assigned"] == [("id-newuser", "viewer")]

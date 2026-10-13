@@ -77,10 +77,13 @@ router = APIRouter(prefix="/users", tags=["users"])
 # composites mean an owner's token also carries admin and viewer.
 _HIERARCHY = ("owner", "admin", "viewer")
 
-# Who may create whom. Strictly below the actor's own rank -- an admin is
-# absent from the admin row on purpose.
+# Who may create whom: EXACTLY one rank below the actor, never the same rank
+# or lower-by-more. An owner (superadmin) onboards admins (customers) and
+# nothing else; an admin onboards viewers (operators) within their own tenant.
+# An owner deliberately cannot mint a viewer directly -- a viewer always
+# belongs to an admin's tenant, so the admin creates them.
 _GRANTABLE: dict[str, frozenset[str]] = {
-    "owner": frozenset({"admin", "viewer"}),
+    "owner": frozenset({"admin"}),
     "admin": frozenset({"viewer"}),
     "viewer": frozenset(),
 }
