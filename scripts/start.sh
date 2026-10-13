@@ -291,6 +291,20 @@ case "$ENVIRONMENT" in
         env_set WW_INTERNAL_SERVICE_TOKEN "$(gen_password)"
     fi
 
+    # SMTP — collected before the realm is generated so Keycloak's realm can
+    # send owner/invite activation emails. Without a host the account is still
+    # created, but you must set its password manually (kcadm set-password) or
+    # re-run with SMTP configured and `seed_owner.py --resend`.
+    c_dim "SMTP for activation emails (press Enter to skip; set a password manually instead) ..."
+    ensure_prompted WW_SMTP_HOST "SMTP server host, e.g. smtp.gmail.com (blank to skip email)." 1 1
+    if [ -n "$(env_get WW_SMTP_HOST)" ]; then
+        env_default WW_SMTP_PORT 587
+        ensure_prompted WW_SMTP_USER "SMTP username (often the full email address)." 1 1
+        ensure_prompted WW_SMTP_FROM "From address for outgoing mail, e.g. no-reply@yourdomain." 0 0
+        ensure_prompted WW_SMTP_PASSWORD "SMTP password / app-password." 1 0
+        env_set WW_SMTP_ENABLED true
+    fi
+
     # Generate the prod Keycloak realm from the committed template, with the
     # real client secret substituted in (the template ships a ${…}
     # placeholder, never a real secret). Keycloak --import-realm loads it on
@@ -298,8 +312,15 @@ case "$ENVIRONMENT" in
     # client exist and owner seeding works — no manual realm creation.
     if [ -f keycloak/realm-prod.json ]; then
         mkdir -p keycloak/prod-import
+        # Substitute the client secret and the SMTP settings (so Keycloak's
+        # realm can send the owner/invite activation emails) into the realm.
         WW_KEYCLOAK_CLIENT_SECRET="$(env_get WW_KEYCLOAK_CLIENT_SECRET)" \
-            envsubst '${WW_KEYCLOAK_CLIENT_SECRET}' \
+        WW_SMTP_HOST="$(env_get WW_SMTP_HOST)" \
+        WW_SMTP_PORT="$(env_get WW_SMTP_PORT)" \
+        WW_SMTP_FROM="$(env_get WW_SMTP_FROM)" \
+        WW_SMTP_USER="$(env_get WW_SMTP_USER)" \
+        WW_SMTP_PASSWORD="$(env_get WW_SMTP_PASSWORD)" \
+            envsubst '${WW_KEYCLOAK_CLIENT_SECRET} ${WW_SMTP_HOST} ${WW_SMTP_PORT} ${WW_SMTP_FROM} ${WW_SMTP_USER} ${WW_SMTP_PASSWORD}' \
             < keycloak/realm-prod.json > keycloak/prod-import/wastewatch-realm.json
         env_default KEYCLOAK_REALM_IMPORT ./keycloak/prod-import
         c_dim "Keycloak realm written to keycloak/prod-import/ (imported on boot)."

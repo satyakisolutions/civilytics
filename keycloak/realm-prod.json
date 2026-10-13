@@ -31,13 +31,15 @@
     ]
   },
   "smtpServer": {
-    "host": "mailpit",
-    "port": "1025",
-    "from": "wastewatch@satyaki.co.in",
-    "fromDisplayName": "Civilytics WasteWatch",
-    "ssl": "false",
-    "starttls": "false",
-    "auth": "false"
+    "host": "${WW_SMTP_HOST}",
+    "port": "${WW_SMTP_PORT}",
+    "from": "${WW_SMTP_FROM}",
+    "fromDisplayName": "Civilytics",
+    "auth": "true",
+    "user": "${WW_SMTP_USER}",
+    "password": "${WW_SMTP_PASSWORD}",
+    "starttls": "true",
+    "ssl": "false"
   },
   "clients": [
     {
