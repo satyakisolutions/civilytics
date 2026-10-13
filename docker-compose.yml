@@ -383,7 +383,11 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      # The healer's MCP server on :9100 binds last, after the other ~10
+      # workers initialise (LPR model download, Piper voice load, Kafka
+      # subscriptions) — ~140 s on a cold start. Keep start_period above that
+      # so the container never flashes "unhealthy" before 9100 is listening.
+      start_period: 180s
     logging: *logging
     restart: ${RESTART_POLICY:-unless-stopped}
 
