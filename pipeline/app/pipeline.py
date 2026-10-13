@@ -2771,6 +2771,24 @@ def build_pipeline() -> tuple[Gst.Pipeline, Gst.Element, Gst.Element, Gst.Elemen
 def main() -> None:
     Gst.init(None)
 
+    # Liveness heartbeat on a daemon thread started BEFORE any pipeline build
+    # work. The Docker healthcheck only needs to know the process is alive and
+    # initialising; gating it behind a fully-prerolled GStreamer pipeline meant
+    # a build step or a zero-source preroll left the container "starting"
+    # forever. This thread writes the heartbeat file every 10 s regardless.
+    import threading as _threading
+
+    def _liveness_heartbeat() -> None:
+        from app.heartbeat import write_heartbeat  # noqa: PLC0415
+        while True:
+            try:
+                write_heartbeat(None)
+            except Exception:
+                pass
+            time.sleep(10)
+
+    _threading.Thread(target=_liveness_heartbeat, name="liveness", daemon=True).start()
+
     pipeline, streammux, fakesink, nvdsanalytics, use_native_meta, ww_meta_elem, output_manager, fakesink_capture = build_pipeline()  # noqa: F841
 
     # Per-source JPEG cache populated by the capture probe. Written by
@@ -3061,8 +3079,9 @@ def main() -> None:
     # it's still tracked, but it was never re-registered as an input source.
     try:
         import httpx
+        from app.roi_sync import _service_headers
         api_base = os.environ.get("WW_API_BASE", "http://api:8080")
-        with httpx.Client(timeout=5.0) as client:
+        with httpx.Client(timeout=5.0, headers=_service_headers()) as client:
             resp = client.get(f"{api_base}/api/cameras")
             resp.raise_for_status()
             for cam in resp.json() or []:
@@ -3142,6 +3161,21 @@ def main() -> None:
 
     # Periodic health check — runs every 10 seconds
     def health_check_cb() -> bool:
+        # Liveness FIRST, before any housekeeping that could stall (command
+        # drain, connection polling, FSM pruning). The Docker healthcheck only
+        # needs to know the loop is alive; gating it behind that work meant a
+        # pipeline with zero sources never wrote a heartbeat and never went
+        # healthy.
+        try:
+            from app.heartbeat import write_heartbeat  # noqa: PLC0415
+            write_heartbeat(
+                ctx.get("redis_client"),
+                active_sources=len(source_manager.active_sources),
+                fps=float(ctx.get("current_fps") or 0.0),
+            )
+        except Exception:
+            logger.debug("Heartbeat write failed", exc_info=True)
+
         # Drain and apply any queued commands from the backend (add/remove/
         # update camera, clear violation, etc) before the rest of this
         # tick's housekeeping, so a just-added camera is picked up promptly.

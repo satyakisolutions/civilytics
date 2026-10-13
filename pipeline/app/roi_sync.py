@@ -28,6 +28,14 @@ import time
 from pathlib import Path
 from typing import Optional
 
+
+def _service_headers() -> dict:
+    """Internal service-token header so the pipeline can call viewer-gated
+    backend endpoints (e.g. GET /api/cameras) without an interactive login.
+    Validated by the backend against WW_INTERNAL_SERVICE_TOKEN."""
+    tok = os.environ.get("WW_INTERNAL_SERVICE_TOKEN", "")
+    return {"X-Service-Token": tok} if tok else {}
+
 import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst  # noqa: E402
@@ -112,7 +120,7 @@ class ROISyncer:
             self._stop.wait(self._interval_s)
 
     def _sync_once(self) -> None:
-        with httpx.Client(timeout=self._timeout_s) as client:
+        with httpx.Client(timeout=self._timeout_s, headers=_service_headers()) as client:
             try:
                 resp = client.get(f"{self._api_base}/api/cameras")
                 resp.raise_for_status()

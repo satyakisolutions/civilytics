@@ -72,6 +72,14 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
 
+    # Migrations 001/003 created an earlier alerts + alert_deliveries pair.
+    # The workflow-ops feature supersedes them with the richer schema below
+    # (rule_id, workspace_id, dedupe_key, ack/resolve columns) that the API
+    # and models actually use. Drop the legacy pair first (empty at this
+    # point) so these CREATEs don't collide. CASCADE clears the old FK.
+    op.execute("DROP TABLE IF EXISTS alert_deliveries CASCADE")
+    op.execute("DROP TABLE IF EXISTS alerts CASCADE")
+
     op.create_table(
         "alerts",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
