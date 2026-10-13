@@ -18,6 +18,7 @@ import { useCameras } from '@/hooks/useCameras';
 import { Camera, CameraStatus } from '@/types/monitoring';
 import { API_BASE } from '@/lib/api-base';
 import { AddCameraDialog } from '@/components/camera/AddCameraDialog';
+import { parseGoogleMapsLatLng, isGoogleMapsShortLink } from '@/lib/google-maps-link';
 
 type HealthLabel = 'Online' | 'Warning' | 'Offline';
 
@@ -295,6 +296,8 @@ function EditCameraDialog({ camera, onClose, onSave }: { camera: Camera; onClose
   const [mapQuery, setMapQuery] = useState('');
   const [mapResults, setMapResults] = useState<{ display_name: string; lat: string; lon: string }[]>([]);
   const [mapSearching, setMapSearching] = useState(false);
+  const [gmapLink, setGmapLink] = useState('');
+  const [gmapError, setGmapError] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -360,6 +363,20 @@ function EditCameraDialog({ camera, onClose, onSave }: { camera: Camera; onClose
     placeMarker(rLat, rLng);
   };
 
+  const useGmapLink = () => {
+    if (isGoogleMapsShortLink(gmapLink)) {
+      setGmapError("Short links can't be read — open it, then paste the full URL from the address bar.");
+      return;
+    }
+    const coords = parseGoogleMapsLatLng(gmapLink);
+    if (!coords) { setGmapError("Couldn't find coordinates in that link."); return; }
+    const rLat = parseFloat(coords.lat.toFixed(6));
+    const rLng = parseFloat(coords.lng.toFixed(6));
+    setGmapError('');
+    setGpsLat(String(rLat)); setGpsLng(String(rLng));
+    placeMarker(rLat, rLng);
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -401,6 +418,11 @@ function EditCameraDialog({ camera, onClose, onSave }: { camera: Camera; onClose
                 </div>
               )}
             </div>
+            <div className="flex gap-2 mt-2">
+              <input placeholder="Paste Google Maps link" value={gmapLink} onChange={e => { setGmapLink(e.target.value); setGmapError(''); }} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); useGmapLink(); } }} className="flex-1 h-9 px-3 rounded-md text-sm bg-cv-bg border border-cv-border text-cv-fg focus:outline-none focus:border-cv-cyan" />
+              <button type="button" onClick={useGmapLink} className="px-3 py-1.5 rounded-md text-sm text-cv-fg2 border border-cv-border hover:bg-white/5 whitespace-nowrap">Use link</button>
+            </div>
+            {gmapError && <p className="text-[11px] text-[#FF6B6B] mt-1">{gmapError}</p>}
             <div ref={mapRef} className="mt-2" style={{ width: '100%', height: 180, borderRadius: 6, border: `1px solid ${CV_COLORS.border}`, cursor: 'crosshair' }} />
             {gpsLat && gpsLng && <p className="text-[11px] text-cv-muted mt-1">{gpsLat}, {gpsLng}</p>}
           </div>

@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { CameraCreateInput } from '@/hooks/useCameras';
 import { useToast } from '@/hooks/use-toast';
+import { parseGoogleMapsLatLng, isGoogleMapsShortLink } from '@/lib/google-maps-link';
 
 // ---------------------------------------------------------------------------
 // Lightweight map picker — click on the map to set GPS coordinates.
@@ -30,7 +31,25 @@ function MapPicker({ lat, lng, onSelect, onAddress }: {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<{ display_name: string; lat: string; lon: string }[]>([]);
   const [searching, setSearching] = useState(false);
+  const [gmapLink, setGmapLink] = useState('');
+  const [gmapError, setGmapError] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const useGmapLink = () => {
+    if (isGoogleMapsShortLink(gmapLink)) {
+      setGmapError("Short links can't be read — open it, then paste the full URL from the address bar.");
+      return;
+    }
+    const coords = parseGoogleMapsLatLng(gmapLink);
+    if (!coords) { setGmapError("Couldn't find coordinates in that link."); return; }
+    const rLat = parseFloat(coords.lat.toFixed(6));
+    const rLng = parseFloat(coords.lng.toFixed(6));
+    setGmapError('');
+    onSelect(rLat, rLng);
+    if (mapInstanceRef.current && (window as any).L) {
+      placeMarker(mapInstanceRef.current, (window as any).L, rLat, rLng);
+    }
+  };
 
   const placeMarker = useCallback((map: any, L: any, newLat: number, newLng: number) => {
     if (markerRef.current) {
@@ -141,6 +160,17 @@ function MapPicker({ lat, lng, onSelect, onAddress }: {
           </div>
         )}
       </div>
+      <div className="flex gap-2">
+        <Input
+          placeholder="Paste Google Maps link"
+          value={gmapLink}
+          onChange={e => { setGmapLink(e.target.value); setGmapError(''); }}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); useGmapLink(); } }}
+          className="text-sm"
+        />
+        <Button type="button" variant="outline" size="sm" onClick={useGmapLink}>Use link</Button>
+      </div>
+      {gmapError && <p className="text-[11px] text-destructive">{gmapError}</p>}
       <div
         ref={mapRef}
         style={{ width: '100%', height: 200, borderRadius: 6, border: '1px solid hsl(var(--border))', cursor: 'crosshair' }}
