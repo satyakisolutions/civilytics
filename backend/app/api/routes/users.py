@@ -27,8 +27,12 @@ Passwords never pass through this service. Users are created with no
 credential at all and Keycloak emails them a set-password link, so an
 onboarding admin never learns a subordinate's password.
 """
+import asyncio
+import functools
 import logging
+import os
 import re
+import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -38,6 +42,33 @@ from app.auth import kc_admin
 from app.auth.keycloak import extract_roles
 from app.auth.middleware import require_admin
 from app.auth.kc_admin import KeycloakAdminError
+from app.auth.owner_email import send_owner_welcome
+
+
+def _app_url() -> str:
+    host = os.environ.get("KC_HOSTNAME") or "localhost"
+    return f"https://{host}/"
+
+
+async def _provision_and_email(user_id: str, username: str, email: str) -> None:
+    """Give a managed user immediate branded-login access and email working
+    credentials via the app SMTP path.
+
+    Keycloak's own execute-actions-email (the set-password link) is
+    multipart/HTML and is silently dropped by this deployment's mail host, so
+    the invite never arrives. Instead — exactly as owner seeding does — set a
+    random temporary password, clear the UPDATE_PASSWORD/VERIFY_EMAIL blockers
+    the Direct Access Grant login needs cleared, and send a plain-text account
+    email carrying the URL, username and that password. Raises on SMTP failure
+    so the caller can report it.
+    """
+    temp = secrets.token_urlsafe(12)
+    await kc_admin.set_password(user_id, temp, temporary=False)
+    await kc_admin.clear_required_actions(user_id)
+    await asyncio.to_thread(functools.partial(
+        send_owner_welcome,
+        to_email=email, app_url=_app_url(), username=username, temp_password=temp,
+    ))
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/users", tags=["users"])
@@ -339,13 +370,14 @@ async def create_managed_user(
     )
 
     try:
-        await kc_admin.send_setup_email(user_id)
+        await _provision_and_email(user_id, body.username, body.email)
         email_sent = True
-    except KeycloakAdminError:
-        # The account exists and has its role; only the email failed (realm
-        # SMTP off or unreachable). Surfacing this as a 201 with a flag beats
-        # a 502 that makes a created user look like a failure.
-        logger.warning("Setup email failed for %s; account created", body.username)
+    except Exception:  # noqa: BLE001 — account is created; only delivery failed
+        # The account exists and has its role; only the email failed (SMTP off
+        # or unreachable). Surfacing this as a 201 with a flag beats a 502 that
+        # makes a created user look like a failure. Admin can resend once SMTP
+        # works, which reprovisions a fresh password.
+        logger.warning("Account email failed for %s; account created", body.username)
         email_sent = False
 
     user = await kc_admin.get_user(user_id)
@@ -398,11 +430,16 @@ async def resend_setup_email(user_id: str, actor: dict = Depends(require_admin))
     """
     await _assert_may_manage(actor, user_id)
     try:
-        await kc_admin.send_setup_email(user_id)
+        user = await kc_admin.get_user(user_id)
+        await _provision_and_email(
+            user_id, user.get("username"), user.get("email"),
+        )
     except KeycloakAdminError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — SMTP/delivery failure
+        raise HTTPException(status_code=502, detail=f"Could not send account email: {exc}")
     logger.info(
-        "Setup email resent to %s by %s", user_id, actor.get("preferred_username")
+        "Account email resent to %s by %s", user_id, actor.get("preferred_username")
     )
 
 
