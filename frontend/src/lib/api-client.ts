@@ -30,7 +30,19 @@ let installed = false;
 let refreshInFlight: Promise<boolean> | null = null;
 
 function isApiRequest(url: string): boolean {
-  return url.startsWith(API_BASE) || url.startsWith("/api/");
+  // Relative same-origin API path.
+  if (url.startsWith("/api/")) return true;
+  // Absolute URL against a configured non-empty base (dev: http://host:8082).
+  if (API_BASE && url.startsWith(API_BASE)) return true;
+  // Absolute same-origin URL whose path is /api/* (prod served behind nginx,
+  // where API_BASE is "" — a bare startsWith(API_BASE) would match EVERY url,
+  // including third-party calls like Nominatim, and wrongly attach credentials).
+  try {
+    const u = new URL(url, window.location.origin);
+    return u.origin === window.location.origin && u.pathname.startsWith("/api/");
+  } catch {
+    return false;
+  }
 }
 
 function isAuthEndpoint(url: string): boolean {

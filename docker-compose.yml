@@ -486,8 +486,12 @@ services:
       # Vite inlines VITE_* at BUILD time — these are build args, not
       # runtime env. Changing them requires a rebuild, not a restart.
       args:
-        VITE_API_URL: ${PUBLIC_API_URL:-http://localhost:8082}
-        VITE_WS_URL: ${PUBLIC_WS_URL:-ws://localhost:8082/ws}
+        # Leave API/WS empty so the built app calls same-origin (nginx
+        # proxies /api and /ws). This makes one build work at every host
+        # it's reached by — LAN IP, ngrok tunnel, etc. — instead of baking
+        # one absolute URL that breaks CORS on every other origin.
+        VITE_API_URL: ${PUBLIC_API_URL:-}
+        VITE_WS_URL: ${PUBLIC_WS_URL:-}
         VITE_MEDIAMTX_URL: ${PUBLIC_MEDIAMTX_URL:-http://localhost:8889}
     profiles: ["test", "prod"]
     expose:
@@ -545,6 +549,8 @@ services:
       - "554:554"          # RTSP ingest from cameras
     environment:
       NGINX_SERVER_NAME: ${KC_HOSTNAME:-localhost}
+      # Host allowed to reach FastAPI /docs (LAN IP only, off-domain = 404).
+      NGINX_DOCS_HOST: ${NGINX_DOCS_HOST:-192.168.1.8}
     volumes:
       # rw so the entrypoint's self-signed fallback can write certs on a
       # fresh deploy. Mount a real cert here and the fallback is skipped.

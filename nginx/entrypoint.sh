@@ -6,7 +6,10 @@ set -eu
 
 CERT_DIR=/etc/nginx/certs
 
-sed "s/\${NGINX_SERVER_NAME}/${NGINX_SERVER_NAME:-_}/" \
+# NGINX_DOCS_HOST gates the /docs route to a single Host (the LAN IP);
+# defaults to the LAN address the stack is reached by.
+sed -e "s/\${NGINX_SERVER_NAME}/${NGINX_SERVER_NAME:-_}/" \
+    -e "s/\${NGINX_DOCS_HOST}/${NGINX_DOCS_HOST:-192.168.1.8}/" \
     /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
 if [ ! -f "$CERT_DIR/fullchain.pem" ] || [ ! -f "$CERT_DIR/privkey.pem" ]; then

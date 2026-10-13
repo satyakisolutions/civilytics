@@ -31,6 +31,20 @@ export const LSG_PORTS = {
   mediamtxRtsp: 8554, // MediaMTX RTSP read port
 } as const;
 
+/**
+ * True when the page is served on a standard web port (80/443 or none),
+ * i.e. through the nginx reverse proxy that also fronts /api, /ws and
+ * /webrtc. In that case the app must call same-origin relative paths so
+ * it works at every hostname it's reached by (LAN IP, ngrok tunnel, …)
+ * without baking one absolute host. A non-standard port means the Vite
+ * dev server, which talks to the API directly on its own port.
+ */
+function servedThroughProxy(): boolean {
+  if (typeof window === "undefined" || !window.location) return false;
+  const p = window.location.port;
+  return p === "" || p === "80" || p === "443";
+}
+
 function hostFromBrowser(): string {
   // Vite runs this module client-side; there is always a window.location.
   // Fall back to "localhost" during SSR (shouldn't happen for a pure SPA,
@@ -53,6 +67,8 @@ function protocolFromBrowser(secure: boolean): string {
 export function getApiBase(): string {
   const fromEnv = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL;
   if (fromEnv) return fromEnv.replace(/\/+$/, "");
+  // Behind nginx: same-origin, so fetch("/api/…") hits the proxy. Empty base.
+  if (servedThroughProxy()) return "";
   return `${protocolFromBrowser(false)}//${hostFromBrowser()}:${LSG_PORTS.api}`;
 }
 
@@ -60,6 +76,10 @@ export function getApiBase(): string {
 export function getWsBase(): string {
   const fromEnv = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_WS_URL;
   if (fromEnv) return fromEnv.replace(/\/+$/, "");
+  // Behind nginx: same-origin wss, proxied at /ws.
+  if (servedThroughProxy()) {
+    return `${protocolFromBrowser(true)}//${window.location.host}/ws`;
+  }
   return `${protocolFromBrowser(true)}//${hostFromBrowser()}:${LSG_PORTS.ws}/ws`;
 }
 

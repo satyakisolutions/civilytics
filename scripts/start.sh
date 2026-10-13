@@ -482,6 +482,26 @@ case "$ENVIRONMENT" in
         c_dim "Start coturn (--turn) if viewers are off the camera LAN."
         [ "$SEED_OWNER" -eq 1 ] && c_ylw "Owner login: see 'Owner account' output above." \
             || c_ylw "No owner yet — run: ./scripts/start.sh $ENVIRONMENT --seed-owner"
+
+        # Public tunnel: expose the nginx ingress over a stable ngrok URL.
+        # Overridable via env; defaults match the project's reserved domain.
+        # Skipped silently if the ngrok binary isn't installed.
+        if command -v ngrok >/dev/null 2>&1; then
+            NGROK_DOMAIN="${NGROK_DOMAIN:-related-elsewhere-undertook.ngrok-free.dev}"
+            NGROK_TARGET="${NGROK_TARGET:-https://localhost:443}"
+            NGROK_LOG="${NGROK_LOG:-/tmp/wastewatch/ngrok.log}"
+            ngrok_cfg=(--config=/var/lib/ngrok/ngrok.yml --config=/var/lib/ngrok/auth-config.yml)
+            # Stop any tunnel already holding the reserved domain (one agent
+            # per domain; a stale one would make the new start fail).
+            pkill -f "ngrok .*${NGROK_DOMAIN}" 2>/dev/null && sleep 1 || true
+            mkdir -p "$(dirname "$NGROK_LOG")"
+            nohup ngrok "${ngrok_cfg[@]}" http "$NGROK_TARGET" \
+                --url "https://${NGROK_DOMAIN}" >"$NGROK_LOG" 2>&1 &
+            disown || true
+            c_grn "Public    : https://${NGROK_DOMAIN}/  (ngrok → ${NGROK_TARGET}, log: ${NGROK_LOG})"
+        else
+            c_dim "ngrok not installed — public tunnel skipped."
+        fi
         ;;
     lite)
         c_grn "Dashboard : http://localhost:5174"
