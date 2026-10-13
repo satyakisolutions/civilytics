@@ -546,7 +546,9 @@ services:
     environment:
       NGINX_SERVER_NAME: ${KC_HOSTNAME:-localhost}
     volumes:
-      - ${TLS_CERT_DIR:-./nginx/certs}:/etc/nginx/certs:ro
+      # rw so the entrypoint's self-signed fallback can write certs on a
+      # fresh deploy. Mount a real cert here and the fallback is skipped.
+      - ${TLS_CERT_DIR:-./nginx/certs}:/etc/nginx/certs:rw
       - nginx_logs:/var/log/nginx
     depends_on:
       api:
