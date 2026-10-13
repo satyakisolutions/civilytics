@@ -220,7 +220,6 @@ class AlertConsumer:
                             severity=severity,
                             title=title,
                             message=display_message,
-                            zone=camera_zone,
                             tts_audio_url=tts_audio_url,
                             snapshot_url=snapshot_url,
                             status="active",
@@ -372,7 +371,6 @@ class AlertConsumer:
                             update(tbl)
                             .where(tbl.c.id.in_(critical_ids))
                             .values(title=vlm_title, message=display_operator_text,
-                                    zone=camera_zone,
                                     tts_audio_url=tts_audio_url,
                                     timestamp=now)  # refresh so UI treats as new
                         )
@@ -390,7 +388,6 @@ class AlertConsumer:
                             severity=severity,
                             title=vlm_title,
                             message=display_operator_text,
-                            zone=camera_zone,
                             tts_audio_url=tts_audio_url,
                             status="active",
                             timestamp=now,
