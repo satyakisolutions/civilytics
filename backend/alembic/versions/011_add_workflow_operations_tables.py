@@ -1,5 +1,5 @@
 """Add workflow operations tables: workflow_event_links, worker_heartbeats,
-alert_rules, alerts, alert_deliveries, workflow_action_audit.
+ops_alert_rules, ops_alerts, ops_alert_deliveries, workflow_action_audit.
 
 Revision ID: 011
 Revises: 010
@@ -55,7 +55,7 @@ def upgrade() -> None:
     )
 
     op.create_table(
-        "alert_rules",
+        "ops_alert_rules",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column("workspace_id", sa.String(255), nullable=True),
         sa.Column("name", sa.String(255), nullable=False),
@@ -72,18 +72,15 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
 
-    # Migrations 001/003 created an earlier alerts + alert_deliveries pair.
-    # The workflow-ops feature supersedes them with the richer schema below
-    # (rule_id, workspace_id, dedupe_key, ack/resolve columns) that the API
-    # and models actually use. Drop the legacy pair first (empty at this
-    # point) so these CREATEs don't collide. CASCADE clears the old FK.
-    op.execute("DROP TABLE IF EXISTS alert_deliveries CASCADE")
-    op.execute("DROP TABLE IF EXISTS alerts CASCADE")
-
+    # Workflow-ops alerts are a SEPARATE subsystem from the event-based
+    # alerts/alert_deliveries created in 001/003 (which the dashboard's
+    # /api/alerts route + db.models.Alert still own). They live in their own
+    # ops_* tables (matching db/workflow_models.py), so we must NOT touch the
+    # legacy pair here — doing so breaks the camera-alert route.
     op.create_table(
-        "alerts",
+        "ops_alerts",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("rule_id", UUID(as_uuid=True), sa.ForeignKey("alert_rules.id"), nullable=True),
+        sa.Column("rule_id", UUID(as_uuid=True), sa.ForeignKey("ops_alert_rules.id"), nullable=True),
         sa.Column("workspace_id", sa.String(255), nullable=True),
         sa.Column("severity", sa.String(50), nullable=False),
         sa.Column("title", sa.String(500), nullable=False),
@@ -102,15 +99,15 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
-    op.create_index("ix_alerts_dedupe_key", "alerts", ["dedupe_key"])
-    op.create_index("ix_alerts_status", "alerts", ["status"])
-    op.create_index("ix_alerts_severity", "alerts", ["severity"])
-    op.create_index("ix_alerts_created_at", "alerts", ["created_at"])
+    op.create_index("ix_oa_dedupe", "ops_alerts", ["dedupe_key"])
+    op.create_index("ix_oa_status", "ops_alerts", ["status"])
+    op.create_index("ix_oa_severity", "ops_alerts", ["severity"])
+    op.create_index("ix_oa_created", "ops_alerts", ["created_at"])
 
     op.create_table(
-        "alert_deliveries",
+        "ops_alert_deliveries",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("alert_id", UUID(as_uuid=True), sa.ForeignKey("alerts.id"), nullable=False),
+        sa.Column("alert_id", UUID(as_uuid=True), sa.ForeignKey("ops_alerts.id"), nullable=False),
         sa.Column("channel", sa.String(50), nullable=False),
         sa.Column("recipient", sa.String(500), nullable=True),
         sa.Column("delivery_status", sa.String(50), nullable=False, server_default="PENDING"),
@@ -138,9 +135,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("alert_deliveries")
-    op.drop_table("alerts")
-    op.drop_table("alert_rules")
+    op.drop_table("ops_alert_deliveries")
+    op.drop_table("ops_alerts")
+    op.drop_table("ops_alert_rules")
     op.drop_table("workflow_action_audit")
     op.drop_table("worker_heartbeats")
     op.drop_table("workflow_event_links")
