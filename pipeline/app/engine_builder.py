@@ -153,6 +153,25 @@ def _export_onnx(spec: EngineSpec) -> bool:
         return False
 
 
+def _onnx_has_dynamic_input(onnx_path) -> bool:
+    """True if any graph input has a dynamic (symbolic or 0) dimension.
+    trtexec only accepts a shape profile for dynamic models; passing one to a
+    static model fails the build. Defaults to False (static) if onnx can't be
+    read, since passing shapes to a static model is the failure we're avoiding.
+    """
+    try:
+        import onnx
+        model = onnx.load(str(onnx_path))
+        for inp in model.graph.input:
+            for dim in inp.type.tensor_type.shape.dim:
+                if dim.dim_param or dim.dim_value == 0:
+                    return True
+        return False
+    except Exception as e:
+        logger.warning("Could not inspect ONNX input shape (%s); assuming static", e)
+        return False
+
+
 def _build_engine(spec: EngineSpec) -> bool:
     """Build a TensorRT engine from ONNX using trtexec."""
     logger.info(
@@ -171,16 +190,21 @@ def _build_engine(spec: EngineSpec) -> bool:
         "trtexec",
         f"--onnx={spec.onnx_path}",
         f"--saveEngine={spec.engine_path}",
-        f"--minShapes={spec.min_shapes}",
-        f"--optShapes={spec.opt_shapes}",
-        f"--maxShapes={spec.max_shapes}",
-        # --workspace was removed from trtexec; this TensorRT build
-        # (10.16) only accepts --memPoolSize=workspace:<MiB> (confirmed
-        # via trtexec --help -- the old flag made it print usage and
-        # exit 1, which looked like a build failure but was really an
-        # unrecognized-argument error).
-        f"--memPoolSize=workspace:{spec.workspace_mb}",
     ]
+    # trtexec rejects --min/opt/maxShapes on a static-input ONNX ("Static
+    # model does not take explicit shapes") and fails the whole build. Only
+    # pass a shape profile when the model actually has a dynamic input.
+    if _onnx_has_dynamic_input(spec.onnx_path):
+        cmd += [
+            f"--minShapes={spec.min_shapes}",
+            f"--optShapes={spec.opt_shapes}",
+            f"--maxShapes={spec.max_shapes}",
+        ]
+    else:
+        logger.info("  Static ONNX input -> skipping shape profile flags")
+    # --workspace was removed from trtexec; this TensorRT build
+    # (10.16) only accepts --memPoolSize=workspace:<MiB>.
+    cmd.append(f"--memPoolSize=workspace:{spec.workspace_mb}")
     if spec.fp16:
         cmd.append("--fp16")
 
