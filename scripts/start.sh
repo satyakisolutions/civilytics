@@ -90,8 +90,30 @@ fi
 # would look like it vanished on the next start.
 DC=(docker compose -f docker-compose.yml -p "civilytics-${ENVIRONMENT}" --profile "$ENVIRONMENT" "${EXTRA_PROFILES[@]+"${EXTRA_PROFILES[@]}"}")
 
+stop_ngrok_tunnel() {
+    # ngrok is a host process, not a Compose service. Limit cleanup to the
+    # reserved domain this project started so unrelated tunnels keep running.
+    local ngrok_domain="${1:-}" ngrok_domain_pattern
+    if [ -z "$ngrok_domain" ] && [ -f "$ENV_FILE" ]; then
+        ngrok_domain="$(sed -n 's/^NGROK_DOMAIN=//p' "$ENV_FILE" | tail -1)"
+    fi
+    [ -n "$ngrok_domain" ] || return 0
+
+    # Escape the domain before handing it to pkill's regular-expression
+    # matcher. This is both safer for a manually edited .env and prevents
+    # dots in a hostname from matching arbitrary characters.
+    ngrok_domain_pattern="$(printf '%s' "$ngrok_domain" | sed 's/[][\\.^$*+?{}|()]/\\&/g')"
+
+    if pkill -f "ngrok .*--url[[:space:]]https://${ngrok_domain_pattern}([[:space:]]|$)" >/dev/null 2>&1; then
+        c_grn "Stopped ngrok tunnel for https://${ngrok_domain}/"
+    fi
+}
+
 # ── down / status — no secret handling needed ──────────────────────────
 if [ "$ACTION" = "down" ]; then
+    # The production public tunnel is started outside Docker, so Compose
+    # cannot stop it for us.
+    [ "$ENVIRONMENT" != "prod" ] || stop_ngrok_tunnel
     if [ "$ENVIRONMENT" = "test" ]; then
         c_ylw "Stopping test stack and REMOVING its volumes (test state is disposable)"
         "${DC[@]}" down -v
@@ -122,6 +144,8 @@ if [ "$ACTION" = "clean-volumes" ]; then
     else
         die "Refusing to wipe volumes without an interactive confirmation (no TTY)."
     fi
+    # Keep the public endpoint from pointing at a freshly erased stack.
+    [ "$ENVIRONMENT" != "prod" ] || stop_ngrok_tunnel
     "${DC[@]}" down --volumes --remove-orphans
     c_grn "All '${ENVIRONMENT}' volumes removed. Next start rebuilds DB schema + TRT engines."
     exit 0
@@ -211,7 +235,7 @@ validate_wss()   { validate_url wss "$1"; }
 validate_api_url()      {
     validate_url https "$1" && [[ "$1" == */api ]] || validate_hostname "$1"
 }
-validate_ws_url()       { validate_url wss "$1" && [[ "$1" == */ws ]]; }
+validate_ws_url()       { { validate_url wss "$1" && [[ "$1" == */ws ]]; } || validate_hostname "$1"; }
 validate_mediamtx_url() { validate_url https "$1" && [[ "$1" == */webrtc ]]; }
 
 # A reserved ngrok endpoint is a hostname just like a conventional DNS name.
@@ -379,14 +403,20 @@ case "$ENVIRONMENT" in
     #   1. Blank (Enter to skip)  → same-origin via nginx. Works on BOTH the
     #      LAN IP and the ngrok domain. Recommended.
     #   2. Type your own absolute URLs at the prompts.
-    ensure_prompted PUBLIC_API_URL "Browser-facing API URL — blank for same-origin via nginx (recommended). Only set to pin an absolute https://host/api." 0 1 validate_api_url
+    ensure_prompted PUBLIC_API_URL "Browser-facing API URL — blank for same-origin via nginx (recommended). A bare host (e.g. example.ngrok-free.dev) is expanded to https://host/api." 0 1 validate_api_url
     public_api="$(env_get PUBLIC_API_URL)"
     if [ -n "$public_api" ] && [[ "$public_api" != *://* ]]; then
         env_set PUBLIC_API_URL "https://$public_api/api"
     elif [ -n "$public_api" ] && [[ "$public_api" =~ ^https://[^/]+/?$ ]]; then
         env_set PUBLIC_API_URL "${public_api%/}/api"
     fi
-    ensure_prompted PUBLIC_WS_URL "Browser-facing WebSocket URL — blank for same-origin wss via nginx. Only set to pin an absolute wss://host/ws." 0 1 validate_ws_url
+    ensure_prompted PUBLIC_WS_URL "Browser-facing WebSocket URL — blank for same-origin wss via nginx. A bare host (e.g. example.ngrok-free.dev) is expanded to wss://host/ws." 0 1 validate_ws_url
+    public_ws="$(env_get PUBLIC_WS_URL)"
+    if [ -n "$public_ws" ] && [[ "$public_ws" != *://* ]]; then
+        env_set PUBLIC_WS_URL "wss://$public_ws/ws"
+    elif [ -n "$public_ws" ] && [[ "$public_ws" =~ ^wss://[^/]+/?$ ]]; then
+        env_set PUBLIC_WS_URL "${public_ws%/}/ws"
+    fi
     ensure_prompted PUBLIC_MEDIAMTX_URL "Browser-facing MediaMTX WebRTC URL (e.g. http://<LAN-IP>:8889) — blank to skip until cameras need live video." 0 1
     ensure_prompted WW_KEYCLOAK_CLIENT_SECRET \
       "Keycloak confidential-client secret for the branded login.
@@ -687,7 +717,7 @@ case "$ENVIRONMENT" in
             [ -f /var/lib/ngrok/auth-config.yml ] && ngrok_cfg+=(--config=/var/lib/ngrok/auth-config.yml)
             # Stop any tunnel already holding the reserved domain (one agent
             # per domain; a stale one would make the new start fail).
-            pkill -f "ngrok .*${ngrok_domain}" 2>/dev/null && sleep 1 || true
+            stop_ngrok_tunnel "$ngrok_domain"
             mkdir -p "$(dirname "$NGROK_LOG")"
             nohup ngrok "${ngrok_cfg[@]}" http "$NGROK_TARGET" \
                 --url "https://${ngrok_domain}" >"$NGROK_LOG" 2>&1 &
