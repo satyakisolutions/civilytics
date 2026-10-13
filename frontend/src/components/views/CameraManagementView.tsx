@@ -387,10 +387,12 @@ function EditCameraDialog({ camera, onClose, onSave }: { camera: Camera; onClose
   const handleSave = async () => {
     setSaving(true);
     try {
-      const data: Record<string, unknown> = { name: name.trim(), zone: zoneName.trim(), location: location.trim(), stream_url: streamUrl.trim() || undefined };
+      // Keys must match what useCameras.updateCamera reads (camelCase Camera
+      // fields): streamUrl, gps:{lat,lng}, detectionConfig. Sending snake_case
+      // here silently dropped GPS/stream edits (the map never got coordinates).
+      const data: Record<string, unknown> = { name: name.trim(), zone: zoneName.trim(), location: location.trim(), streamUrl: streamUrl.trim() };
       const lat = parseFloat(gpsLat); const lng = parseFloat(gpsLng);
-      if (!Number.isNaN(lat)) data.gps_lat = lat;
-      if (!Number.isNaN(lng)) data.gps_lng = lng;
+      if (!Number.isNaN(lat) && !Number.isNaN(lng)) data.gps = { lat, lng };
       data.detectionConfig = {
         dwell_violation_threshold_s: Number(dwell),
         waste_proximity_alert_window_s: Number(proxWin),

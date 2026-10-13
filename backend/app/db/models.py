@@ -191,9 +191,14 @@ class SchedulerJob(Base):
 class Camera(Base):
     __tablename__ = "cameras"
     __table_args__ = (
-        # Two cameras with the same name in one customer makes the MediaMTX
-        # path ambiguous.
-        UniqueConstraint("tenant_id", "name", name="uq_cameras_tenant_name"),
+        # Two LIVE cameras with the same name in one customer makes the
+        # MediaMTX path ambiguous. Partial (deleted_at IS NULL) so a
+        # soft-deleted camera does not permanently burn its name — otherwise
+        # deleting "Cam1" blocks ever creating a "Cam1" again.
+        Index(
+            "uq_cameras_tenant_name", "tenant_id", "name",
+            unique=True, postgresql_where=sa_text("deleted_at IS NULL"),
+        ),
         # A swapped lat/lng pair puts the camera in the Arabian Sea, and both
         # numbers look plausible for Bengaluru. Half a coordinate is worse
         # than none: it renders at lng=0 instead of being flagged as missing.

@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alerts.pipeline_notifier import PipelineNotifier
@@ -106,7 +107,13 @@ async def create_camera(body: CameraCreate, db: AsyncSession = Depends(get_db), 
     zone = await _resolve_zone(db, payload.pop("zone", ""), tenant)
     camera = Camera(**payload, tenant_id=tenant_for_write(tenant), zone_id=zone.id)
     db.add(camera)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # uq_cameras_tenant_name: a camera with this name already exists in
+        # this tenant. Report it cleanly instead of a raw 500.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=f"A camera named '{camera.name}' already exists.")
     await db.refresh(camera)
 
     # Notify pipeline to add the new RTSP source
@@ -140,7 +147,11 @@ async def update_camera(camera_id: uuid.UUID, body: CameraUpdate, db: AsyncSessi
             camera.zone_id = (await _resolve_zone(db, value, tenant)).id
             continue
         setattr(camera, field, value)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=f"A camera named '{camera.name}' already exists.")
     await db.refresh(camera)
 
     # Notify pipeline if the stream_url changed (or zone changed for same stream)

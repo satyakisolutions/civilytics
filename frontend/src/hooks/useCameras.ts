@@ -89,8 +89,9 @@ export function useCameras() {
       body: JSON.stringify(input),
     });
     if (!resp.ok) {
-      const detail = await resp.text();
-      throw new Error(detail || `${resp.status} ${resp.statusText}`);
+      // FastAPI errors are {"detail": "..."}; show that, not the raw JSON.
+      const body = await resp.json().catch(() => null);
+      throw new Error(body?.detail || `${resp.status} ${resp.statusText}`);
     }
     const created: BackendCamera = await resp.json();
     toast({ title: 'Camera Added', description: `${created.name} has been added` });
