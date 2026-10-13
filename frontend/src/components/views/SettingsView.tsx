@@ -212,7 +212,6 @@ type ManagedUser = { id: string; username: string; name: string; email: string; 
 // owner (owner is seeded, never invited here); "Organisation admin" is just
 // the friendlier label for an admin, who owns their own customer/tenant.
 const ROLE_LABEL: Record<string, string> = { admin: 'Organisation admin', viewer: 'Viewer', owner: 'Owner' };
-const INVITE_ROLES: string[] = ['Organisation admin', 'Viewer'];
 const roleToBackend = (label: string) => (label === 'Organisation admin' ? 'admin' : 'viewer');
 
 function UsersSection({ onToast }: { onToast: (m: string) => void }) {
@@ -222,10 +221,15 @@ function UsersSection({ onToast }: { onToast: (m: string) => void }) {
   const [invUsername, setInvUsername] = useState('');
   const [invName, setInvName] = useState('');
   const [invEmail, setInvEmail] = useState('');
-  const [invRole, setInvRole] = useState<string>('Viewer');
+  const [invRole, setInvRole] = useState<string>('');
   const [invCustomer, setInvCustomer] = useState('');
   const [saving, setSaving] = useState(false);
   const [resending, setResending] = useState('');
+  // Role options come from the backend: exactly one rank below the caller
+  // (owner -> admin only, admin -> viewer only). Never hard-code them -- the
+  // server is the authority and the picker must match what it will accept.
+  const [grantable, setGrantable] = useState<string[]>([]);
+  const inviteRoleLabels = grantable.map(r => ROLE_LABEL[r] || r);
 
   const loadUsers = async () => {
     try {
@@ -235,6 +239,11 @@ function UsersSection({ onToast }: { onToast: (m: string) => void }) {
     finally { setLoading(false); }
   };
   useEffect(() => { loadUsers(); }, []);
+  useEffect(() => {
+    fetch(`${API_BASE}/api/users/grantable-roles`).then(r => r.ok ? r.json() : null)
+      .then(d => { if (Array.isArray(d?.roles)) setGrantable(d.roles); })
+      .catch(() => {});
+  }, []);
 
   const handleInvite = async () => {
     const username = invUsername.trim(), email = invEmail.trim(), name = invName.trim();
@@ -254,7 +263,7 @@ function UsersSection({ onToast }: { onToast: (m: string) => void }) {
       }
       await loadUsers();
       setShowInvite(false);
-      setInvUsername(''); setInvName(''); setInvEmail(''); setInvRole('Viewer'); setInvCustomer('');
+      setInvUsername(''); setInvName(''); setInvEmail(''); setInvRole(''); setInvCustomer('');
       onToast(`Account created — set-up email sent to ${email}`);
     } finally { setSaving(false); }
   };
@@ -273,7 +282,7 @@ function UsersSection({ onToast }: { onToast: (m: string) => void }) {
     <Panel>
       <div className="flex justify-between items-center mb-4">
         <span className="text-xs font-medium" style={{ color: CV_COLORS.fg2 }}>{loading ? '…' : `${users.length} users`}</span>
-        <Btn primary onClick={() => setShowInvite(true)}><Plus className="w-3 h-3 inline mr-1" />Invite user</Btn>
+        {inviteRoleLabels.length > 0 && <Btn primary onClick={() => { setInvRole(inviteRoleLabels[0]); setShowInvite(true); }}><Plus className="w-3 h-3 inline mr-1" />Invite user</Btn>}
       </div>
       {loading ? (
         <p className="text-xs py-4 text-center" style={{ color: CV_COLORS.muted }}>Loading…</p>
@@ -318,7 +327,7 @@ function UsersSection({ onToast }: { onToast: (m: string) => void }) {
       <Field label="Username"><Inp value={invUsername} onChange={setInvUsername} /></Field>
       <Field label="Full name"><Inp value={invName} onChange={setInvName} /></Field>
       <Field label="Email"><Inp value={invEmail} onChange={setInvEmail} /></Field>
-      <Field label="Role"><Sel value={invRole} options={INVITE_ROLES} onChange={setInvRole} /></Field>
+      <Field label="Role"><Sel value={invRole} options={inviteRoleLabels} onChange={setInvRole} /></Field>
       {roleToBackend(invRole) === 'admin' && <Field label="Customer / organisation"><Inp value={invCustomer} onChange={setInvCustomer} /></Field>}
       <div className="flex justify-end gap-2 mt-4">
         <Btn onClick={() => setShowInvite(false)}>Cancel</Btn>

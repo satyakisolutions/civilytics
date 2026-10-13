@@ -46,11 +46,12 @@ const navigationItems = [
 // Per-view visibility by exact top role. A view absent here is visible to
 // everyone. topRole is exact (owner holds admin/viewer as composite roles, so
 // can('admin') would wrongly pass an owner) — list each role that may see it.
-//   billing  — only a paying customer (admin). Not the platform owner, not a viewer.
+//   billing  — admin (own subscription) + owner (oversees every admin's billing).
 //   cameras  — admin + owner manage cameras; a viewer (operator) only watches.
 //   settings — admin + owner only; a viewer has nothing to configure.
+// A viewer (operator) is the only role restricted here, to the watch views.
 export const VIEW_ROLES: Record<string, readonly string[]> = {
-  billing: ['admin'],
+  billing: ['admin', 'owner'],
   cameras: ['admin', 'owner'],
   settings: ['admin', 'owner'],
 };
