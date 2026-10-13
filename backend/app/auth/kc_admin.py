@@ -58,6 +58,8 @@ CUSTOMER_ATTR = "ww_customer"
 # is created with NO credential at all, so the password is never known to the
 # onboarding admin, and never transits this process.
 SETUP_ACTIONS = ["UPDATE_PASSWORD", "VERIFY_EMAIL"]
+# Self-service reset only needs a new password; the email is already verified.
+RESET_ACTIONS = ["UPDATE_PASSWORD"]
 
 _token: str | None = None
 _token_expires_at: float = 0.0
@@ -236,6 +238,27 @@ async def send_setup_email(user_id: str) -> None:
 async def get_user(user_id: str) -> dict:
     resp = await _request("GET", f"/users/{user_id}")
     return resp.json()
+
+
+async def find_user_by_username(username: str) -> dict | None:
+    """Exact-match lookup by username, or None. Used by the public
+    forgot-password endpoint, so it must never raise on 'not found'."""
+    resp = await _request(
+        "GET", "/users", params={"username": username, "exact": "true"}
+    )
+    users = resp.json() or []
+    return users[0] if users else None
+
+
+async def send_password_reset_email(user_id: str) -> None:
+    """Email a reset-password link (UPDATE_PASSWORD action). Requires realm
+    SMTP; Keycloak returns 500 if SMTP is unconfigured."""
+    await _request(
+        "PUT",
+        f"/users/{user_id}/execute-actions-email",
+        json=list(RESET_ACTIONS),
+        params={"client_id": settings.keycloak_client_id},
+    )
 
 
 async def list_users(*, tenant: str | None = None, limit: int = 200) -> list[dict]:

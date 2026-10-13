@@ -29,6 +29,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
+from app.auth import kc_admin
 from app.auth.keycloak import extract_roles, validate_token
 from app.auth.middleware import get_current_user
 from app.config.settings import settings
@@ -200,6 +201,29 @@ async def logout(request: Request, response: Response):
             # regardless. Keycloak-side revocation is best effort.
             logger.warning("Keycloak logout call failed; cookies cleared anyway")
     return Response(status_code=204)
+
+
+class ForgotPasswordRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=255)
+
+
+@router.post("/forgot-password", status_code=202)
+async def forgot_password(body: ForgotPasswordRequest):
+    """Trigger a Keycloak reset-password email for the given username.
+
+    Public and unauthenticated, so it must not leak whether an account
+    exists: it always returns 202 regardless of lookup result or SMTP
+    outcome. Delivery still requires realm SMTP to be configured.
+    """
+    try:
+        user = await kc_admin.find_user_by_username(body.username.strip())
+        if user and user.get("email"):
+            await kc_admin.send_password_reset_email(user["id"])
+    except Exception:
+        # Never surface lookup/SMTP errors to an anonymous caller — that
+        # would turn this into a user-enumeration / SMTP-probe oracle.
+        logger.warning("forgot-password: send failed for a submitted username", exc_info=True)
+    return Response(status_code=202)
 
 
 @router.get("/me", response_model=UserResponse)
