@@ -497,6 +497,21 @@ while :; do
     sleep 5
 done
 
+# ── Apply DB migrations ────────────────────────────────────────────────
+# Always run after the stack is healthy: on a fresh Postgres volume the
+# schema is empty, and without this the API 500s on every query
+# ("relation \"cameras\" does not exist"). alembic is idempotent — a no-op
+# when already at head. Skipped for lite (no DB-backed features).
+if [ "$ENVIRONMENT" != "lite" ]; then
+    c_dim "Applying database migrations (alembic upgrade head) ..."
+    if "${DC[@]}" exec -T api alembic upgrade head; then
+        c_grn "Database schema up to date."
+    else
+        c_ylw "Migrations failed — the API will error until the schema is applied."
+        c_ylw "Re-run: ${DC[*]} exec api alembic upgrade head"
+    fi
+fi
+
 # ── Seed the first owner — ONLY when explicitly requested ──────────────
 # Not run by default: granting the first privileged account shouldn't be
 # an unconditional side effect of every container start. Whoever passes
