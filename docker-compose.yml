@@ -279,7 +279,9 @@ services:
       context: ./mediamtx
     ports:
       - "${MEDIAMTX_RTSP_PORT:-8554}:8554"
-      - "${MEDIAMTX_WEBRTC_PORT:-8889}:8889"
+      # Browser traffic uses nginx's HTTPS /webrtc route. Keep MediaMTX's
+      # raw HTTP signalling listener off the LAN so it cannot bypass TLS.
+      - "${MEDIAMTX_WEBRTC_BIND:-127.0.0.1}:${MEDIAMTX_WEBRTC_PORT:-8889}:8889"
       - "${MEDIAMTX_ICE_PORT:-8189}:8189/udp"   # ICE/UDP cannot be proxied
       - "${MEDIAMTX_API_BIND:-127.0.0.1}:${MEDIAMTX_API_PORT:-9997}:9997"
     volumes:
@@ -497,7 +499,9 @@ services:
         # one absolute URL that breaks CORS on every other origin.
         VITE_API_URL: ${PUBLIC_API_URL:-}
         VITE_WS_URL: ${PUBLIC_WS_URL:-}
-        VITE_MEDIAMTX_URL: ${PUBLIC_MEDIAMTX_URL:-http://localhost:8889}
+        # Empty selects the frontend's same-origin /webrtc route, protected
+        # by nginx's certificate just like API and WebSocket traffic.
+        VITE_MEDIAMTX_URL: ${PUBLIC_MEDIAMTX_URL:-}
     profiles: ["test", "prod"]
     expose:
       - "80"

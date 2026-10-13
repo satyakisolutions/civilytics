@@ -675,15 +675,19 @@ function NotificationsSection({ onSave }: { onSave: () => void }) {
         {channels.map(ch => {
           const Icon = ch.icon;
           return (
-            <div key={ch.id} className="flex items-center justify-between rounded-lg p-3"
+            <div key={ch.id} className={cn('flex items-center justify-between rounded-lg p-3', ch.id === 'email' && 'sm:col-span-2 lg:col-span-3')}
               style={{ background: CV_COLORS.bg, border: `1px solid ${ch.enabled ? CV_COLORS.cyan + '44' : CV_COLORS.border}` }}>
               <div className="flex items-center gap-2.5">
                 <Icon className="w-4 h-4" style={{ color: ch.enabled ? CV_COLORS.cyan : CV_COLORS.muted }} />
                 <div>
                   <p className="text-xs font-medium" style={{ color: CV_COLORS.fg }}>{ch.label}</p>
                   <p className="text-[10px]" style={{ color: ch.enabled ? CV_COLORS.green : CV_COLORS.muted }}>
-                    {ch.enabled ? 'Connected' : 'Not configured'}
+                    {ch.enabled ? (ch.id === 'email' ? 'SMTP enabled · TLS protected' : 'Connected') : 'Not configured'}
                   </p>
+                  {ch.id === 'email' && ch.enabled && <div className="flex gap-1.5 mt-1.5">
+                    <span className="px-1.5 py-0.5 rounded text-[9px]" style={{ color: CV_COLORS.green, background: `${CV_COLORS.green}18` }}>587 / STARTTLS</span>
+                    <span className="px-1.5 py-0.5 rounded text-[9px]" style={{ color: CV_COLORS.fg2, background: `${CV_COLORS.border}66` }}>Sender verified in config</span>
+                  </div>}
                 </div>
               </div>
               <div className="flex items-center gap-2">

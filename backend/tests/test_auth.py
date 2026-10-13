@@ -2,6 +2,8 @@
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from jose import JWTError
+from starlette.requests import Request
+from starlette.responses import Response
 
 
 # ── keycloak.py ─────────────────────────────────────────────────────
@@ -183,3 +185,20 @@ async def test_bearer_header_wins_over_cookie():
     with patch("app.auth.middleware.validate_token", new=_capture):
         await get_current_user(req)
     assert seen["token"] == "header_token"
+
+
+@pytest.mark.asyncio
+async def test_logout_returns_the_response_with_cookie_deletions():
+    """Logout must not replace the Response after mutating its cookies."""
+    from app.api.routes.auth import logout
+
+    request = Request({"type": "http", "headers": []})
+    response = Response()
+
+    returned = await logout(request, response)
+
+    assert returned is response
+    assert returned.status_code == 204
+    set_cookies = returned.headers.getlist("set-cookie")
+    assert any("ww_access=" in value and "Max-Age=0" in value for value in set_cookies)
+    assert any("ww_refresh=" in value and "Max-Age=0" in value for value in set_cookies)

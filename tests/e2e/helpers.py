@@ -13,8 +13,30 @@ import socket
 import ssl
 import time
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
 
 # ── config ───────────────────────────────────────────────────────────────
+
+def load_local_test_env() -> None:
+    """Load the ignored per-machine E2E reference file without overrides.
+
+    This keeps generated deployment credentials out of source control while
+    allowing `python -m pytest` to run without a long shell export. Shell
+    variables still win for CI and one-off test targets.
+    """
+    env_file = Path(__file__).with_name(".env")
+    if not env_file.is_file():
+        return
+    for raw in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+load_local_test_env()
 
 @dataclass(frozen=True)
 class Config:
@@ -43,7 +65,12 @@ def load_config() -> Config:
         password=os.environ.get("CIVILYTICS_PASS", "Civilytics5829!"),
         verify_tls=os.environ.get("CIVILYTICS_VERIFY_TLS", "0") in ("1", "true", "yes"),
         live=live,
-        frame_latency_ms=float(os.environ.get("E2E_FRAME_LATENCY_MS", "5000")),
+        # CIVILYTICS_* is retained for existing operator commands; E2E_* is
+        # the documented suite-specific spelling and takes precedence.
+        frame_latency_ms=float(os.environ.get(
+            "E2E_FRAME_LATENCY_MS",
+            os.environ.get("CIVILYTICS_FRAME_LATENCY_MS", "5000"),
+        )),
         alert_latency_s=float(os.environ.get("E2E_ALERT_LATENCY_S", "15")),
         dashboard_latency_s=float(os.environ.get("E2E_DASHBOARD_LATENCY_S", "20")),
     )
@@ -104,7 +131,15 @@ def publish(topic: str, message: dict, bootstrap: str) -> None:
         finally:
             await p.stop()
 
-    asyncio.run(_go())
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(_go())
+        return
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        ex.submit(asyncio.run, _go()).result()
 
 
 def kafka_reachable(bootstrap: str, timeout: float = 4.0) -> bool:
@@ -119,11 +154,14 @@ def kafka_reachable(bootstrap: str, timeout: float = 4.0) -> bool:
 # ── websocket ────────────────────────────────────────────────────────────
 
 def collect_ws(path: str, token: str, cfg: Config, duration: float,
-               match_type: str | None = None) -> list[dict]:
+               match_type: str | None = None,
+               stop_when: Callable[[dict], bool] | None = None) -> list[dict]:
     """Connect to /ws<path>, collect JSON frames for `duration`s, return dicts.
 
     Opens with subprotocols ["bearer", token] (the backend contract). Stops
-    early once a frame with type==match_type arrives.
+    early once a frame matches ``match_type`` or ``stop_when``. The predicate
+    lets latency tests stop on their exact synthetic frame instead of waiting
+    out the entire observation window.
     """
     import websockets
 
@@ -148,13 +186,21 @@ def collect_ws(path: str, token: str, cfg: Config, duration: float,
                     except (ValueError, TypeError):
                         continue
                     out.append(msg)
-                    if match_type and msg.get("type") == match_type:
+                    if ((match_type and msg.get("type") == match_type)
+                            or (stop_when and stop_when(msg))):
                         break
         except Exception:
             pass
         return out
 
-    return asyncio.run(_go())
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_go())
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, _go()).result()
 
 
 # ── google maps link parser (port of frontend/src/lib/google-maps-link.ts) ──

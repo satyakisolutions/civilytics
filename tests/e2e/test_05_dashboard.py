@@ -37,6 +37,10 @@ def test_alert_appears_on_dashboard(stack, make_camera, capsys):
         try:
             login_page(page, stack)
             page.goto(stack.base_url + "/", wait_until="networkidle")
+            # The notification drawer is intentionally closed by default;
+            # alerts still arrive, but their cards are not mounted in the DOM
+            # until an operator opens it. Measure visible dashboard delivery.
+            page.get_by_role("button", name="Notifications").click()
             page.wait_for_timeout(1500)  # let /ws/alerts connect
 
             t0 = time.time()

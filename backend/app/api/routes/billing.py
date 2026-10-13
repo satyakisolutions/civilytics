@@ -170,7 +170,10 @@ async def get_usage(
         period_end = today.replace(month=today.month + 1, day=1)
 
     cams_result = await db.execute(
-        select(Camera).where(Camera.tenant_id == _DEFAULT_TENANT)
+        select(Camera).where(
+            Camera.tenant_id == _DEFAULT_TENANT,
+            Camera.deleted_at.is_(None),
+        )
     )
     cameras = cams_result.scalars().all()
     active = [c for c in cameras if c.status == CameraStatus.online]

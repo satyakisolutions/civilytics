@@ -12,6 +12,7 @@
 #   --rotate       prod only: regenerate generated passwords in .env
 #   --seed-owner   create the first owner account (no-op if one exists) --
 #                  NOT run by default, see scripts/seed_owner.py
+#   --smtp         prod only: prompt for SMTP host/account/password again
 #   --down         stop the stack (test also removes its volumes)
 #   --status       show health of every container and exit
 #
@@ -31,7 +32,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 ENV_FILE=".env"
 ENVIRONMENT=""
-BUILD="" PULL="" EXTRA_PROFILES=() WAIT=1 TIMEOUT=900 ACTION="up" ROTATE=0 SEED_OWNER=0 RUN_E2E=0
+BUILD="" PULL="" EXTRA_PROFILES=() WAIT=1 TIMEOUT=900 ACTION="up" ROTATE=0 SEED_OWNER=0 RUN_E2E=0 CONFIGURE_SMTP=0
+# A build from an empty environment is the one-time provisioning flow.  Keep
+# subsequent starts non-interactive and preserve the operator's saved values.
+FRESH_ENV=0
+[ -s "$ENV_FILE" ] || FRESH_ENV=1
 
 c_red() { printf '\033[31m%s\033[0m\n' "$*"; }
 c_grn() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -56,6 +61,7 @@ while [ $# -gt 0 ]; do
         --timeout)  TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
         --rotate)   ROTATE=1; shift ;;
         --seed-owner) SEED_OWNER=1; shift ;;
+        --smtp)      CONFIGURE_SMTP=1; shift ;;
         --e2e)      RUN_E2E=1; shift ;;
         --down)     ACTION="down"; shift ;;
         --status)   ACTION="status"; shift ;;
@@ -63,6 +69,14 @@ while [ $# -gt 0 ]; do
         *) die "unknown option: $1" ;;
     esac
 done
+
+# A fresh production build provisions the complete public stack, including
+# Coturn.  The profile is still optional on ordinary restarts so existing
+# deployments are not changed unexpectedly.
+if [ "$ENVIRONMENT" = "prod" ] && [ "$BUILD" = "--build" ] && [ "$FRESH_ENV" -eq 1 ]; then
+    EXTRA_PROFILES+=(--profile turn)
+    c_dim "Fresh production build: Coturn and SMTP settings will be collected now."
+fi
 
 if [ "${#EXTRA_PROFILES[@]}" -gt 0 ] && [ "$ENVIRONMENT" != "prod" ]; then
     die "--turn is prod only (coturn is defined under the turn profile)"
@@ -194,9 +208,17 @@ validate_wss()   { validate_url wss "$1"; }
 # nginx path-routes on these exact suffixes (nginx/nginx.conf's
 # location /api/, /ws/, /webrtc/ blocks) -- a URL missing the suffix
 # silently hits the dashboard's own "/" instead of the real backend.
-validate_api_url()      { validate_url https "$1" && [[ "$1" == */api ]]; }
+validate_api_url()      {
+    validate_url https "$1" && [[ "$1" == */api ]] || validate_hostname "$1"
+}
 validate_ws_url()       { validate_url wss "$1" && [[ "$1" == */ws ]]; }
 validate_mediamtx_url() { validate_url https "$1" && [[ "$1" == */webrtc ]]; }
+
+# A reserved ngrok endpoint is a hostname just like a conventional DNS name.
+# Keep it separate from KC_HOSTNAME because the tunnel is optional, but when
+# it is the public ingress Keycloak *must* advertise that hostname in its
+# issuer and redirect URLs.
+validate_ngrok_domain() { validate_hostname "$1"; }
 
 ensure_prompted() {
     local key="$1" desc="$2" secret="${3:-0}" optional="${4:-0}" validate="${5:-}" existing val
@@ -296,6 +318,7 @@ case "$ENVIRONMENT" in
     env_default KAFKA_BIND 127.0.0.1
     env_default REDIS_BIND 127.0.0.1
     env_default KEYCLOAK_BIND 127.0.0.1
+    env_default MEDIAMTX_WEBRTC_BIND 127.0.0.1
 
     c_dim "Generating passwords that have no external source ..."
     ensure_generated POSTGRES_PASSWORD
@@ -305,32 +328,64 @@ case "$ENVIRONMENT" in
 
     c_dim "Values that must come from outside this script ..."
     ensure_prompted KEYCLOAK_ADMIN "Keycloak admin username." 0 0
+
+    # Do not ship a project's reserved tunnel name as a default.  That made
+    # a fresh deployment look configured while ngrok actually pointed to a
+    # different host (or was not available at all).  Ask for the endpoint
+    # once, persist it, and use it as Keycloak's public hostname by default.
+    ensure_prompted NGROK_DOMAIN \
+      "Optional stable ngrok public domain, e.g. my-site.ngrok-free.app.
+  Press Enter to use a normal DNS/LAN hostname instead. The ngrok agent must
+  be authenticated on this machine and authorized for the domain." 0 1 validate_ngrok_domain
+    if [ -n "$(env_get NGROK_DOMAIN)" ]; then
+        ngrok_host="$(env_get NGROK_DOMAIN)"
+        current_kc_host="$(env_get KC_HOSTNAME)"
+        if [ "$current_kc_host" != "$ngrok_host" ]; then
+            if [ -t 0 ]; then
+                printf '\n  Set KC_HOSTNAME to the public ngrok domain (%s)? [Y/n]: ' "$ngrok_host"
+                read -r _kc_ngrok_ans || { printf '\n'; exit 130; }
+                if [[ ! "$_kc_ngrok_ans" =~ ^[Nn] ]]; then
+                    env_set KC_HOSTNAME "$ngrok_host"
+                fi
+            elif [ -z "$current_kc_host" ]; then
+                env_set KC_HOSTNAME "$ngrok_host"
+            else
+                die "NGROK_DOMAIN=$ngrok_host but KC_HOSTNAME=$current_kc_host. They must match for public Keycloak login; set KC_HOSTNAME=$ngrok_host."
+            fi
+        fi
+    fi
     ensure_prompted KC_HOSTNAME \
-      "Public hostname Keycloak is served on, e.g. auth.civilytics.in
-  Keycloak builds its issuer/redirect URLs from this; a wrong value makes
-  tokens fail audience validation." 0 0 validate_hostname
+      "Public hostname Keycloak is served on, e.g. auth.civilytics.in.
+  If using ngrok, use its public domain here. Keycloak builds issuer and
+  redirect URLs from this value; a hostname that only resolves on this server
+  prevents other devices from signing in." 0 0 validate_hostname
+    if [[ " ${EXTRA_PROFILES[*]} " == *" turn "* ]]; then
+        ensure_prompted TURN_HOST \
+          "Public DNS hostname for Coturn, e.g. turn.civilytics.in.
+  This must resolve directly to this server's public IP. An ngrok HTTP domain
+  cannot carry TURN UDP/TLS traffic, so do not use an ngrok domain here." 0 0 validate_hostname
+        ensure_prompted TURN_EXTERNAL_IP \
+          "Coturn public IPv4 address (the address reached by TURN clients)." 0 0
+        ensure_prompted TURN_USER "Coturn username." 0 0
+        ensure_prompted TURN_PASSWORD "Coturn password." 1 0
+        if [ "$(env_get TURN_HOST)" = "$(env_get NGROK_DOMAIN)" ]; then
+            die "TURN_HOST cannot be the ngrok domain. Point a real DNS hostname directly at this server and expose 3478/TCP+UDP, 5349/TCP, and 49160-49500/UDP."
+        fi
+    fi
     ensure_prompted MINIO_ROOT_USER "MinIO root access key (evidence + backup object store)." 0 0
     # Browser-facing URLs are OPTIONAL. The frontend resolves the API and
     # WebSocket same-origin through nginx, so one build works at every host
     # it's reached by (LAN IP, ngrok domain, …). Three ways to set them:
     #   1. Blank (Enter to skip)  → same-origin via nginx. Works on BOTH the
     #      LAN IP and the ngrok domain. Recommended.
-    #   2. Use the ngrok domain   → bakes absolute https://<ngrok>/... URLs.
-    #      Reachable ONLY via ngrok then (LAN-IP access breaks on CORS).
-    #   3. Type your own absolute URLs at the prompts.
-    NGROK_DOMAIN="${NGROK_DOMAIN:-related-elsewhere-undertook.ngrok-free.dev}"
-    if [ -z "$(env_get PUBLIC_API_URL)" ] && [ -t 0 ]; then
-        printf '\n  Bake the ngrok domain (%s) into the browser-facing URLs?\n' "$NGROK_DOMAIN"
-        printf '  (N = same-origin via nginx, works on LAN IP + ngrok — recommended) [y/N]: '
-        read -r _ngrok_ans || { printf '\n'; exit 130; }
-        if [[ "$_ngrok_ans" =~ ^[Yy] ]]; then
-            env_set PUBLIC_API_URL      "https://${NGROK_DOMAIN}/api"
-            env_set PUBLIC_WS_URL       "wss://${NGROK_DOMAIN}/ws"
-            env_set PUBLIC_MEDIAMTX_URL "https://${NGROK_DOMAIN}/webrtc"
-            c_dim "Public URLs pinned to https://${NGROK_DOMAIN}"
-        fi
-    fi
+    #   2. Type your own absolute URLs at the prompts.
     ensure_prompted PUBLIC_API_URL "Browser-facing API URL — blank for same-origin via nginx (recommended). Only set to pin an absolute https://host/api." 0 1 validate_api_url
+    public_api="$(env_get PUBLIC_API_URL)"
+    if [ -n "$public_api" ] && [[ "$public_api" != *://* ]]; then
+        env_set PUBLIC_API_URL "https://$public_api/api"
+    elif [ -n "$public_api" ] && [[ "$public_api" =~ ^https://[^/]+/?$ ]]; then
+        env_set PUBLIC_API_URL "${public_api%/}/api"
+    fi
     ensure_prompted PUBLIC_WS_URL "Browser-facing WebSocket URL — blank for same-origin wss via nginx. Only set to pin an absolute wss://host/ws." 0 1 validate_ws_url
     ensure_prompted PUBLIC_MEDIAMTX_URL "Browser-facing MediaMTX WebRTC URL (e.g. http://<LAN-IP>:8889) — blank to skip until cameras need live video." 0 1
     ensure_prompted WW_KEYCLOAK_CLIENT_SECRET \
@@ -347,7 +402,14 @@ case "$ENVIRONMENT" in
     # send owner/invite activation emails. Without a host the account is still
     # created, but you must set its password manually (kcadm set-password) or
     # re-run with SMTP configured and `seed_owner.py --resend`.
-    c_dim "SMTP for activation emails (press Enter to skip; set a password manually instead) ..."
+    if [ "$CONFIGURE_SMTP" -eq 1 ]; then
+        c_dim "SMTP reconfiguration requested — existing SMTP values will be replaced."
+        env_set WW_SMTP_HOST ""
+        env_set WW_SMTP_USER ""
+        env_set WW_SMTP_PASSWORD ""
+        env_set WW_SMTP_FROM ""
+    fi
+    c_dim "SMTP for activation emails (press Enter to skip; password input is hidden) ..."
     ensure_prompted WW_SMTP_HOST "SMTP server host, e.g. smtp.gmail.com (blank to skip email)." 1 1
     if [ -n "$(env_get WW_SMTP_HOST)" ]; then
         env_default WW_SMTP_PORT 587
@@ -378,17 +440,52 @@ case "$ENVIRONMENT" in
         c_dim "Keycloak realm written to keycloak/prod-import/ (imported on boot)."
     fi
 
-    c_dim "Optional outbound channels — press Enter to leave disabled ..."
+    c_dim "Administrator notification settings ..."
     ensure_prompted WW_SMTP_PASSWORD "SMTP password for report email." 1 1
-    ensure_prompted WW_TELEGRAM_BOT_TOKEN "Telegram bot token for alert messages." 1 1
+    # Telegram is administrator-managed application data, not bootstrap input.
+    # Preserve an existing token from .env, but never request it interactively
+    # during a fresh build. Configure it later from the admin settings store.
     [ -n "$(env_get WW_SMTP_PASSWORD)" ] && env_set WW_SMTP_ENABLED true || env_set WW_SMTP_ENABLED false
+    [ -n "$(env_get WW_TELEGRAM_BOT_TOKEN)" ] && env_set WW_TELEGRAM_ENABLED true || env_set WW_TELEGRAM_ENABLED false
     [ -n "$(env_get WW_TELEGRAM_BOT_TOKEN)" ] && env_set WW_TELEGRAM_ENABLED true || env_set WW_TELEGRAM_ENABLED false
 
     CERT_DIR="${TLS_CERT_DIR:-./nginx/certs}"
-    if [ ! -f "$CERT_DIR/fullchain.pem" ]; then
-        c_ylw "No TLS certificate at $CERT_DIR."
-        c_ylw "nginx will generate a SELF-SIGNED one and browsers will warn."
-        c_ylw "Run ./scripts/make-certs.sh first for a proper certificate."
+    cert_file="$CERT_DIR/fullchain.pem"
+    key_file="$CERT_DIR/privkey.pem"
+    if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
+        c_ylw "TLS certificate pair is missing at $CERT_DIR."
+        # This is deliberately a host-side preflight, not a Docker build
+        # layer: certificates and private keys must never be baked into an
+        # image. It runs for `prod --build` as well as normal prod starts.
+        # Operators who require only a CA-issued certificate can set this to
+        # false and install the pair themselves before starting.
+        if [ "$(env_get TLS_AUTO_GENERATE)" = "false" ]; then
+            die "TLS certificate pair missing at $CERT_DIR and TLS_AUTO_GENERATE=false. Install a certificate pair before starting."
+        fi
+        c_dim "Generating local-CA TLS certificate for the production ingress ..."
+        cert_hosts=(--host "$(env_get KC_HOSTNAME)")
+        [ -n "$(env_get TURN_HOST)" ] && cert_hosts+=(--host "$(env_get TURN_HOST)")
+        ./scripts/make-certs.sh selfsigned "${cert_hosts[@]}"
+    fi
+    openssl x509 -in "$cert_file" -noout >/dev/null 2>&1 \
+        || die "Invalid TLS certificate: $cert_file"
+    openssl pkey -in "$key_file" -noout >/dev/null 2>&1 \
+        || die "Invalid TLS private key: $key_file"
+    [ "$(openssl x509 -in "$cert_file" -noout -pubkey 2>/dev/null | openssl pkey -pubin -outform pem 2>/dev/null | sha256sum | awk '{print $1}')" = \
+      "$(openssl pkey -in "$key_file" -pubout -outform pem 2>/dev/null | sha256sum | awk '{print $1}')" ] \
+        || die "TLS certificate and private key do not match in $CERT_DIR"
+    if ! openssl x509 -in "$cert_file" -checkend 1209600 -noout >/dev/null 2>&1; then
+        c_ylw "TLS certificate expires within 14 days (or is expired) — renew it before exposing the service."
+    fi
+    # For a direct DNS deployment the certificate must authenticate the same
+    # hostname Keycloak and nginx advertise. With ngrok, its edge owns the
+    # public TLS certificate, so the local certificate is intentionally not
+    # required to contain the ngrok hostname.
+    if [ -z "$(env_get NGROK_DOMAIN)" ] && ! openssl x509 -in "$cert_file" -checkhost "$(env_get KC_HOSTNAME)" -noout >/dev/null 2>&1; then
+        die "TLS certificate at $cert_file does not cover KC_HOSTNAME=$(env_get KC_HOSTNAME). Regenerate it or install the correct certificate."
+    fi
+    if [ -n "$(env_get TURN_HOST)" ] && ! openssl x509 -in "$cert_file" -checkhost "$(env_get TURN_HOST)" -noout >/dev/null 2>&1; then
+        die "TLS certificate at $cert_file does not cover TURN_HOST=$(env_get TURN_HOST). Install a certificate with both Keycloak and TURN hostnames in its SAN list."
     fi
     c_dim "Manual steps this script cannot do: create the MinIO bucket +"
     c_dim "retention policy, and back up $ENV_FILE somewhere safe."
@@ -573,24 +670,33 @@ case "$ENVIRONMENT" in
         [ "$SEED_OWNER" -eq 1 ] && c_ylw "Owner login: see 'Owner account' output above." \
             || c_ylw "No owner yet — run: ./scripts/start.sh $ENVIRONMENT --seed-owner"
 
-        # Public tunnel: expose the nginx ingress over a stable ngrok URL.
-        # Overridable via env; defaults match the project's reserved domain.
-        # Skipped silently if the ngrok binary isn't installed.
-        if command -v ngrok >/dev/null 2>&1; then
-            NGROK_DOMAIN="${NGROK_DOMAIN:-related-elsewhere-undertook.ngrok-free.dev}"
-            NGROK_TARGET="${NGROK_TARGET:-https://localhost:443}"
+        # Public tunnel: ngrok terminates public HTTPS and forwards to nginx's
+        # local HTTP redirect/listener.  This deliberately avoids making the
+        # ngrok agent trust a local/self-signed nginx certificate.  The same
+        # public hostname is used by Keycloak above, so login redirects work
+        # from any device rather than only on the server's own DNS setup.
+        ngrok_domain="$(env_get NGROK_DOMAIN)"
+        if [ -n "$ngrok_domain" ] && command -v ngrok >/dev/null 2>&1; then
+            NGROK_TARGET="${NGROK_TARGET:-http://localhost:80}"
             NGROK_LOG="${NGROK_LOG:-/tmp/wastewatch/ngrok.log}"
-            ngrok_cfg=(--config=/var/lib/ngrok/ngrok.yml --config=/var/lib/ngrok/auth-config.yml)
+            ngrok_cfg=()
+            # Let ngrok use its normal per-user configuration.  Old servers
+            # may have the two project-specific paths, so retain them only
+            # when they actually exist; forcing absent paths broke new hosts.
+            [ -f /var/lib/ngrok/ngrok.yml ] && ngrok_cfg+=(--config=/var/lib/ngrok/ngrok.yml)
+            [ -f /var/lib/ngrok/auth-config.yml ] && ngrok_cfg+=(--config=/var/lib/ngrok/auth-config.yml)
             # Stop any tunnel already holding the reserved domain (one agent
             # per domain; a stale one would make the new start fail).
-            pkill -f "ngrok .*${NGROK_DOMAIN}" 2>/dev/null && sleep 1 || true
+            pkill -f "ngrok .*${ngrok_domain}" 2>/dev/null && sleep 1 || true
             mkdir -p "$(dirname "$NGROK_LOG")"
             nohup ngrok "${ngrok_cfg[@]}" http "$NGROK_TARGET" \
-                --url "https://${NGROK_DOMAIN}" >"$NGROK_LOG" 2>&1 &
+                --url "https://${ngrok_domain}" >"$NGROK_LOG" 2>&1 &
             disown || true
-            c_grn "Public    : https://${NGROK_DOMAIN}/  (ngrok → ${NGROK_TARGET}, log: ${NGROK_LOG})"
+            c_grn "Public    : https://${ngrok_domain}/  (ngrok → ${NGROK_TARGET}, log: ${NGROK_LOG})"
+        elif [ -n "$ngrok_domain" ]; then
+            c_ylw "NGROK_DOMAIN is set but ngrok is not installed — tunnel not started."
         else
-            c_dim "ngrok not installed — public tunnel skipped."
+            c_dim "No NGROK_DOMAIN configured — public tunnel skipped."
         fi
         ;;
     lite)

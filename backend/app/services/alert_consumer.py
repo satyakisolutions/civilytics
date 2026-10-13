@@ -18,7 +18,7 @@ from sqlalchemy import insert, select, update
 # Use a SEPARATE group from the escalation worker so both receive messages
 GROUP_ALERT_DISPATCH = "wastewatch.group.api-alert-consumer"
 from app.db.engine import async_session
-from app.db.models import Camera
+from app.db.models import Camera, Zone
 from app.ws.alerts import broadcast_alert
 
 logger = logging.getLogger(__name__)
@@ -74,26 +74,24 @@ class AlertConsumer:
         except Exception:
             logger.exception("AlertConsumer loop error")
 
-    async def _resolve_camera_uuid(self, camera_name: str) -> str | None:
-        """Resolve pipeline camera name (e.g. 'cam-01') to database UUID."""
-        try:
-            # Check if already a UUID
-            uuid.UUID(camera_name)
-            return camera_name
-        except ValueError:
-            pass
-        # Look up by name
+    async def _resolve_camera_uuid(self, camera_name: str) -> tuple[str | None, str | None]:
+        """Resolve pipeline camera name (e.g. 'cam-01') to (DB UUID, tenant_id)."""
         try:
             async with async_session() as session:
+                try:
+                    parsed = uuid.UUID(camera_name)
+                    _where = Camera.id == parsed
+                except ValueError:
+                    _where = Camera.name == camera_name
                 result = await session.execute(
-                    select(Camera.id).where(Camera.name == camera_name)
+                    select(Camera.id, Camera.tenant_id).where(_where)
                 )
-                row = result.scalar_one_or_none()
+                row = result.first()
                 if row:
-                    return str(row)
+                    return str(row.id), str(row.tenant_id)
         except Exception:
             logger.debug("Failed to resolve camera UUID for %s", camera_name)
-        return None
+        return None, None
 
     async def _resolve_camera_info(self, camera_id_or_name: str) -> dict | None:
         """Fetch name/zone/location for a camera (by UUID or by pipeline name).
@@ -107,12 +105,16 @@ class AlertConsumer:
             async with async_session() as session:
                 try:
                     uuid.UUID(camera_id_or_name)
-                    stmt = select(Camera.name, Camera.zone, Camera.location).where(
-                        Camera.id == camera_id_or_name
+                    stmt = (
+                        select(Camera.name, Zone.name.label("zone"), Camera.location)
+                        .join(Zone, Camera.zone_id == Zone.id)
+                        .where(Camera.id == camera_id_or_name)
                     )
                 except ValueError:
-                    stmt = select(Camera.name, Camera.zone, Camera.location).where(
-                        Camera.name == camera_id_or_name
+                    stmt = (
+                        select(Camera.name, Zone.name.label("zone"), Camera.location)
+                        .join(Zone, Camera.zone_id == Zone.id)
+                        .where(Camera.name == camera_id_or_name)
                     )
                 result = await session.execute(stmt)
                 row = result.first()
@@ -156,8 +158,8 @@ class AlertConsumer:
         # drifting later than when the event actually happened.
         _detected_at = payload.get("detected_at")
 
-        # Resolve pipeline camera name to DB UUID
-        camera_uuid = await self._resolve_camera_uuid(camera_name)
+        # Resolve pipeline camera name to (DB UUID, tenant_id)
+        camera_uuid, camera_tenant = await self._resolve_camera_uuid(camera_name)
         if not camera_uuid:
             logger.warning("AlertConsumer: unknown camera %s — broadcasting WS only", camera_name)
 
@@ -216,6 +218,7 @@ class AlertConsumer:
                     await session.execute(
                         insert(tbl).values(
                             id=alert_id,
+                            tenant_id=camera_tenant,
                             camera_id=camera_uuid,
                             severity=severity,
                             title=title,
@@ -335,7 +338,7 @@ class AlertConsumer:
             logger.debug("Skipping VLM alert — no useful content for %s (fallback=%s)", camera_id, _is_fallback)
             return
 
-        camera_uuid = await self._resolve_camera_uuid(camera_id)
+        camera_uuid, camera_tenant = await self._resolve_camera_uuid(camera_id)
         # camera_uuid or camera_id (not gated on camera_uuid) -- matches
         # _handle_alert's fallback: a transient UUID-resolution miss should
         # still let _resolve_camera_info try the by-name path instead of
@@ -384,6 +387,7 @@ class AlertConsumer:
                     await session.execute(
                         insert(tbl).values(
                             id=alert_id,
+                            tenant_id=camera_tenant,
                             camera_id=camera_uuid,
                             severity=severity,
                             title=vlm_title,

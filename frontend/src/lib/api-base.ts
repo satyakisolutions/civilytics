@@ -83,10 +83,12 @@ export function getWsBase(): string {
   return `${protocolFromBrowser(true)}//${hostFromBrowser()}:${LSG_PORTS.ws}/ws`;
 }
 
-/** MediaMTX HTTP base for WebRTC (WHEP) reads, e.g. "http://localhost:8889". */
+/** MediaMTX HTTP base for WebRTC (WHEP) reads. */
 export function getMediaMtxBase(): string {
   const fromEnv = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_MEDIAMTX_URL;
   if (fromEnv) return fromEnv.replace(/\/+$/, "");
+  // Production ingress proxies WHEP at this TLS-protected same-origin path.
+  if (servedThroughProxy()) return `${window.location.protocol}//${window.location.host}/webrtc`;
   return `${protocolFromBrowser(false)}//${hostFromBrowser()}:${LSG_PORTS.mediamtxWeb}`;
 }
 

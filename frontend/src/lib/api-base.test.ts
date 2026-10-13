@@ -89,7 +89,12 @@ describe("getWsBase (VITE_WS_URL set in env -> absolute env value wins)", () => 
   });
 });
 
-describe("getMediaMtxBase (VITE_MEDIAMTX_URL unset -> host + well-known port)", () => {
+describe("getMediaMtxBase (VITE_MEDIAMTX_URL unset)", () => {
+  it("uses nginx's same-origin TLS route behind the production proxy", () => {
+    setLocation({ protocol: "https:", hostname: "demo.example.com", port: "443", host: "demo.example.com" });
+    expect(getMediaMtxBase()).toBe("https://demo.example.com/webrtc");
+  });
+
   it("resolves to the same host on the MediaMTX WebRTC port", () => {
     setLocation({ protocol: "http:", hostname: "192.168.1.8", port: "5174" });
     expect(getMediaMtxBase()).toBe(`http://192.168.1.8:${LSG_PORTS.mediamtxWeb}`);

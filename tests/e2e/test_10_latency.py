@@ -31,7 +31,14 @@ def test_frame_latency(_kafka, stack, make_camera, ws_token, capsys):
     track = int(uuid.uuid4().int % 100000)
 
     def _listen():
-        frames.extend(collect_ws("/events", ws_token, stack, duration=12))
+        frames.extend(collect_ws(
+            "/events", ws_token, stack, duration=12,
+            stop_when=lambda frame: (
+                frame.get("state") == "VIOLATION"
+                and frame.get("camera_id") == cam["id"]
+                and frame.get("track_id") == track
+            ),
+        ))
 
     t = threading.Thread(target=_listen, daemon=True); t.start()
     time.sleep(2)
@@ -44,9 +51,16 @@ def test_frame_latency(_kafka, stack, make_camera, ws_token, capsys):
     }, _kafka)
     recv_wall = None
     t.join(timeout=14)
-    if frames:
-        recv_wall = time.time()  # upper bound; WS has no per-frame recv-ts
-    assert any(f.get("state") == "VIOLATION" for f in frames), "no event frame observed"
+    matching = [
+        f for f in frames
+        if f.get("state") == "VIOLATION"
+        and f.get("camera_id") == cam["id"]
+        and f.get("track_id") == track
+    ]
+    assert matching, "no matching event frame observed"
+    # The listener exits immediately on the matching message, making this a
+    # tight upper bound without changing the production WebSocket protocol.
+    recv_wall = time.time()
     latency_ms = (recv_wall - src_ts) * 1000
     with capsys.disabled():
         print(f"\n[latency] frame source-ts → ws/events: {latency_ms:.0f} ms")

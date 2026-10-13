@@ -1,5 +1,6 @@
 import logging
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -49,12 +50,22 @@ async def _resolve_zone(db: AsyncSession, name: str, tenant: str | None) -> Zone
 
 @router.get("", response_model=list[CameraResponse])
 async def list_cameras(db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
-    result = await db.execute(scope(select(Camera).order_by(Camera.is_pinned.desc(), Camera.name), Camera, tenant))
-    return result.scalars().all()
+    result = await db.execute(
+        scope(select(Camera).where(Camera.deleted_at.is_(None)).order_by(Camera.is_pinned.desc(), Camera.name), Camera, tenant)
+    )
+    cameras = result.scalars().all()
+    logger.info(
+        "ROI summary — active=%s, no-ROI=%s",
+        [c.name for c in cameras if c.roi_polygons] or "(none)",
+        [c.name for c in cameras if not c.roi_polygons] or "(none)",
+    )
+    return cameras
 
 @router.get("/{camera_id}", response_model=CameraResponse)
 async def get_camera(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_viewer), tenant: str | None = Depends(get_tenant)):
-    result = await db.execute(scope(select(Camera).where(Camera.id == camera_id), Camera, tenant))
+    result = await db.execute(
+        scope(select(Camera).where(Camera.id == camera_id, Camera.deleted_at.is_(None)), Camera, tenant)
+    )
     camera = result.scalar_one_or_none()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -118,7 +129,9 @@ async def update_camera(camera_id: uuid.UUID, body: CameraUpdate, db: AsyncSessi
 
 @router.delete("/{camera_id}", status_code=204)
 async def delete_camera(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db), _user: dict = Depends(require_admin), tenant: str | None = Depends(get_tenant)):
-    result = await db.execute(scope(select(Camera).where(Camera.id == camera_id), Camera, tenant))
+    result = await db.execute(
+        scope(select(Camera).where(Camera.id == camera_id, Camera.deleted_at.is_(None)), Camera, tenant)
+    )
     camera = result.scalar_one_or_none()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -129,5 +142,9 @@ async def delete_camera(camera_id: uuid.UUID, db: AsyncSession = Depends(get_db)
         "camera_id": str(camera.id),
     })
 
-    await db.delete(camera)
+    # SOFT delete: patient alerts/events reference this camera (enforcement
+    # record), so the row stays and reads filter it out via deleted_at.
+    camera.deleted_at = datetime.now(timezone.utc)
+    camera.status = "offline"
+    camera.is_pinned = False
     await db.commit()

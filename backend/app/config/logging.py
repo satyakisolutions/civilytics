@@ -20,6 +20,22 @@ APP_LOGGERS = ("app", "uvicorn", "uvicorn.access", "sqlalchemy.engine", "aiokafk
 _FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 
 
+class _QuietROIAccess(logging.Filter):
+    """Drop per-camera `GET /api/cameras/<id>/roi` access-log lines.
+
+    The pipeline's ROISyncer polls every camera's ROI every ~10s, so the
+    bare access log would print one line per camera per cycle. Each cycle
+    already ends with a single `ROI summary` line (see list_cameras), so
+    these per-camera lines are pure noise and are filtered out here.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        for arg in getattr(record, "args", ()) or ():
+            if isinstance(arg, str) and "/cameras/" in arg and "/roi " in arg:
+                return False
+        return True
+
+
 def setup_logging(level: str = "INFO") -> None:
     """Install the console handler + levels. Idempotent (call once at boot)."""
     level = _normalize(level)
@@ -41,6 +57,9 @@ def setup_logging(level: str = "INFO") -> None:
             },
         }
     )
+    # Filter noisy per-camera ROI access lines from uvicorn's access logger.
+    # Attached directly on the logger so it survives uvicorn's own config.
+    logging.getLogger("uvicorn.access").addFilter(_QuietROIAccess())
 
 
 def _normalize(level: str) -> str:

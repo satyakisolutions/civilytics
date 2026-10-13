@@ -129,6 +129,9 @@ class ROISyncer:
                 return
             cameras = resp.json() or []
 
+            active_names: list[str] = []
+            inactive_names: list[str] = []
+
             for cam in cameras:
                 cam_id = cam.get("id")
                 cam_name = cam.get("name")  # display name only, for logging
@@ -171,6 +174,10 @@ class ROISyncer:
 
                 signature = repr([(p.name, p.points) for p in polygons])
                 if self._last_signature.get(cam_id) == signature:
+                    if polygons:
+                        active_names.append(cam_name)
+                    else:
+                        inactive_names.append(cam_name)
                     continue  # No change; skip the noisy log.
                 self._last_signature[cam_id] = signature
 
@@ -179,9 +186,18 @@ class ROISyncer:
                     "ROISyncer: hydrated %d polygon(s) for %s (%s)",
                     len(polygons), cam_name, cam_id,
                 )
+                if polygons:
+                    active_names.append(cam_name)
+                else:
+                    inactive_names.append(cam_name)
 
             # After syncing all cameras, regenerate nvdsanalytics config
             self._write_nvdsanalytics_config()
+            logger.info(
+                "ROISyncer: ROI sync complete — active=%s, no-ROI=%s",
+                active_names or "(none)",
+                inactive_names or "(none)",
+            )
 
     def _get_source_id_for_camera(self, cam_name: str) -> int | None:
         """Look up the streammux pad index for a camera name."""

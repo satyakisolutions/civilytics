@@ -51,6 +51,7 @@ export function ROIOverlay({
   return (
     <>
       <svg
+        data-testid="roi-overlay"
         viewBox="0 0 100 100"
         preserveAspectRatio="none"
         width="100%"

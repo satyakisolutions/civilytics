@@ -42,13 +42,23 @@ def test_roi_draw_in_browser(stack, client, make_camera):
         page = ctx.new_page()
         try:
             login_page(page, stack)
-            page.goto(stack.base_url + "/cameras", wait_until="networkidle")
-            svg = page.query_selector("svg[viewBox], .roi-overlay svg, svg")
-            if not svg:
-                pytest.skip("ROI svg editor not reachable from /cameras (UI drift)")
+            # Camera management is a table; the editable ROI overlay lives on
+            # the monitoring camera feed. Open the monitoring view directly.
+            # The monitoring page keeps WebSocket/client-log connections open,
+            # so networkidle never occurs reliably. DOM readiness plus the
+            # camera-feed locator below is the correct synchronization point.
+            page.goto(stack.base_url + "/", wait_until="domcontentloaded")
+            card = page.locator(f'[data-testid="camera-feed-{cam["id"]}"]')
+            card.wait_for(state="visible", timeout=10000)
+            # ROI is a camera action, so open the menu before looking for the
+            # overlay. Searching for the first arbitrary SVG can select a
+            # sidebar icon and falsely report that ROI is invisible.
+            card.get_by_role("button").last.click()
+            page.get_by_role("menuitem", name="Draw ROI").click()
+            svg = card.locator('[data-testid="roi-overlay"]')
+            svg.wait_for(state="visible", timeout=10000)
             box = svg.bounding_box()
-            if not box:
-                pytest.skip("ROI svg not visible")
+            assert box and box["width"] > 0 and box["height"] > 0, "ROI svg has no layout box"
             # Draw a 4-point polygon.
             pts = [(0.3, 0.3), (0.7, 0.3), (0.7, 0.7), (0.3, 0.7)]
             for fx, fy in pts:

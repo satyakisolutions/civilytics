@@ -45,16 +45,17 @@ usage() {
 # A bare self-signed leaf is rejected outright by modern Chrome. A local
 # CA that operators install once works properly, including for WebSockets.
 make_selfsigned() {
-    local host="" ips=() sans=() i=1
+    local hosts=() ips=() sans=() i=1 host
     while [ $# -gt 0 ]; do
         case "$1" in
-            --host) host="${2:?--host needs a value}"; shift 2 ;;
+            --host) hosts+=("${2:?--host needs a value}"); shift 2 ;;
             --ip)   ips+=("${2:?--ip needs a value}"); shift 2 ;;
             *)      die "unknown argument: $1" ;;
         esac
     done
 
-    host="${host:-${KC_HOSTNAME:-civilytics.local}}"
+    [ ${#hosts[@]} -gt 0 ] || hosts=("${KC_HOSTNAME:-civilytics.local}")
+    host="${hosts[0]}"
     # Default to the host's primary LAN address, since operators usually
     # reach the box by IP on a municipal network.
     if [ ${#ips[@]} -eq 0 ]; then
@@ -78,7 +79,7 @@ make_selfsigned() {
         chmod 600 "$CA_DIR/ca.key"
     fi
 
-    sans+=("DNS:${host}")
+    for host in "${hosts[@]}"; do sans+=("DNS:${host}"); done
     sans+=("DNS:localhost")
     for a in "${ips[@]}"; do sans+=("IP:${a}"); done
     local san_str

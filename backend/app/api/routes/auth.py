@@ -200,7 +200,11 @@ async def logout(request: Request, response: Response):
             # Cookies are already cleared, so the browser session is over
             # regardless. Keycloak-side revocation is best effort.
             logger.warning("Keycloak logout call failed; cookies cleared anyway")
-    return Response(status_code=204)
+    # Return the SAME response the delete-cookie headers were written to.
+    # Building a fresh Response(status_code=204) here discards those headers,
+    # so the browser keeps both cookies and the session is never cleared.
+    response.status_code = 204
+    return response
 
 
 class ForgotPasswordRequest(BaseModel):

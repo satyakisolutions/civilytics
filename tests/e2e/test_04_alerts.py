@@ -1,15 +1,16 @@
 """Step 4 — alerts flowing.
 
 Publish a synthetic alert to `wastewatch.alerts` for our camera; AlertConsumer
-should broadcast it on /ws/alerts (and, in a healthy stack, persist a row that
-GET /api/alerts returns).
+should broadcast it on /ws/alerts AND persist a row that GET /api/alerts
+returns.
 
-Product bug found (2026-10-13, live stack): AlertConsumer._handle_alert inserts
-`.values(zone=<str>)` but the `alerts` table column is `zone_id` (UUID FK to
-zones). The insert raises ("Failed to save alert to DB"), so NO pipeline/worker
-alert is ever persisted — alerts exist only transiently over WebSocket, and
-GET /api/alerts returns them for no camera. The DB/API assertion is therefore
-xfail until that is fixed; the WS assertion is the real guard.
+Fixed 2026-10-13 (live stack): AlertConsumer._handle_alert previously inserted
+`.values(zone=<str>)` against the `alerts` table, whose column is `zone_id`
+(UUID FK) — every write raised and was swallowed, and the tenant_id landed
+NULL so even once the bogus `zone` key was dropped, tenant-scoped GET
+/api/alerts never saw the rows. Alerts now insert with the camera's tenant_id
+and the AlertResponse.zone field is optional. Both the WS and DB assertions
+are real guards.
 """
 import time
 
@@ -64,9 +65,6 @@ def test_alert_broadcast_on_ws(_kafka, stack, make_camera, ws_token):
     assert title in titles, f"alert not broadcast on /ws/alerts (got {titles})"
 
 
-@pytest.mark.xfail(reason="AlertConsumer inserts zone= (str) vs alerts.zone_id "
-                          "(UUID) — insert raises, no alert row persists",
-                   strict=False)
 def test_alert_persisted_to_api(_kafka, stack, client, make_camera):
     cam = make_camera()
     title = f"E2E Persist {cam['id'][:8]}"

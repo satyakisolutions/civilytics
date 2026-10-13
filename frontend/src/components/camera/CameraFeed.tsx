@@ -198,6 +198,7 @@ export function CameraFeed({ camera, isFullscreen = false }: CameraFeedProps) {
         alertBorderClass,
         isFullscreen && 'h-full'
       )}
+      data-testid={`camera-feed-${camera.id}`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >

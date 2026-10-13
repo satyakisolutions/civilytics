@@ -45,6 +45,7 @@ from app.db.models import (
     PlateRead,
     ViolationEvent,
     SystemConfig,
+    Zone,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,12 +77,13 @@ async def events_by_camera(db: AsyncSession, days: int) -> list[dict]:
     result = await db.execute(
         select(
             Camera.name,
-            Camera.zone,
+            Zone.name.label("zone"),
             func.count(ViolationEvent.id).label("count"),
         )
         .join(Camera, ViolationEvent.camera_id == Camera.id)
+        .join(Zone, Camera.zone_id == Zone.id)
         .where(ViolationEvent.timestamp >= since)
-        .group_by(Camera.name, Camera.zone)
+        .group_by(Camera.name, Zone.name)
         .order_by(func.count(ViolationEvent.id).desc())
     )
     return [{"camera": r.name, "zone": r.zone, "count": r.count} for r in result]
@@ -92,12 +94,13 @@ async def events_by_zone(db: AsyncSession, days: int) -> list[dict]:
     since = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
         select(
-            Camera.zone,
+            Zone.name.label("zone"),
             func.count(ViolationEvent.id).label("count"),
         )
         .join(Camera, ViolationEvent.camera_id == Camera.id)
+        .join(Zone, Camera.zone_id == Zone.id)
         .where(ViolationEvent.timestamp >= since)
-        .group_by(Camera.zone)
+        .group_by(Zone.name)
         .order_by(func.count(ViolationEvent.id).desc())
     )
     return [{"zone": r.zone, "count": r.count} for r in result]
@@ -138,7 +141,7 @@ async def count_vlm_confirmed(db: AsyncSession, days: int) -> int:
     result = await db.scalar(
         select(func.count(ViolationEvent.id)).where(
             ViolationEvent.timestamp >= since,
-            ViolationEvent.vlm_response.isnot(None),
+            ViolationEvent.relation_result.isnot(None),
             ViolationEvent.is_valid.is_(True),
         )
     )
@@ -151,7 +154,7 @@ async def count_vlm_total(db: AsyncSession, days: int) -> int:
     result = await db.scalar(
         select(func.count(ViolationEvent.id)).where(
             ViolationEvent.timestamp >= since,
-            ViolationEvent.vlm_response.isnot(None),
+            ViolationEvent.relation_result.isnot(None),
         )
     )
     return result or 0

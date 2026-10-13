@@ -3081,16 +3081,27 @@ def main() -> None:
         import httpx
         from app.roi_sync import _service_headers
         api_base = os.environ.get("WW_API_BASE", "http://api:8080")
-        with httpx.Client(timeout=5.0, headers=_service_headers()) as client:
-            resp = client.get(f"{api_base}/api/cameras")
-            resp.raise_for_status()
-            for cam in resp.json() or []:
-                cam_id = cam.get("id")
-                uri = cam.get("stream_url")
-                if not cam_id or not uri or cam_id in static_cam_ids:
-                    continue
-                logger.debug("Restoring dynamically-added camera %s (%s) from backend", cam_id, uri)
-                connection_monitor.register_camera(cam_id, uri)
+        for attempt in range(1, 7):
+            try:
+                with httpx.Client(timeout=5.0, headers=_service_headers()) as client:
+                    resp = client.get(f"{api_base}/api/cameras")
+                    resp.raise_for_status()
+                    for cam in resp.json() or []:
+                        cam_id = cam.get("id")
+                        uri = cam.get("stream_url")
+                        if not cam_id or not uri or cam_id in static_cam_ids:
+                            continue
+                        logger.debug("Restoring dynamically-added camera %s (%s)", cam_id, uri)
+                        connection_monitor.register_camera(cam_id, uri)
+                    break
+            except Exception:
+                if attempt == 6:
+                    raise
+                # On a fresh Compose start, Alembic runs just after the
+                # containers become healthy; the cameras table may not exist
+                # yet when the pipeline performs this one-time restore.
+                logger.info("Backend camera restore not ready (attempt %d/6); retrying in 5s", attempt)
+                time.sleep(5)
     except Exception:
         logger.exception("Failed to restore dynamically-added cameras from backend")
 

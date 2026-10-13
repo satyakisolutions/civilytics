@@ -244,6 +244,13 @@ class Camera(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    # Soft-delete stamp. Cameras accrue alerts/events/plate-reads that must
+    # survive the camera's removal (enforcement record), so DELETE /api/cameras
+    # does not drop the row — it stamps deleted_at and every read filters it
+    # out. The FK-protected history stays queryable by its camera_id.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     @property
     def zone(self) -> str | None:

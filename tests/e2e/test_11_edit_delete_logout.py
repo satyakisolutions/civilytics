@@ -1,6 +1,7 @@
 """Step 11 — edit camera, delete camera, logout."""
 import httpx
 import pytest
+import uuid
 
 pytestmark = pytest.mark.e2e
 
@@ -16,7 +17,7 @@ def test_edit_camera(client, make_camera):
 
 def test_delete_camera(client):
     cam = client.post("/api/cameras", json={
-        "name": "E2E-delete-me", "zone": "Z", "source_type": "rtsp",
+        "name": f"E2E-delete-{uuid.uuid4().hex[:8]}", "zone": "Z", "source_type": "rtsp",
     }).json()
     assert client.delete(f"/api/cameras/{cam['id']}").status_code == 204
     assert client.get(f"/api/cameras/{cam['id']}").status_code == 404
