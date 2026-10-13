@@ -205,42 +205,67 @@ function GeneralSection({ onSave }: { onSave: () => void }) {
 }
 
 /* ── 2. Users & Roles ── */
-type UserRow = { name: string; email: string; role: string; last_active: string; status: string };
+// A user as the backend (GET /api/users -> ManagedUser) returns it.
+type ManagedUser = { id: string; username: string; name: string; email: string; role: string; enabled: boolean };
+
+// UI role label <-> backend realm role. The backend only has admin/viewer/
+// owner (owner is seeded, never invited here); "Organisation admin" is just
+// the friendlier label for an admin, who owns their own customer/tenant.
+const ROLE_LABEL: Record<string, string> = { admin: 'Organisation admin', viewer: 'Viewer', owner: 'Owner' };
+const INVITE_ROLES: string[] = ['Organisation admin', 'Viewer'];
+const roleToBackend = (label: string) => (label === 'Organisation admin' ? 'admin' : 'viewer');
 
 function UsersSection({ onToast }: { onToast: (m: string) => void }) {
-  const [users, setUsers] = useState<UserRow[]>([]);
+  const [users, setUsers] = useState<ManagedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [showInvite, setShowInvite] = useState(false);
+  const [invUsername, setInvUsername] = useState('');
   const [invName, setInvName] = useState('');
   const [invEmail, setInvEmail] = useState('');
-  const [invRole, setInvRole] = useState('Viewer');
+  const [invRole, setInvRole] = useState<string>('Viewer');
+  const [invCustomer, setInvCustomer] = useState('');
   const [saving, setSaving] = useState(false);
+  const [resending, setResending] = useState('');
 
-  useEffect(() => {
-    fetch(`${API_BASE}/api/config/workspace_users`).then(r => r.ok ? r.json() : null)
-      .then(data => { if (data?.value && Array.isArray(data.value)) setUsers(data.value); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+  const loadUsers = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/users`);
+      if (r.ok) setUsers(await r.json());
+    } catch { /* leave list as-is */ }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { loadUsers(); }, []);
 
-  const saveUsers = async (updated: UserRow[]) => {
+  const handleInvite = async () => {
+    const username = invUsername.trim(), email = invEmail.trim(), name = invName.trim();
+    const role = roleToBackend(invRole);
+    if (!username || !email || !name) return;
+    if (role === 'admin' && !invCustomer.trim()) { onToast('A customer name is required for an admin'); return; }
     setSaving(true);
     try {
-      await fetch(`${API_BASE}/api/config/workspace_users`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: updated }),
+      const r = await fetch(`${API_BASE}/api/users`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, email, full_name: name, role, customer: role === 'admin' ? invCustomer.trim() : '' }),
       });
-      setUsers(updated);
+      if (!r.ok) {
+        const detail = await r.json().catch(() => null);
+        onToast(`Could not invite: ${detail?.detail || r.status}`);
+        return;
+      }
+      await loadUsers();
+      setShowInvite(false);
+      setInvUsername(''); setInvName(''); setInvEmail(''); setInvRole('Viewer'); setInvCustomer('');
+      onToast(`Account created — set-up email sent to ${email}`);
     } finally { setSaving(false); }
   };
 
-  const handleInvite = async () => {
-    if (!invName.trim() || !invEmail.trim()) return;
-    const newUser: UserRow = { name: invName.trim(), email: invEmail.trim(), role: invRole, last_active: 'Never', status: 'Invitation pending' };
-    await saveUsers([...users, newUser]);
-    setShowInvite(false);
-    setInvName(''); setInvEmail(''); setInvRole('Viewer');
-    onToast('Invitation sent');
+  const handleResend = async (u: ManagedUser) => {
+    setResending(u.id);
+    try {
+      const r = await fetch(`${API_BASE}/api/users/${u.id}/setup-email`, { method: 'POST' });
+      onToast(r.ok ? `Set-up email resent to ${u.email}` : `Resend failed (${r.status})`);
+    } catch { onToast('Resend failed'); }
+    finally { setResending(''); }
   };
 
   return <>
@@ -253,22 +278,22 @@ function UsersSection({ onToast }: { onToast: (m: string) => void }) {
       {loading ? (
         <p className="text-xs py-4 text-center" style={{ color: CV_COLORS.muted }}>Loading…</p>
       ) : users.length === 0 ? (
-        <p className="text-xs py-4 text-center" style={{ color: CV_COLORS.muted }}>No users configured. Invite your first team member.</p>
+        <p className="text-xs py-4 text-center" style={{ color: CV_COLORS.muted }}>No users yet. Invite your first team member.</p>
       ) : <>
         {/* Desktop table */}
         <div className="hidden sm:block overflow-x-auto">
           <table className="w-full text-xs" style={{ color: CV_COLORS.fg }}>
             <thead><tr style={{ color: CV_COLORS.muted }} className="border-b" >
-              {['Name', 'Email', 'Role', 'Last active', 'Status'].map(h => <th key={h} className="text-left py-2 pr-3 font-medium" style={{ borderColor: CV_COLORS.border }}>{h}</th>)}
+              {['Name', 'Email', 'Role', 'Status', ''].map(h => <th key={h} className="text-left py-2 pr-3 font-medium" style={{ borderColor: CV_COLORS.border }}>{h}</th>)}
             </tr></thead>
             <tbody>
               {users.map(u => (
-                <tr key={u.email} className="border-b" style={{ borderColor: CV_COLORS.border }}>
-                  <td className="py-2.5 pr-3 font-medium">{u.name}</td>
+                <tr key={u.id} className="border-b" style={{ borderColor: CV_COLORS.border }}>
+                  <td className="py-2.5 pr-3 font-medium">{u.name || u.username}</td>
                   <td className="pr-3" style={{ color: CV_COLORS.fg2 }}>{u.email}</td>
-                  <td className="pr-3"><Chip label={u.role} color={CV_COLORS.fg2} /></td>
-                  <td className="pr-3" style={{ color: CV_COLORS.muted }}>{u.last_active}</td>
-                  <td><Chip label={u.status} color={u.status === 'Active' ? CV_COLORS.green : CV_COLORS.orange} /></td>
+                  <td className="pr-3"><Chip label={ROLE_LABEL[u.role] || u.role} color={CV_COLORS.fg2} /></td>
+                  <td className="pr-3"><Chip label={u.enabled ? 'Active' : 'Disabled'} color={u.enabled ? CV_COLORS.green : CV_COLORS.orange} /></td>
+                  <td>{u.role !== 'owner' && <Btn onClick={() => handleResend(u)} disabled={resending === u.id}>{resending === u.id ? '…' : 'Resend email'}</Btn>}</td>
                 </tr>
               ))}
             </tbody>
@@ -277,22 +302,27 @@ function UsersSection({ onToast }: { onToast: (m: string) => void }) {
         {/* Mobile cards */}
         <div className="sm:hidden space-y-2">
           {users.map(u => (
-            <div key={u.email} className="rounded-lg p-3" style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}` }}>
-              <div className="flex justify-between"><span className="text-xs font-medium" style={{ color: CV_COLORS.fg }}>{u.name}</span><Chip label={u.status} color={u.status === 'Active' ? CV_COLORS.green : CV_COLORS.orange} /></div>
+            <div key={u.id} className="rounded-lg p-3" style={{ background: CV_COLORS.bg, border: `1px solid ${CV_COLORS.border}` }}>
+              <div className="flex justify-between"><span className="text-xs font-medium" style={{ color: CV_COLORS.fg }}>{u.name || u.username}</span><Chip label={u.enabled ? 'Active' : 'Disabled'} color={u.enabled ? CV_COLORS.green : CV_COLORS.orange} /></div>
               <p className="text-[11px] mt-1" style={{ color: CV_COLORS.fg2 }}>{u.email}</p>
-              <p className="text-[10px] mt-1" style={{ color: CV_COLORS.muted }}>{u.role} · {u.last_active}</p>
+              <div className="flex justify-between items-center mt-1">
+                <p className="text-[10px]" style={{ color: CV_COLORS.muted }}>{ROLE_LABEL[u.role] || u.role}</p>
+                {u.role !== 'owner' && <Btn onClick={() => handleResend(u)} disabled={resending === u.id}>{resending === u.id ? '…' : 'Resend email'}</Btn>}
+              </div>
             </div>
           ))}
         </div>
       </>}
     </Panel>
     {showInvite && <Modal title="Invite user" onClose={() => setShowInvite(false)}>
-      <Field label="Name"><Inp value={invName} onChange={setInvName} /></Field>
+      <Field label="Username"><Inp value={invUsername} onChange={setInvUsername} /></Field>
+      <Field label="Full name"><Inp value={invName} onChange={setInvName} /></Field>
       <Field label="Email"><Inp value={invEmail} onChange={setInvEmail} /></Field>
-      <Field label="Role"><Sel value={invRole} options={['Organisation admin', 'Reviewer', 'Viewer']} onChange={setInvRole} /></Field>
+      <Field label="Role"><Sel value={invRole} options={INVITE_ROLES} onChange={setInvRole} /></Field>
+      {roleToBackend(invRole) === 'admin' && <Field label="Customer / organisation"><Inp value={invCustomer} onChange={setInvCustomer} /></Field>}
       <div className="flex justify-end gap-2 mt-4">
         <Btn onClick={() => setShowInvite(false)}>Cancel</Btn>
-        <Btn primary disabled={saving || !invName.trim() || !invEmail.trim()} onClick={handleInvite}>{saving ? 'Saving…' : 'Send invitation'}</Btn>
+        <Btn primary disabled={saving || !invUsername.trim() || !invName.trim() || !invEmail.trim()} onClick={handleInvite}>{saving ? 'Sending…' : 'Send invitation'}</Btn>
       </div>
     </Modal>}
   </>;
