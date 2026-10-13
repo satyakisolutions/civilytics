@@ -79,3 +79,13 @@ pipeline/models/**/v1*_backup/
 
 # Generated prod realm (contains real client secret) — never commit
 keycloak/prod-import/
+
+# Stray env backups (e.g. .env.bak-<epoch>) — contain real secrets
+.env.*
+!.env.example
+# Deploy-time TLS certs/keys — generated, never commit
+nginx/certs/
+*.pem
+# Local scratch
+commit_history.txt
+activity_logs/
