@@ -18,7 +18,7 @@ from sqlalchemy import insert, select, update
 # Use a SEPARATE group from the escalation worker so both receive messages
 GROUP_ALERT_DISPATCH = "wastewatch.group.api-alert-consumer"
 from app.db.engine import async_session
-from app.db.models import Camera, Zone
+from app.db.models import Camera, Zone, ViolationEvent
 from app.ws.alerts import broadcast_alert
 
 logger = logging.getLogger(__name__)
@@ -213,11 +213,42 @@ class AlertConsumer:
         # stacks live notifications; operator acknowledges or clears them.
         if camera_uuid:
             try:
+                # The canonical incident row. Analytics, Timeline and the LPR
+                # worker all read violation_events, so a fired alert must leave
+                # one behind and link to it (alerts.event_id) -- otherwise those
+                # three stay empty while alerts pile up. event_type is derived:
+                # a critical pipeline alert is a confirmed dump, a warning is
+                # suspicious proximity. confidence defaults to 1.0 (the pipeline
+                # FSM already gated this to a fire; payload may override).
+                event_id = str(uuid.uuid4())
+                event_type = "dumping_detected" if severity == "critical" else "suspicious_activity"
+                try:
+                    _conf = float(payload.get("confidence"))
+                except (TypeError, ValueError):
+                    _conf = 1.0
+                _track = track_id if isinstance(track_id, int) else None
                 async with async_session() as session:
+                    await session.execute(
+                        insert(ViolationEvent.__table__).values(
+                            id=event_id,
+                            tenant_id=camera_tenant,
+                            camera_id=camera_uuid,
+                            timestamp=now,
+                            event_type=event_type,
+                            severity=severity,
+                            confidence=_conf,
+                            track_id=_track,
+                            snapshot_url=snapshot_url,
+                            status="active",
+                            repeat_count=0,
+                            created_at=now,
+                        )
+                    )
                     tbl = self._get_alert_table()
                     await session.execute(
                         insert(tbl).values(
                             id=alert_id,
+                            event_id=event_id,
                             tenant_id=camera_tenant,
                             camera_id=camera_uuid,
                             severity=severity,
@@ -231,7 +262,7 @@ class AlertConsumer:
                         )
                     )
                     await session.commit()
-                logger.info("Alert saved to DB: %s [%s] %s", alert_id, severity, title[:60])
+                logger.info("Event+alert saved to DB: event=%s alert=%s [%s] %s", event_id, alert_id, severity, title[:50])
             except Exception:
                 logger.exception("Failed to save alert to DB")
 
