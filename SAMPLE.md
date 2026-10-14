@@ -114,6 +114,41 @@ docker compose -p civilytics-prod --profile prod exec api \
   python scripts/seed_owner.py --resend --username admin
 ```
 
+## If your checkout is older
+
+An older checkout asks one extra prompt, because the ngrok domain used to be
+operator input rather than fixed in the script:
+
+```
+Optional stable ngrok public domain, e.g. my-site.ngrok-free.app.
+  NGROK_DOMAIN (optional, Enter to skip): related-elsewhere-undertook.ngrok-free.dev
+
+  Set KC_HOSTNAME to the public ngrok domain
+  (related-elsewhere-undertook.ngrok-free.dev)? [Y/n]: y
+```
+
+Answer it with the domain (not a bare word — `admin` is rejected), then `y`.
+
+Such a checkout is also missing two fixes that break the deployment in ways
+the prompts won't warn you about:
+
+| Missing | Symptom |
+| --- | --- |
+| the nginx same-server fix | ngrok terminates TLS and forwards plain HTTP to `:80`; nginx unconditionally 301s back to HTTPS → **infinite redirect loop**, public URL unusable |
+| the `PUBLIC_API_URL` origin fix | a non-blank answer keeps its `/api`, so the client's own `/api` double-prefixes → `/api/api/auth/login` **404 on every login** |
+
+Leaving the browser-facing URLs blank avoids the 404, but the redirect loop
+needs the code. Pull, then rebuild the two affected images:
+
+```
+git pull origin dev
+docker compose -p civilytics-prod --profile prod build nginx frontend-prod
+docker compose -p civilytics-prod --profile prod up -d nginx frontend-prod
+```
+
+`nginx.conf` is baked into the image at build time (not bind-mounted), so a
+plain restart does **not** pick up the fix — it must be rebuilt.
+
 ## Gotchas
 
 - **Invalid cert, not missing cert.** start.sh auto-generates certs only when
