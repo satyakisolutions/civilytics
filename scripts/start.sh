@@ -104,7 +104,13 @@ start_ngrok_tunnel() {
     ngrok_domain="$(env_get NGROK_DOMAIN)"
     ngrok_token="$(env_get NGROK_AUTHTOKEN)"
     [ -n "$ngrok_domain" ] || die "NGROK_DOMAIN is required for the production tunnel."
-    [ -n "$ngrok_token" ] || die "NGROK_AUTHTOKEN is required for the production tunnel."
+    # Never prompted (it is a credential). Say exactly how to supply it, and
+    # that it must belong to the account that reserved the domain -- a token
+    # from any other account fails with ERR_NGROK_320 and the tunnel, but not
+    # the app, stays down.
+    [ -n "$ngrok_token" ] || die "NGROK_AUTHTOKEN is empty. Add it to .env (NGROK_AUTHTOKEN=<token>) or run:
+  NGROK_AUTHTOKEN=<token> ./scripts/start.sh $ENVIRONMENT
+It must be the authtoken of the ngrok account that reserved ${ngrok_domain}."
 
     # Replace a stale project tunnel before creating this one. `-d` is needed
     # here so the script can continue immediately to bring up the app.
@@ -358,25 +364,17 @@ case "$ENVIRONMENT" in
     # The production endpoint is intentionally fixed; it is created before
     # Compose so the public URL is already reserved while the app boots.
     env_set NGROK_DOMAIN related-elsewhere-undertook.ngrok-free.dev
-    ensure_prompted NGROK_AUTHTOKEN \
-      "ngrok authtoken for the configured reserved domain." 1 0
-    if [ -n "$(env_get NGROK_DOMAIN)" ]; then
-        ngrok_host="$(env_get NGROK_DOMAIN)"
-        current_kc_host="$(env_get KC_HOSTNAME)"
-        if [ "$current_kc_host" != "$ngrok_host" ]; then
-            if [ -t 0 ]; then
-                printf '\n  Set KC_HOSTNAME to the public ngrok domain (%s)? [Y/n]: ' "$ngrok_host"
-                read -r _kc_ngrok_ans || { printf '\n'; exit 130; }
-                if [[ ! "$_kc_ngrok_ans" =~ ^[Nn] ]]; then
-                    env_set KC_HOSTNAME "$ngrok_host"
-                fi
-            elif [ -z "$current_kc_host" ]; then
-                env_set KC_HOSTNAME "$ngrok_host"
-            else
-                die "NGROK_DOMAIN=$ngrok_host but KC_HOSTNAME=$current_kc_host. They must match for public Keycloak login; set KC_HOSTNAME=$ngrok_host."
-            fi
-        fi
-    fi
+    # NOT prompted. The authtoken is a credential, so it stays out of this
+    # script (and out of git) and comes from .env or the process environment:
+    #   NGROK_AUTHTOKEN=<token> ./scripts/start.sh prod
+    # Once it is in .env it is never asked for again. start_ngrok_tunnel
+    # fails with the fix if it is still empty.
+    env_default NGROK_AUTHTOKEN ""
+    # The endpoint is fixed, so the hostname Keycloak advertises follows from
+    # it with nothing to decide. Keycloak builds its issuer and redirect URLs
+    # from KC_HOSTNAME, and a mismatch with the public domain breaks login for
+    # every device that is not this one.
+    env_set KC_HOSTNAME "$(env_get NGROK_DOMAIN)"
     ensure_prompted KC_HOSTNAME \
       "Public hostname Keycloak is served on, e.g. auth.civilytics.in.
   If using ngrok, use its public domain here. Keycloak builds issuer and
@@ -396,13 +394,15 @@ case "$ENVIRONMENT" in
         fi
     fi
     ensure_prompted MINIO_ROOT_USER "MinIO root access key (evidence + backup object store)." 0 0
-    # Browser-facing URLs are OPTIONAL. The frontend resolves the API and
-    # WebSocket same-origin through nginx, so one build works at every host
-    # it's reached by (LAN IP, ngrok domain, …). Three ways to set them:
-    #   1. Blank (Enter to skip)  → same-origin via nginx. Works on BOTH the
-    #      LAN IP and the ngrok domain. Recommended.
-    #   2. Type your own absolute URLs at the prompts.
-    ensure_prompted PUBLIC_API_URL "Browser-facing API URL — blank for same-origin via nginx (recommended). A bare host (e.g. example.ngrok-free.dev) is expanded to https://host. Do NOT add /api; the client appends it." 0 1 validate_api_url
+    # NOT prompted. Blank means the frontend resolves the API, WebSocket and
+    # WebRTC same-origin through nginx (frontend/src/lib/api-base.ts), so one
+    # build works at every hostname it is reached by -- the LAN IP and the
+    # ngrok domain -- with no rebuild. Pinning them to one absolute host is
+    # what broke the other hosts, so blank is the default and the only answer
+    # worth having. Override in .env if a deployment genuinely needs it.
+    env_default PUBLIC_API_URL ""
+    env_default PUBLIC_WS_URL ""
+    env_default PUBLIC_MEDIAMTX_URL ""
     public_api="$(env_get PUBLIC_API_URL)"
     if [ -n "$public_api" ]; then
         # The client appends /api itself, so store the ORIGIN only. Add the
@@ -412,14 +412,12 @@ case "$ENVIRONMENT" in
         public_api="${public_api%/}"; public_api="${public_api%/api}"
         env_set PUBLIC_API_URL "$public_api"
     fi
-    ensure_prompted PUBLIC_WS_URL "Browser-facing WebSocket URL — blank for same-origin wss via nginx. A bare host (e.g. example.ngrok-free.dev) is expanded to wss://host/ws." 0 1 validate_ws_url
     public_ws="$(env_get PUBLIC_WS_URL)"
     if [ -n "$public_ws" ] && [[ "$public_ws" != *://* ]]; then
         env_set PUBLIC_WS_URL "wss://$public_ws/ws"
     elif [ -n "$public_ws" ] && [[ "$public_ws" =~ ^wss://[^/]+/?$ ]]; then
         env_set PUBLIC_WS_URL "${public_ws%/}/ws"
     fi
-    ensure_prompted PUBLIC_MEDIAMTX_URL "Browser-facing MediaMTX WebRTC URL (e.g. http://<LAN-IP>:8889) — blank to skip until cameras need live video." 0 1
     ensure_prompted WW_KEYCLOAK_CLIENT_SECRET \
       "Keycloak confidential-client secret for the branded login.
   Create the client in the realm, enable 'Direct access grants', then
