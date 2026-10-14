@@ -17,6 +17,11 @@
 #   --clean-volumes stop the stack and DELETE this env's data volumes
 #                  (confirmation required) -- this is the destructive one
 #   --status       show health of every container and exit
+#   --e2e          after health, run tests/e2e against the started stack
+#
+#   --turn needs a real public DNS name and public IP for Coturn: it is the
+#   only way WebRTC media reaches a viewer off the camera LAN, because the
+#   media plane is UDP and neither nginx nor the ngrok tunnel can carry it.
 #
 # This script now does everything the old scripts/bootstrap.sh did
 # (secret generation/prompting) and everything the old scripts/start.sh
@@ -46,7 +51,17 @@ c_ylw() { printf '\033[33m%s\033[0m\n' "$*"; }
 c_dim() { printf '\033[2m%s\033[0m\n' "$*"; }
 die()   { c_red "ERROR: $*" >&2; exit 1; }
 
-usage() { sed -n '3,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() {
+    # Derive the end of the header block instead of hardcoding a line range.
+    # A fixed range silently truncates the moment a flag is added, which is
+    # exactly how --clean-volumes, --status and --e2e ended up invisible to
+    # --help while being perfectly valid flags. Indented header lines use two
+    # spaces ('#  '); the prose below the flags uses one, so it stops there.
+    local last
+    last="$(head -40 "${BASH_SOURCE[0]}" | grep -n '^#  ' | tail -1 | cut -d: -f1)"
+    sed -n "3,${last:-16}p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 2
+}
 
 [ $# -ge 1 ] || usage
 case "$1" in
@@ -68,6 +83,7 @@ while [ $# -gt 0 ]; do
         --down)     ACTION="down"; shift ;;
         --status)   ACTION="status"; shift ;;
         --clean-volumes) ACTION="clean-volumes"; shift ;;
+        -h|--help)  usage ;;
         *) die "unknown option: $1" ;;
     esac
 done
