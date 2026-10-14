@@ -3209,7 +3209,7 @@ def main() -> None:
                     kind.capitalize(), cam_id,
                 )
                 try:
-                    connection_monitor.unregister_camera(cam_id)
+                    connection_monitor.camera_failed(cam_id, f"{kind}: {err.message}")
                 except Exception:
                     logger.exception("Failed to remove failed camera %s after %s error", cam_id, kind)
             else:

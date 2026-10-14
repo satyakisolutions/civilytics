@@ -179,6 +179,14 @@ class ConnectionMonitor:
         """
         now = time.monotonic()
 
+        # CameraHealth only knows cameras that have delivered a frame. A
+        # source that links but never decodes must also enter recovery.
+        for conn in self._connections.values():
+            if (conn.state == ConnectionState.ACTIVE
+                    and conn.camera_id not in self._health._last_frame
+                    and now - conn.last_state_change > 30.0):
+                self.camera_failed(conn.camera_id, "No first frame within 30 seconds")
+
         # --- Check for timed-out cameras ----------------------------------
         timed_out = self._health.check_health()
         for cam_id in timed_out:
@@ -312,6 +320,15 @@ class ConnectionMonitor:
     # RTSP probing
     # ------------------------------------------------------------------
 
+    def camera_failed(self, camera_id: str, error: str) -> None:
+        """Tear down a failed camera while retaining its URI for retry."""
+        conn = self._connections.get(camera_id)
+        if conn is None or conn.state == ConnectionState.DOWN:
+            return
+        self._take_offline(conn)
+        conn.error = error
+        self._publish_status(camera_id, conn.state.value, error)
+
     def _probe_rtsp_options(
         self, uri: str, timeout_s: float = 5.0
     ) -> tuple[bool, float]:
@@ -422,11 +439,8 @@ class ConnectionMonitor:
             # Add per-camera output branch
             ok = self._output_manager.add_output_branch(conn.camera_id, source_id)
             if not ok:
-                logger.warning(
-                    "Output branch failed for %s -- input stream will still "
-                    "be processed but no per-camera RTSP output",
-                    conn.camera_id,
-                )
+                self.camera_failed(conn.camera_id, "Output branch creation failed")
+                return
 
             conn.state = ConnectionState.ACTIVE
             conn.last_state_change = time.monotonic()
@@ -468,6 +482,7 @@ class ConnectionMonitor:
         # Clear stale health state so check_health() stops returning this
         # camera as timed-out while it's already DOWN awaiting reconnection.
         self._health.clear(conn.camera_id)
+        conn.source_id = None
 
         conn.state = ConnectionState.DOWN
         conn.last_state_change = time.monotonic()
