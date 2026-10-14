@@ -48,13 +48,14 @@ copy-paste values — swap in your own domain):
   password-reset emails (blank to skip; wire it later).
 
 prod also, automatically:
-- **imports the `wastewatch` Keycloak realm** (confidential client + viewer/
+- **imports the `civilytics` Keycloak realm** (confidential client + viewer/
   admin/owner roles + SMTP) from `keycloak/realm-prod.json`, so no manual
   realm setup,
 - serves everything behind nginx on 443 (self-signed cert generated if none
   is mounted),
-- **launches the ngrok tunnel** (kills any stale one first) if `ngrok` is
-  installed — overridable with `NGROK_DOMAIN` / `NGROK_TARGET`.
+- **starts the named `civilytics-prod-ngrok` Docker container before the app**,
+  forwarding the reserved ngrok endpoint to host port 80. Set
+  `NGROK_AUTHTOKEN` in `.env` when prompted.
 
 Open: `https://<KC_HOSTNAME>/` (and the ngrok URL it prints).
 
@@ -63,13 +64,15 @@ Owner seeding is **not** automatic — run it explicitly once:
 ```
 ./scripts/start.sh prod --seed-owner
 ```
-It prompts for the owner username + email and creates the account with **no
-password** — Keycloak emails an activation link (needs working SMTP). The
-owner sets their own password from that link (non-repudiation). Resend later:
+It creates the owner, sets a **random temporary password**, and emails the
+URL + username + that password as plain text through `WW_SMTP_*`. If the send
+fails it prints the password to the terminal, so you are never locked out.
+Resend later (issues a fresh password):
 ```
 docker compose -p civilytics-prod --profile prod exec api \
   python scripts/seed_owner.py --resend --username <user>
 ```
+See **[SAMPLE.md](SAMPLE.md)** for every prompt with an example answer.
 
 ## Other environments
 ```
@@ -82,13 +85,16 @@ docker compose -p civilytics-prod --profile prod exec api \
 ./scripts/start.sh dev --down
 ```
 
+`--down` stops the project-managed ngrok container first (for prod), then
+stops the selected Compose stack and removes all of that stack's volumes.
+
 ## Useful flags
 - `--build`       rebuild images first
 - `--status`      show container health and exit
 - `--no-wait`     return immediately instead of waiting for health
 - `--seed-owner`  create the first owner account (prompts; needs SMTP for the email)
 - `--e2e`         after health, run the `tests/e2e` suite against the started stack
-- `--clean-volumes` stop the stack and DELETE only this env's data volumes (DB, Kafka, MinIO, evidence, TRT engines); images/repo kept; prompts to confirm
+- `--clean-volumes` stop the stack and DELETE only this env's data volumes (DB, Kafka, MinIO, evidence, TRT engines); images/repo kept; prompts to confirm. `--down` also removes those volumes without a prompt.
 - `--turn`        (prod) also start the coturn TURN relay for off-LAN WebRTC viewers
 - `--rotate`      (prod) regenerate generated passwords in `.env`
 
