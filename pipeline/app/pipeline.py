@@ -67,14 +67,16 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # (person = 0) which silently filtered every real detection.
 # Keep in lock-step with pipeline/configs/labels.txt.
 BBOX_CLASS_MAP: dict[int, str] = {
-    # Fine-tuned 2-class RFDETR-Nano indices (see training/finetune_rfdetr.py).
-    # Training used 0=person, 1=handbag — DeepStreamOutput argmax returns
-    # those indices directly, and labels.txt is now `person\nhandbag` in
-    # lock-step. Old COCO91 map caused handbags to be labeled "person" and
-    # persons to be dropped entirely, so all downstream FSM transitions
-    # keyed off the wrong class.
+    # Fine-tuned 3-class RF-DETR base indices (civilytics_det_3class.pth,
+    # backend/models/detector/classes.json). Training used 0=person,
+    # 1=vehicle, 2=bag (bag = waste+bag merged) — DeepStreamOutput argmax
+    # returns those indices directly, and labels.txt is `person\nvehicle\nbag`
+    # in lock-step. Index 3 is the RF-DETR no-object channel, filtered by
+    # pre-cluster-threshold. Keep this map, labels.txt and
+    # nvinfer_rfdetr.txt's num-detected-classes in lock-step.
     0: "person",
-    1: "handbag",
+    1: "vehicle",
+    2: "bag",
 }
 
 # RF-DETR-Seg-Nano 4-class indices (post class-0-background-drop, see
@@ -133,8 +135,9 @@ CLASS_CATEGORIES: dict[str, str] = {
     "oven": "waste_object", "sink": "waste_object", "refrigerator": "waste_object",
 }
 
-# Vehicle classes that trigger LPR.
-VEHICLE_CLASSES = {"bicycle", "car", "motorcycle", "bus", "truck"}
+# Vehicle classes that trigger LPR. "vehicle" is the 3-class / seg model's
+# single merged vehicle class; the rest are COCO splits kept for back-compat.
+VEHICLE_CLASSES = {"vehicle", "bicycle", "car", "motorcycle", "bus", "truck"}
 
 # Waste objects that serve as direct evidence of dumping.
 WASTE_EVIDENCE_CLASSES = {
@@ -591,15 +594,11 @@ def decorate_for_osd(
     info: Gst.PadProbeInfo,
     ctx: dict,
 ) -> Gst.PadProbeReturn:
-    """Populate every NvDsObjectMeta with enriched bbox + label text.
+    """Render clean, axis-aligned detection boxes only.
 
-    Labels show FSM-aware enriched format when fsm_manager/track_manager
-    are available:  ``#042 ROI | waiting | 12s OBSERVE``
-    Falls back to minimal ``#042 person`` when managers are None (native
-    C plugin path).
-
-    Also renders a top-right stats overlay: ``Objects: N | Escalated: M``
-    with green background when escalated == 0, red when > 0.
+    The live view intentionally contains no labels, ROI geometry, counters,
+    status banners, or filled masks.  Alert state belongs on the browser
+    camera-card border; object detection remains visible as a thin box.
     """
     buf = info.get_buffer()
     if buf is None:
@@ -646,6 +645,42 @@ def decorate_for_osd(
             _next_disp = _existing_disp.next
             pyds.nvds_remove_display_meta_from_frame(frame_meta, _dm)
             _existing_disp = _next_disp
+
+        # Keep only the detector's own, axis-aligned rectangles.  Their
+        # coordinates come directly from nvinfer; this probe changes style
+        # only, so it cannot transpose or rotate a box.  The parser also
+        # zeroes rotation_angle for this non-OBB model (see
+        # nvdsparsebbox_Yolo.cpp).
+        _clean_obj_list = frame_meta.obj_meta_list
+        while _clean_obj_list is not None:
+            try:
+                _clean_obj = pyds.NvDsObjectMeta.cast(_clean_obj_list.data)
+            except StopIteration:
+                break
+            _clean_rect = _clean_obj.rect_params
+            _clean_rect.border_width = 3
+            _clean_rect.has_bg_color = 0
+            _clean_name = COCO_CLASS_MAP.get(int(_clean_obj.class_id), "")
+            if _clean_name == "person":
+                _clean_color = (0.13, 0.77, 0.37, 1.0)
+            elif _clean_name in ("handbag", "bag", "waste"):
+                _clean_color = (0.96, 0.62, 0.09, 1.0)
+            else:
+                _clean_color = (0.23, 0.51, 0.96, 1.0)
+            (_clean_rect.border_color.red, _clean_rect.border_color.green,
+             _clean_rect.border_color.blue, _clean_rect.border_color.alpha) = _clean_color
+            _clean_obj.text_params.display_text = ""
+            _clean_obj.text_params.set_bg_clr = 0
+            try:
+                _clean_obj_list = _clean_obj_list.next
+            except StopIteration:
+                break
+
+        try:
+            frame_meta_list = frame_meta_list.next
+        except StopIteration:
+            break
+        continue
 
         # --- First pass: collect carried items + person positions --------------
         # Person centers are gathered here so the second pass can attribute
@@ -2130,8 +2165,10 @@ def extract_metadata(
                             # VIOLATION below.
                             pass
 
-                        # OBSERVE (yellow bbox, "suspicious"): fire a
-                        # warning-severity alert, one-shot per track.
+                        # A sustained in-ROI track gets one non-escalating
+                        # "Suspicious waiting" warning. Video overlays are
+                        # disabled; the browser panel border stays neutral
+                        # until an actual violation is confirmed.
                         elif fsm_event.state == FSMState.OBSERVE and _fsm_obj and not _fsm_obj.observe_triggered:
                             _fsm_obj.observe_triggered = True
                             _cache = ctx.get("frame_jpeg_cache", {})
@@ -2142,8 +2179,9 @@ def extract_metadata(
                                 track_id=track_id,
                                 jpeg_bytes=_jpeg,
                                 severity="warning",
-                                title="Suspicious activity",
-                                message=f"{class_name} suspicious (loitering) at {camera_id}",
+                                title="Suspicious waiting",
+                                message=(f"{class_name} has remained in the monitored area "
+                                         f"for {fsm_event.dwell_time_s:.0f}s at {camera_id}"),
                                 dumped_by_track_id=None,
                                 dwell_time_s=fsm_event.dwell_time_s,
                                 bbox=bbox_dict,
@@ -2921,6 +2959,7 @@ def main() -> None:
             observe_threshold_s=pipeline_settings.dwell_observe_threshold_s,
             violation_threshold_s=pipeline_settings.dwell_violation_threshold_s,
             person_violation_threshold_s=pipeline_settings.person_dwell_violation_threshold_s,
+            vehicle_stop_threshold_s=pipeline_settings.vehicle_stop_threshold_s,
         )
         # Action-classifier fast path — wraps fsm_manager so a confident
         # dumping_waste classification from action_sgie skips the dwell
@@ -3122,6 +3161,33 @@ def main() -> None:
     bus = pipeline.get_bus()
     bus.add_signal_watch()
 
+    def owning_camera(obj: Gst.Object | None) -> tuple[str, str] | None:
+        """Find the per-camera bin that owns the element an error came from.
+
+        `message.src` is the element that ACTUALLY failed, which is usually
+        not the one carrying the camera id. For an unreachable RTSP camera it
+        is the GstRTSPSrc named "source", nested inside the URIDecodeBin named
+        "src_<camera_id>" (source_manager.py):
+
+            /GstPipeline:wastewatch-pipeline/GstURIDecodeBin:src_<id>/GstRTSPSrc:source
+
+        Matching on `message.src` alone therefore missed the single most
+        common real-world failure -- one camera being offline -- and treated
+        it as pipeline-wide, so a bad stream URL crash-looped the container
+        and took every other camera dark with it. Walk the ancestors so the
+        failure is attributed to the camera that owns it.
+        """
+        node, depth = obj, 0
+        while node is not None and depth < 16:   # chains are short; guard anyway
+            name = node.get_name() or ""
+            if name.startswith("src_"):
+                return "source", name[len("src_"):]
+            if name.startswith("rtspsink_"):
+                return "output sink", name[len("rtspsink_"):]
+            node = node.get_parent()
+            depth += 1
+        return None
+
     def on_bus_message(bus: Gst.Bus, message: Gst.Message) -> bool:  # noqa: ARG001
         msg_type = message.type
         if msg_type == Gst.MessageType.EOS:
@@ -3131,35 +3197,21 @@ def main() -> None:
             err, debug = message.parse_error()
             src_name = message.src.get_name() if message.src is not None else ""
             logger.error("GStreamer error: %s | debug: %s | src=%s", err.message, debug, src_name)
-            # A single dead/misconfigured camera's RTSP source (its
-            # URIDecodeBin is named "src_<camera_id>", see source_manager.py)
-            # or its output rtspclientsink (named "rtspsink_<camera_id>",
-            # see output_manager.py — e.g. mediamtx being briefly
-            # unreachable when a camera's output branch tries to connect)
-            # must not take down the whole pipeline -- every other camera
-            # would go dark too. Isolate the failure to that one camera and
-            # keep running; only a truly pipeline-wide error (not tied to a
-            # per-camera element) is fatal.
-            if src_name.startswith("src_"):
-                cam_id = src_name[len("src_"):]
+            # A single dead/misconfigured camera -- its RTSP source or its
+            # output rtspclientsink -- must not take down the whole pipeline;
+            # every other camera would go dark too. Isolate to that camera and
+            # keep running. Only an error with no owning camera is fatal.
+            owner = owning_camera(message.src)
+            if owner is not None:
+                kind, cam_id = owner
                 logger.error(
-                    "Source error isolated to camera %s — removing that source, pipeline continues",
-                    cam_id,
+                    "%s error isolated to camera %s — removing it, pipeline continues",
+                    kind.capitalize(), cam_id,
                 )
                 try:
                     connection_monitor.unregister_camera(cam_id)
                 except Exception:
-                    logger.exception("Failed to remove failed camera %s after source error", cam_id)
-            elif src_name.startswith("rtspsink_"):
-                cam_id = src_name[len("rtspsink_"):]
-                logger.error(
-                    "Output sink error isolated to camera %s — removing that camera, pipeline continues",
-                    cam_id,
-                )
-                try:
-                    connection_monitor.unregister_camera(cam_id)
-                except Exception:
-                    logger.exception("Failed to remove failed camera %s after output sink error", cam_id)
+                    logger.exception("Failed to remove failed camera %s after %s error", cam_id, kind)
             else:
                 logger.critical("Fatal pipeline-wide GStreamer error — shutting down")
                 loop.quit()
