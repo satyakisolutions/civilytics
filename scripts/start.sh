@@ -121,6 +121,41 @@ It must be the authtoken of the ngrok account that reserved ${ngrok_domain}."
     docker run --net=host -d --name civilytics-prod-ngrok \
         -e "NGROK_AUTHTOKEN=${ngrok_token}" \
         ngrok/ngrok:latest http 80 --url "https://${ngrok_domain}" >/dev/null
+
+    # VERIFY. `docker run -d` succeeds as soon as the container exists, which
+    # says nothing about whether the agent authenticated or got the endpoint.
+    # A bad token (ERR_NGROK_320), a corrupted .env value or a domain held by
+    # another session all leave the container dead or idle while the summary
+    # cheerfully prints a public URL that answers ERR_NGROK_3200. Two runs were
+    # debugged from the outside for exactly that reason, so confirm the agent
+    # registered the endpoint before claiming it is live.
+    #
+    # Only the AGENT side is checked here: this runs before Compose, so nginx
+    # is not up yet and the upstream is expected to refuse (ERR_NGROK_8012).
+    local waited=0 tunnels
+    NGROK_OK=0
+    while [ "$waited" -lt 20 ]; do
+        if ! docker container inspect -f '{{.State.Running}}' civilytics-prod-ngrok 2>/dev/null | grep -q true; then
+            break   # exited — the logs below carry the real reason
+        fi
+        # --net=host puts the agent's local API on the host's own 4040.
+        tunnels="$(curl -s --max-time 2 http://127.0.0.1:4040/api/tunnels 2>/dev/null || true)"
+        case "$tunnels" in
+            *"$ngrok_domain"*) NGROK_OK=1; break ;;
+        esac
+        sleep 2; waited=$((waited + 2))
+    done
+
+    if [ "$NGROK_OK" -eq 1 ]; then
+        c_grn "Tunnel connected: https://${ngrok_domain}/"
+    else
+        c_ylw "TUNNEL DID NOT CONNECT — https://${ngrok_domain}/ will answer ERR_NGROK_3200."
+        c_ylw "The stack still comes up and is reachable on the LAN address below."
+        c_ylw "ngrok said:"
+        docker logs --tail 15 civilytics-prod-ngrok 2>&1 | sed 's/^/    /' || true
+        c_ylw "Common cause: NGROK_AUTHTOKEN is not the token of the account that"
+        c_ylw "reserved ${ngrok_domain}, or .env holds a mangled value (check its length)."
+    fi
 }
 
 # ── down / status — no secret handling needed ──────────────────────────
@@ -711,7 +746,15 @@ case "$ENVIRONMENT" in
         [ "$SEED_OWNER" -eq 1 ] && c_ylw "Owner login: see 'Owner account' output above." \
             || c_ylw "No owner yet — run: ./scripts/start.sh $ENVIRONMENT --seed-owner"
 
-        c_grn "Public    : https://$(env_get NGROK_DOMAIN)/  (ngrok container → host port 80)"
+        # Only advertise the public URL if the agent actually registered it
+        # (see start_ngrok_tunnel). Printing it unconditionally is what made
+        # a dead tunnel look like a working deployment.
+        if [ "${NGROK_OK:-0}" -eq 1 ]; then
+            c_grn "Public    : https://$(env_get NGROK_DOMAIN)/  (ngrok container → host port 80)"
+        else
+            c_ylw "Public    : NOT LIVE — tunnel did not connect (see the ngrok output above)."
+            c_ylw "            Retry after fixing NGROK_AUTHTOKEN: ./scripts/start.sh prod"
+        fi
         ;;
     lite)
         c_grn "Dashboard : http://localhost:5174"
