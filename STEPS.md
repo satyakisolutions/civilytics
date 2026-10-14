@@ -86,7 +86,9 @@ See **[SAMPLE.md](SAMPLE.md)** for every prompt with an example answer.
 ```
 
 `--down` stops the project-managed ngrok container first (for prod), then
-stops the selected Compose stack and removes all of that stack's volumes.
+stops the selected Compose stack. **Data volumes are kept** — the database,
+evidence objects and built TensorRT engines survive, so the next start is a
+fast one. To erase data, use `--clean-volumes` (which makes you confirm).
 
 ## Useful flags
 - `--build`       rebuild images first
@@ -94,7 +96,7 @@ stops the selected Compose stack and removes all of that stack's volumes.
 - `--no-wait`     return immediately instead of waiting for health
 - `--seed-owner`  create the first owner account (prompts; needs SMTP for the email)
 - `--e2e`         after health, run the `tests/e2e` suite against the started stack
-- `--clean-volumes` stop the stack and DELETE only this env's data volumes (DB, Kafka, MinIO, evidence, TRT engines); images/repo kept; prompts to confirm. `--down` also removes those volumes without a prompt.
+- `--clean-volumes` stop the stack and DELETE only this env's data volumes (DB, Kafka, MinIO, evidence, TRT engines); images/repo kept; prompts to confirm. This is the only flag that destroys data — `--down` keeps the volumes.
 - `--turn`        (prod) also start the coturn TURN relay for off-LAN WebRTC viewers
 - `--rotate`      (prod) regenerate generated passwords in `.env`
 

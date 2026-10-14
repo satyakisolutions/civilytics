@@ -13,7 +13,9 @@
 #   --seed-owner   create the first owner account (no-op if one exists) --
 #                  NOT run by default, see scripts/seed_owner.py
 #   --smtp         prod only: prompt for SMTP host/account/password again
-#   --down         stop the tunnel, stop the stack, and remove its volumes
+#   --down         stop the tunnel and the stack; DATA VOLUMES ARE KEPT
+#   --clean-volumes stop the stack and DELETE this env's data volumes
+#                  (confirmation required) -- this is the destructive one
 #   --status       show health of every container and exit
 #
 # This script now does everything the old scripts/bootstrap.sh did
@@ -125,8 +127,13 @@ It must be the authtoken of the ngrok account that reserved ${ngrok_domain}."
 if [ "$ACTION" = "down" ]; then
     # Stop the public endpoint first so it cannot point to a shutting-down app.
     [ "$ENVIRONMENT" != "prod" ] || stop_ngrok_tunnel
-    c_ylw "Stopping ${ENVIRONMENT} stack and removing its volumes"
-    "${DC[@]}" down --volumes --remove-orphans
+    # Containers and the network go; NAMED VOLUMES STAY. Stopping a stack is
+    # routine and must not cost the database, the evidence objects or the
+    # TensorRT engines -- rebuilding those is minutes of GPU time. Wiping data
+    # is --clean-volumes, which makes you type the environment name first.
+    c_ylw "Stopping ${ENVIRONMENT} stack (data volumes kept)"
+    "${DC[@]}" down --remove-orphans
+    c_dim "Volumes kept. To erase this env's data: ./scripts/start.sh ${ENVIRONMENT} --clean-volumes"
     exit 0
 fi
 
