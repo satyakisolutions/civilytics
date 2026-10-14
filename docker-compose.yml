@@ -598,6 +598,36 @@ services:
     logging: *logging
     restart: always
 
+  # ── RTSP camera simulator (opt-in: `--profile sim`) ────────────────
+  # Publishes every clip in ./sample_videos into this stack's own mediamtx
+  # as a looping live feed, one path per file. Point a camera's stream_url
+  # at rtsp://mediamtx:8554/<slug> and the pipeline reads it over the same
+  # RTSP-publish path a real camera uses (nginx :554 -> mediamtx:8554).
+  #
+  # This exists so a deployment is SELF-CONTAINED: the simulator runs on
+  # whatever host the stack runs on, instead of a camera URL pointing at
+  # some other machine that has to be powered on and routable. Never
+  # enable it on a deployment with real cameras.
+  rtsp-sim:
+    image: jrottenberg/ffmpeg:6-alpine
+    profiles: ["sim"]
+    entrypoint: ["/bin/sh", "/stream.sh"]
+    environment:
+      MEDIAMTX_HOST: mediamtx
+      MEDIAMTX_PORT: "8554"
+      VIDEO_DIR: /videos
+      SIM_FPS: ${SIM_FPS:-15}
+      SIM_RES: ${SIM_RES:-1280:720}
+      SIM_BITRATE: ${SIM_BITRATE:-2500k}
+    volumes:
+      - ./sim/stream.sh:/stream.sh:ro
+      - ./sample_videos:/videos:ro
+    depends_on:
+      mediamtx:
+        condition: service_healthy
+    logging: *logging
+    restart: always
+
   # ── TURN relay (opt-in: `--profile turn`, prod only) ───────────────
   coturn:
     image: coturn/coturn:4.6-alpine

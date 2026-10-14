@@ -7,6 +7,8 @@
 #   --build        rebuild images before starting
 #   --pull         pull newer base images first
 #   --turn         prod only: also start coturn (TURN relay)
+#   --sim          also publish ./sample_videos as looping RTSP cameras
+#                  into this stack's mediamtx (test source, any env)
 #   --no-wait      return as soon as compose returns, don't wait for health
 #   --timeout N    seconds to wait for health (default 900)
 #   --rotate       prod only: regenerate generated passwords in .env
@@ -74,6 +76,7 @@ while [ $# -gt 0 ]; do
         --build)    BUILD="--build"; shift ;;
         --pull)     PULL=1; shift ;;
         --turn)     EXTRA_PROFILES+=(--profile turn); shift ;;
+        --sim)      EXTRA_PROFILES+=(--profile sim); shift ;;
         --no-wait)  WAIT=0; shift ;;
         --timeout)  TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
         --rotate)   ROTATE=1; shift ;;
@@ -96,8 +99,22 @@ if [ "$ENVIRONMENT" = "prod" ] && [ "$BUILD" = "--build" ] && [ "$FRESH_ENV" -eq
     c_dim "Fresh production build: Coturn and SMTP settings will be collected now."
 fi
 
-if [ "${#EXTRA_PROFILES[@]}" -gt 0 ] && [ "$ENVIRONMENT" != "prod" ]; then
+# Only `turn` is prod-only. `sim` is a test source and is useful in dev and
+# test too, so the guard names the profile instead of rejecting all of them.
+if [[ " ${EXTRA_PROFILES[*]} " == *" turn "* ]] && [ "$ENVIRONMENT" != "prod" ]; then
     die "--turn is prod only (coturn is defined under the turn profile)"
+fi
+
+if [[ " ${EXTRA_PROFILES[*]} " == *" sim "* ]]; then
+    # Fail now rather than leaving a container to exit 1 in the background:
+    # stream.sh has nothing to publish without clips, and a camera pointed at
+    # a path that never appears looks like a pipeline fault, not a missing file.
+    shopt -s nullglob
+    _sim_clips=(sample_videos/*.mp4 sample_videos/*.MP4 sample_videos/*.mov sample_videos/*.MOV)
+    shopt -u nullglob
+    [ "${#_sim_clips[@]}" -gt 0 ] \
+        || die "--sim needs at least one .mp4/.mov in ./sample_videos/ (found none)."
+    c_dim "Simulator: publishing ${#_sim_clips[@]} clip(s) to rtsp://mediamtx:8554/<slug>"
 fi
 
 # Explicit -p keeps each environment's Docker volumes under the exact
