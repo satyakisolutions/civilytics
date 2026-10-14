@@ -31,18 +31,22 @@ authInternalUsers:
 # WebRTC ICE candidate advertisement. In Docker the container's only
 # default interface is 172.20.0.x, which is unreachable from the
 # browser. We pin a UDP port for the media plane and tell mediamtx
-# to advertise the host IPs (localhost + the LAN IP we expose at)
-# so browsers on both this machine and any other LAN device get
-# working ICE candidates.
+# to advertise the host IPs instead, so browsers on this machine and
+# on any other LAN device get working ICE candidates.
 #
 # The matching host-port publish is in docker-compose.yml:
 #   "8189:8189/udp"
+#
+# THE LIST BELOW IS ONLY A FALLBACK. docker-compose.yml overrides it with
+# MTX_WEBRTCADDITIONALHOSTS, which start.sh fills from this machine's own
+# addresses (webrtc_hosts()). Do not hardcode a LAN IP here: it is correct
+# on one deployment and makes the stream fail on every other, with no error
+# beyond the player never starting.
 webrtcLocalUDPAddress: :8189
 webrtcIPsFromInterfaces: no
 webrtcAdditionalHosts:
   - localhost
   - 127.0.0.1
-  - 192.168.1.8
 # Public STUN for strict/NAT fallback (optional for LAN use but harmless).
 webrtcICEServers2:
   - url: stun:stun.l.google.com:19302

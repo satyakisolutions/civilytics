@@ -284,6 +284,14 @@ services:
       - "${MEDIAMTX_WEBRTC_BIND:-127.0.0.1}:${MEDIAMTX_WEBRTC_PORT:-8889}:8889"
       - "${MEDIAMTX_ICE_PORT:-8189}:8189/udp"   # ICE/UDP cannot be proxied
       - "${MEDIAMTX_API_BIND:-127.0.0.1}:${MEDIAMTX_API_PORT:-9997}:9997"
+    environment:
+      # Which host addresses mediamtx advertises as WebRTC ICE candidates.
+      # mediamtx.yml can only carry a fixed list, and a fixed list is wrong on
+      # every machine but the one it was written for -- so start.sh derives
+      # this machine's addresses and passes them in. MediaMTX accepts any
+      # config key as MTX_<KEY>, and this REPLACES the file's list, so the
+      # loopback entries have to be included here too.
+      MTX_WEBRTCADDITIONALHOSTS: ${WEBRTC_ADDITIONAL_HOSTS:-localhost,127.0.0.1}
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     healthcheck:

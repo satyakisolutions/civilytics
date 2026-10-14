@@ -92,6 +92,24 @@ fi
 # would look like it vanished on the next start.
 DC=(docker compose -f docker-compose.yml -p "civilytics-${ENVIRONMENT}" --profile "$ENVIRONMENT" "${EXTRA_PROFILES[@]+"${EXTRA_PROFILES[@]}"}")
 
+webrtc_hosts() {
+    # WebRTC ICE candidates the BROWSER has to be able to reach. The container
+    # only sees its docker-network address (172.20.0.x), which is useless to a
+    # browser, so mediamtx.yml sets webrtcIPsFromInterfaces: no and is told
+    # explicitly what to advertise. That list must be THIS machine's addresses:
+    # a hardcoded one works on exactly one deployment and silently breaks the
+    # stream on every other, which is what happened.
+    #
+    # Docker's own bridge ranges and link-local are dropped -- they would only
+    # add candidates that can never connect.
+    local ips
+    ips="$(hostname -I 2>/dev/null | tr ' ' '\n' \
+        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' \
+        | grep -vE '^(127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.)' \
+        | paste -sd, -)"
+    printf 'localhost,127.0.0.1%s' "${ips:+,$ips}"
+}
+
 stop_ngrok_tunnel() {
     # The tunnel is deliberately outside Compose so it can use host networking
     # to reach nginx on port 80. Its fixed name keeps cleanup project-scoped.
@@ -393,6 +411,11 @@ case "$ENVIRONMENT" in
     env_default REDIS_BIND 127.0.0.1
     env_default KEYCLOAK_BIND 127.0.0.1
     env_default MEDIAMTX_WEBRTC_BIND 127.0.0.1
+    # Re-derived on every start, not env_default'ed: the machine's LAN address
+    # changes (new network, DHCP, a hotspot coming up) and a stale value in
+    # .env advertises ICE candidates the browser cannot reach, which looks
+    # exactly like "streams are not available".
+    env_set WEBRTC_ADDITIONAL_HOSTS "$(webrtc_hosts)"
 
     c_dim "Generating passwords that have no external source ..."
     ensure_generated POSTGRES_PASSWORD
