@@ -8,7 +8,7 @@
 
 ---
 
-# WasteWatch
+# Civilytics
 
 **AI-Powered Illegal Waste Dumping Detection Platform**
 
@@ -31,7 +31,7 @@
 
 ## Overview
 
-WasteWatch is an enterprise-grade, AI-powered surveillance platform that detects and prevents illegal waste dumping in real time. Originally deployed at Lake Shore Gardens (LSG), Thindlu, Vidyaranyapura, Bangalore, the system processes live RTSP camera feeds through a high-performance NVIDIA DeepStream inference pipeline, applies a multi-stage finite state machine for violation tracking, and dispatches multi-channel alerts with full evidentiary chains. Designed for residential communities, municipal bodies, industrial estates, and smart city deployments across India.
+Civilytics is an enterprise-grade, AI-powered surveillance platform that detects and prevents illegal waste dumping in real time. Originally deployed at Lake Shore Gardens (LSG), Thindlu, Vidyaranyapura, Bangalore, the system processes live RTSP camera feeds through a high-performance NVIDIA DeepStream inference pipeline, applies a multi-stage finite state machine for violation tracking, and dispatches multi-channel alerts with full evidentiary chains. Designed for residential communities, municipal bodies, industrial estates, and smart city deployments across India.
 
 The platform combines edge-optimized object detection (RF-DETR with TensorRT FP16), vision-language model analysis (Qwen2.5-VL-7B), license plate recognition (PaddleOCR), and text-to-speech audio warnings into a unified, event-driven architecture orchestrated through Apache Kafka.
 
@@ -105,16 +105,16 @@ The platform combines edge-optimized object detection (RF-DETR with TensorRT FP1
 
 | Topic | Purpose |
 |---|---|
-| `wastewatch.metadata` | Per-frame detection data from pipeline |
-| `wastewatch.events` | FSM state transitions |
-| `wastewatch.vlm.requests` | VLM analysis requests |
-| `wastewatch.vlm.results` | VLM analysis results |
-| `wastewatch.alerts` | Alert dispatch queue |
-| `wastewatch.lpr` | License plate recognition requests |
-| `wastewatch.tts` | Text-to-speech requests |
-| `wastewatch.evidence` | Evidence processing queue |
-| `wastewatch.logs` | Centralized logging |
-| `wastewatch.config.updates` | Dynamic configuration updates |
+| `Civilytics.metadata` | Per-frame detection data from pipeline |
+| `Civilytics.events` | FSM state transitions |
+| `Civilytics.vlm.requests` | VLM analysis requests |
+| `Civilytics.vlm.results` | VLM analysis results |
+| `Civilytics.alerts` | Alert dispatch queue |
+| `Civilytics.lpr` | License plate recognition requests |
+| `Civilytics.tts` | Text-to-speech requests |
+| `Civilytics.evidence` | Evidence processing queue |
+| `Civilytics.logs` | Centralized logging |
+| `Civilytics.config.updates` | Dynamic configuration updates |
 
 ---
 
@@ -180,7 +180,7 @@ The platform combines edge-optimized object detection (RF-DETR with TensorRT FP1
 
 ## Services — Microservices Architecture
 
-WasteWatch runs as **15 Docker Compose services**: 6 infrastructure, 1 pipeline, and 8 backend microservices (same Docker image, different `CMD`).
+Civilytics runs as **15 Docker Compose services**: 6 infrastructure, 1 pipeline, and 8 backend microservices (same Docker image, different `CMD`).
 
 ### Infrastructure Services
 
@@ -197,7 +197,7 @@ WasteWatch runs as **15 Docker Compose services**: 6 infrastructure, 1 pipeline,
 
 | Service | Image | GPU | Purpose |
 |---|---|---|---|
-| `pipeline` | DeepStream 7.0 | Required | PGIE (RF-DETR) + SGIE (Action Classifier) + ByteTrack + wastewatchmeta C plugin + NvDsSR smart recording + per-camera RTSP output |
+| `pipeline` | DeepStream 7.0 | Required | PGIE (RF-DETR) + SGIE (Action Classifier) + ByteTrack + Civilyticsmeta C plugin + NvDsSR smart recording + per-camera RTSP output |
 
 ### Backend Microservices
 
@@ -226,7 +226,7 @@ Each service consumes its own Kafka topics and scales independently. All use the
 
 ## Alert Priority System
 
-WasteWatch uses a **3-stage priority alert pipeline** that fires alerts in order within 5-20 seconds:
+Civilytics uses a **3-stage priority alert pipeline** that fires alerts in order within 5-20 seconds:
 
 ### Priority Order
 
@@ -360,8 +360,8 @@ Headroom:                      ~2.4 GB
 ### 1. Clone and Configure
 
 ```bash
-git clone <repository-url> wastewatch
-cd wastewatch
+git clone <repository-url> Civilytics
+cd Civilytics
 cp .env.example .env
 ```
 
@@ -466,7 +466,7 @@ All environment variables are prefixed with `WW_`:
 ## Project Structure
 
 ```
-wastewatch/
+Civilytics/
 ├── backend/                    # FastAPI application
 │   ├── app/
 │   │   ├── alerts/             # Telegram, WebSocket, throttling
@@ -610,14 +610,14 @@ All workers are started during the FastAPI application lifespan:
 
 | Worker | Kafka Topic | Responsibility |
 |---|---|---|
-| MetadataConsumer | `wastewatch.metadata` | Persists detection metadata, feeds dashboard |
-| EventConsumer | `wastewatch.events` | Processes FSM transitions, creates ViolationEvent records |
-| VLMWorker | `wastewatch.vlm.requests` | Sends frames to Qwen2.5-VL-7B for analysis |
-| AlertDispatcher | `wastewatch.alerts` | Dispatches alerts via Telegram, WebSocket with throttling |
-| TTSWorker | `wastewatch.tts` | Generates audio warnings via Piper TTS |
-| EvidenceWorker | `wastewatch.evidence` | Processes snapshots, clips, Dropbox sync |
-| LPRWorker | `wastewatch.lpr` | Runs PaddleOCR plate recognition |
-| LogWorker | `wastewatch.logs` | Indexes log entries into Qdrant |
+| MetadataConsumer | `Civilytics.metadata` | Persists detection metadata, feeds dashboard |
+| EventConsumer | `Civilytics.events` | Processes FSM transitions, creates ViolationEvent records |
+| VLMWorker | `Civilytics.vlm.requests` | Sends frames to Qwen2.5-VL-7B for analysis |
+| AlertDispatcher | `Civilytics.alerts` | Dispatches alerts via Telegram, WebSocket with throttling |
+| TTSWorker | `Civilytics.tts` | Generates audio warnings via Piper TTS |
+| EvidenceWorker | `Civilytics.evidence` | Processes snapshots, clips, Dropbox sync |
+| LPRWorker | `Civilytics.lpr` | Runs PaddleOCR plate recognition |
+| LogWorker | `Civilytics.logs` | Indexes log entries into Qdrant |
 
 ### Database Models (PostgreSQL)
 
@@ -752,7 +752,7 @@ External:
 
 ### AWS Service Mapping
 
-| WasteWatch Service | AWS Service | Instance / Config |
+| Civilytics Service | AWS Service | Instance / Config |
 |---|---|---|
 | `pipeline` + `vlm` | **EC2 g5.2xlarge** | NVIDIA A10G 24GB, 8 vCPU, 32 GB RAM |
 | `api` | **ECS Fargate** | 0.5 vCPU, 1 GB |
